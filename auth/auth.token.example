@@ -1,0 +1,8 @@
+# SysMedic Authentication
+# Copy this to auth.token and fill in your keys
+
+# OpenCode API key (for DeepSeek / AI provider)
+OPENCODE_API_KEY="sk-your-key-here"
+
+# GitHub token (for pushing to repo)
+GITHUB_TOKEN="ghp_your_token_here"

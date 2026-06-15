@@ -1,0 +1,9 @@
+# SysMedic — git ignore
+__pycache__/
+*.pyc
+auth/auth.token
+auth/google_client.json
+auth/sysmedic-bypass
+*.swp
+*.swo
+.DS_Store

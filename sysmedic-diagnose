@@ -1,0 +1,216 @@
+#!/bin/bash
+
+REPORT_DIR="/root/reports"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+REPORT="$REPORT_DIR/diag-$TIMESTAMP.txt"
+
+mkdir -p "$REPORT_DIR"
+
+red()    { echo -e "\e[31m$1\e[0m"; }
+green()  { echo -e "\e[32m$1\e[0m"; }
+yellow() { echo -e "\e[33m$1\e[0m"; }
+blue()   { echo -e "\e[34m$1\e[0m"; }
+bold()   { echo -e "\e[1m$1\e[0m"; }
+
+CHECK_PASS=0
+CHECK_WARN=0
+CHECK_FAIL=0
+
+pass() { ((CHECK_PASS++)); green "  [PASS] $1"; }
+warn() { ((CHECK_WARN++)); yellow "  [WARN] $1"; }
+fail() { ((CHECK_FAIL++)); red "  [FAIL] $1"; }
+
+{
+echo "=============================================="
+echo "  SysMedic Diagnostic Report"
+echo "  $(date)"
+echo "  Host: $(hostname)"
+echo "=============================================="
+echo ""
+} | tee "$REPORT"
+
+echo "" | tee -a "$REPORT"
+
+# === SYSTEM INFO ===
+bold "=== SYSTEM ===" | tee -a "$REPORT"
+OS=$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')
+KERNEL=$(uname -r)
+UPTIME=$(uptime -p 2>/dev/null || uptime)
+echo "  OS     : $OS" | tee -a "$REPORT"
+echo "  Kernel : $KERNEL" | tee -a "$REPORT"
+echo "  Uptime : $UPTIME" | tee -a "$REPORT"
+echo "" | tee -a "$REPORT"
+
+# === CPU ===
+bold "=== CPU ===" | tee -a "$REPORT"
+CPU_MODEL=$(lscpu | grep "Model name" | head -1 | cut -d: -f2 | xargs)
+CPU_CORES=$(nproc)
+CPU_GOV=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "N/A")
+echo "  Model   : $CPU_MODEL" | tee -a "$REPORT"
+echo "  Cores   : $CPU_CORES" | tee -a "$REPORT"
+echo "  Governor: $CPU_GOV" | tee -a "$REPORT"
+load=$(cat /proc/loadavg | cut -d' ' -f1-3)
+echo "  Load    : $load" | tee -a "$REPORT"
+
+# CPU temps
+for tz in /sys/class/thermal/thermal_zone*; do
+  name=$(cat "$tz/type" 2>/dev/null)
+  temp=$(cat "$tz/temp" 2>/dev/null)
+  if [ -n "$temp" ]; then
+    echo "  Temp [$name]: $((temp/1000))°C" | tee -a "$REPORT"
+    if [ "$((temp/1000))" -gt 85 ]; then
+      fail "CPU zone $name at ${temp}°C"
+    fi
+  fi
+done
+
+# MCE errors
+MCE=$(dmesg 2>/dev/null | grep -c "Machine check")
+if [ "$MCE" -gt 0 ]; then
+  fail "$MCE Machine Check Exception(s) found in kernel log"
+else
+  pass "No Machine Check Exceptions"
+fi
+echo "" | tee -a "$REPORT"
+
+# === MEMORY ===
+bold "=== MEMORY ===" | tee -a "$REPORT"
+MEM_TOTAL=$(free -h | awk '/Mem:/{print $2}')
+MEM_USED=$(free -h | awk '/Mem:/{print $3}')
+MEM_AVAIL=$(free -h | awk '/Mem:/{print $7}')
+SWAP=$(free -h | awk '/Swap:/{print $2}')
+echo "  Total    : $MEM_TOTAL" | tee -a "$REPORT"
+echo "  Used     : $MEM_USED" | tee -a "$REPORT"
+echo "  Available: $MEM_AVAIL" | tee -a "$REPORT"
+echo "  Swap     : $SWAP" | tee -a "$REPORT"
+if [ "$SWAP" = "0B" ] || [ -z "$SWAP" ]; then
+  warn "No swap configured"
+else
+  pass "Swap present"
+fi
+
+# EDAC/memory errors
+EDAC_CE=$(cat /sys/devices/system/edac/mc/mc*/ce_count 2>/dev/null | paste -sd+ | bc 2>/dev/null)
+EDAC_UE=$(cat /sys/devices/system/edac/mc/mc*/ue_count 2>/dev/null | paste -sd+ | bc 2>/dev/null)
+if [ -n "$EDAC_CE" ] && [ "$EDAC_CE" -gt 0 ]; then
+  fail "$EDAC_CE correctable ECC errors"
+else
+  pass "No ECC memory errors"
+fi
+echo "" | tee -a "$REPORT"
+
+# === STORAGE ===
+bold "=== STORAGE ===" | tee -a "$REPORT"
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL | tee -a "$REPORT"
+
+# SMART: NVMe
+for dev in /dev/nvme*n1; do
+  [ -b "$dev" ] || continue
+  smartctl -H "$dev" 2>/dev/null | grep -q "PASSED" && pass "SMART: $(basename $dev) PASSED" || fail "SMART: $(basename $dev) FAILED"
+  ENDURANCE=$(smartctl -a "$dev" 2>/dev/null | grep "Percentage Used" | awk '{print $3}' | tr -d '%')
+  if [ -n "$ENDURANCE" ]; then
+    echo "    Endurance used: ${ENDURANCE}% ($((100-ENDURANCE))% life remaining)" | tee -a "$REPORT"
+    if [ "$ENDURANCE" -gt 80 ]; then
+      fail "NVMe endurance critically low ($ENDURANCE% used)"
+    elif [ "$ENDURANCE" -gt 50 ]; then
+      warn "NVMe endurance moderate ($ENDURANCE% used)"
+    else
+      pass "NVMe endurance OK ($ENDURANCE% used)"
+    fi
+  fi
+  TEMP=$(smartctl -a "$dev" 2>/dev/null | grep "Temperature:" | awk '{print $2}')
+  if [ -n "$TEMP" ] && [ "$TEMP" -gt 70 ]; then
+    warn "NVMe temp: ${TEMP}°C"
+  fi
+done
+
+for dev in /dev/sd[a-z]; do
+  [ -b "$dev" ] || continue
+  smartctl -H "$dev" 2>/dev/null | grep -q "PASSED" && pass "SMART: $(basename $dev) PASSED" || warn "SMART: $(basename $dev) not available (USB?)"
+  # Check reallocated sectors
+  REALLOC=$(smartctl -A "$dev" 2>/dev/null | awk '/Reallocated_Sector_Ct/{print $10}')
+  if [ -n "$REALLOC" ] && [ "$REALLOC" -gt 0 ]; then
+    fail "SATA $(basename $dev): $REALLOC reallocated sectors"
+  fi
+  # Check power-on hours
+  POH=$(smartctl -A "$dev" 2>/dev/null | awk '/Power_On_Hours/{print $10}')
+  if [ -n "$POH" ]; then
+    echo "    $(basename $dev) power-on hours: $POH" | tee -a "$REPORT"
+  fi
+done
+echo "" | tee -a "$REPORT"
+
+# === BATTERY ===
+if [ -d /sys/class/power_supply/BAT0 ]; then
+  bold "=== BATTERY ===" | tee -a "$REPORT"
+  STATUS=$(cat /sys/class/power_supply/BAT0/status)
+  CAP=$(cat /sys/class/power_supply/BAT0/capacity)
+  DESIGN=$(cat /sys/class/power_supply/BAT0/charge_full_design)
+  FULL=$(cat /sys/class/power_supply/BAT0/charge_full)
+  NOW=$(cat /sys/class/power_supply/BAT0/charge_now)
+  MODEL=$(cat /sys/class/power_supply/BAT0/model_name)
+  MANUF=$(cat /sys/class/power_supply/BAT0/manufacturer)
+  CYCLE=$(cat /sys/class/power_supply/BAT0/cycle_count 2>/dev/null || echo "0")
+  echo "  Model    : $MANUF $MODEL" | tee -a "$REPORT"
+  echo "  Status   : $STATUS" | tee -a "$REPORT"
+  echo "  Charge   : ${CAP}% ($((NOW/1000))/$((FULL/1000)) mAh)" | tee -a "$REPORT"
+  echo "  Design   : $((DESIGN/1000)) mAh" | tee -a "$REPORT"
+  echo "  Wear     : $(( (DESIGN-FULL)*100 / DESIGN ))% degraded" | tee -a "$REPORT"
+  echo "  Cycles   : $CYCLE" | tee -a "$REPORT"
+  WEAR=$(( (DESIGN-FULL)*100 / DESIGN ))
+  if [ "$WEAR" -gt 30 ]; then
+    fail "Battery wear ${WEAR}% — consider replacement"
+  elif [ "$WEAR" -gt 15 ]; then
+    warn "Battery wear ${WEAR}%"
+  else
+    pass "Battery wear ${WEAR}%"
+  fi
+
+  # If discharging, show rate
+  if [ "$STATUS" = "Discharging" ]; then
+    C=$(cat /sys/class/power_supply/BAT0/current_now)
+    V=$(cat /sys/class/power_supply/BAT0/voltage_now)
+    RUNTIME=$(( NOW / C ))
+    echo "  Draw     : $((C/1000)) mA @ $(echo "scale=2; $V/1000000" | bc) V = $(echo "scale=1; $V*$C/1000000000000" | bc) W" | tee -a "$REPORT"
+    echo "  Est. left: ${RUNTIME}h" | tee -a "$REPORT"
+  fi
+  echo "" | tee -a "$REPORT"
+fi
+
+# === NETWORK ===
+bold "=== NETWORK ===" | tee -a "$REPORT"
+for iface in /sys/class/net/*; do
+  name=$(basename "$iface")
+  [ "$name" = "lo" ] && continue
+  oper=$(cat "$iface/operstate" 2>/dev/null)
+  addr=$(ip -4 -br addr show "$name" 2>/dev/null | awk '{print $3}')
+  speed=$(cat "$iface/speed" 2>/dev/null || echo "N/A")
+  echo "  $name: $oper, IP=$addr, Link=${speed}Mbps" | tee -a "$REPORT"
+done
+
+# Gateway reachability
+GATEWAY=$(ip route show default 2>/dev/null | awk '{print $3}')
+if [ -n "$GATEWAY" ]; then
+  ping -c1 -W2 "$GATEWAY" &>/dev/null && pass "Gateway $GATEWAY reachable" || warn "Gateway $GATEWAY unreachable"
+  ping -c1 -W2 8.8.8.8 &>/dev/null && pass "Internet (8.8.8.8) reachable" || warn "No internet connectivity"
+else
+  warn "No default gateway found"
+fi
+echo "" | tee -a "$REPORT"
+
+# === SYSTEMD FAILURES ===
+bold "=== SYSTEMD ===" | tee -a "$REPORT"
+FAILED=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
+if [ "$FAILED" -gt 0 ]; then
+  warn "$FAILED failed unit(s):"
+  systemctl --failed --no-pager 2>/dev/null | tee -a "$REPORT"
+else
+  pass "All systemd units healthy"
+fi
+echo "" | tee -a "$REPORT"
+
+# === SUMMARY ===
+bold "==============================================" | tee -a "$REPORT"
+bold "  SUMMARY: ${CHECK_PASS} PASS, ${CHECK_WARN} WARN, ${CHECK_FAIL} FAIL" | tee -a "$REPORT"
+bold "  Report saved to: $REPORT" | tee -a "$REPORT"
+bold "==============================================" | tee -a "$REPORT"

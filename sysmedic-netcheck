@@ -1,0 +1,160 @@
+#!/bin/bash
+# SysMedic comprehensive network diagnostic
+
+REPORT_DIR="/root/reports"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+REPORT="$REPORT_DIR/network-$TIMESTAMP.txt"
+mkdir -p "$REPORT_DIR"
+
+red()    { echo -e "\e[31m$1\e[0m"; }
+green()  { echo -e "\e[32m$1\e[0m"; }
+yellow() { echo -e "\e[33m$1\e[0m"; }
+bold()   { echo -e "\e[1m$1\e[0m"; }
+
+PASS=0; WARN=0; FAIL=0
+
+out()   { echo "$1"   | tee -a "$REPORT"; }
+outb()  { bold "$1"   | tee -a "$REPORT"; }
+outp()  { echo "$1"   | tee -a "$REPORT"; }
+pass()  { ((PASS++)); echo "  $(green "$1")"  | tee -a "$REPORT"; }
+warn()  { ((WARN++)); echo "  $(yellow "$1")" | tee -a "$REPORT"; }
+fail()  { ((FAIL++)); echo "  $(red "$1")"    | tee -a "$REPORT"; }
+
+run()   { echo "\$ $*" | tee -a "$REPORT"; "$@" | tee -a "$REPORT"; echo; }
+
+out  "=============================================="
+out  "  SysMedic · Network Diagnostic"
+out  "  $(date) · $(hostname)"
+out  "=============================================="
+out ""
+
+# ── Interfaces ──
+outb "=== INTERFACES ==="
+ip -br addr | tee -a "$REPORT"
+out ""
+outb "=== LINK DETAILS ==="
+for iface in /sys/class/net/*; do
+  name=$(basename "$iface"); [ "$name" = "lo" ] && continue
+  oper=$(cat "$iface/operstate" 2>/dev/null)
+  out "  $name:"
+  out "    State: $oper"
+  out "    Speed: $(cat "$iface/speed" 2>/dev/null || echo 'N/A') Mbps"
+  out "    Duplex: $(cat "$iface/duplex" 2>/dev/null || echo 'N/A')"
+  out "    MTU: $(cat "$iface/mtu" 2>/dev/null)"
+  out "    MAC: $(cat "$iface/address" 2>/dev/null)"
+
+  if [ "$oper" = "up" ]; then
+    pass "$name is UP"
+    ethtool "$name" 2>/dev/null | grep -E "Supported link|Advertised link|Link detected" | while read l; do out "    $l"; done
+    if iw dev "$name" info 2>/dev/null | grep -q "wiphy"; then
+      out "    Wireless:"
+      while read l; do out "      $l"; done < <(iw dev "$name" link 2>/dev/null)
+      while read l; do out "    $l"; done < <(iwconfig "$name" 2>/dev/null | grep -E "ESSID|Frequency|Signal|Bit Rate")
+    fi
+  else
+    warn "$name is DOWN"
+  fi
+  out ""
+done
+
+# ── Route ──
+outb "=== ROUTING ==="
+ip route show | tee -a "$REPORT"
+out ""
+ip -6 route show 2>/dev/null | head -10 | tee -a "$REPORT"
+out ""
+
+GATEWAY=$(ip route show default | awk '{print $3}')
+DNS_SERVERS=$(grep nameserver /etc/resolv.conf 2>/dev/null | awk '{print $2}')
+
+# ── Gateway ──
+outb "=== GATEWAY ==="
+if [ -n "$GATEWAY" ]; then
+  out "  Gateway: $GATEWAY"
+  ping -c2 -W2 "$GATEWAY" 2>&1 | tail -2 | tee -a "$REPORT"
+  if ping -c1 -W2 "$GATEWAY" &>/dev/null; then
+    pass "Gateway reachable"
+    traceroute -n -m 3 "$GATEWAY" 2>&1 | tail -1 | tee -a "$REPORT"
+  else
+    fail "Gateway unreachable"
+  fi
+else
+  fail "No default gateway"
+fi
+out ""
+
+# ── Internet ──
+outb "=== INTERNET ==="
+for t in 8.8.8.8 1.1.1.1 208.67.222.222; do
+  ping -c1 -W2 "$t" &>/dev/null && pass "Ping $t" || fail "Ping $t unreachable"
+done
+out ""
+
+if ping -c1 -W2 8.8.8.8 &>/dev/null; then
+  outb "=== INTERNET PATH ==="
+  traceroute -n -m 8 8.8.8.8 2>&1 | tee -a "$REPORT"
+  out ""
+fi
+
+# ── DNS ──
+outb "=== DNS ==="
+out "  Nameservers: ${DNS_SERVERS:-none}"
+for ns in $DNS_SERVERS; do
+  ping -c1 -W2 "$ns" &>/dev/null && pass "DNS server $ns reachable" || warn "DNS server $ns unreachable"
+done
+for d in google.com github.com; do
+  result=$(nslookup "$d" 2>&1)
+  ip=$(echo "$result" | grep "Address" | tail -1 | awk '{print $2}')
+  [ -n "$ip" ] && pass "DNS resolves $d → $ip" || fail "DNS cannot resolve $d"
+done
+dig google.com +short 2>/dev/null | head -3 | sed 's/^/  DIG: /' | tee -a "$REPORT"
+out ""
+
+# ── HTTP ──
+outb "=== HTTP/S ==="
+for url in https://google.com https://github.com; do
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 8 "$url" 2>/dev/null)
+  case "$code" in
+    200|301|302) pass "HTTP GET $url → $code" ;;
+    *) warn "HTTP GET $url → ${code:-timeout}" ;;
+  esac
+done
+out ""
+
+# ── Ports ──
+outb "=== LISTENING PORTS ==="
+ss -tlnp 2>/dev/null | tee -a "$REPORT"
+out ""
+
+outb "=== ARP (local neighbors) ==="
+arp -n 2>/dev/null || ip neigh | tee -a "$REPORT"
+out ""
+
+# ── LAN Scan ──
+outb "=== LAN SCAN ==="
+subnet=$(ip -4 -br addr | awk '/^[^l]/{print $3}' | grep '/' | head -1)
+if [ -n "$subnet" ] && command -v nmap &>/dev/null; then
+  nmap -sn -T4 "$subnet" 2>/dev/null | grep -E "Nmap done|Host is up|report for" | tee -a "$REPORT"
+else
+  out "  Skipped (no IP or nmap)"
+fi
+out ""
+
+# ── Speedtest ──
+outb "=== BANDWIDTH ==="
+if command -v speedtest-cli &>/dev/null && ping -c1 -W2 8.8.8.8 &>/dev/null; then
+  out "  Running speedtest..."
+  speedtest-cli --simple 2>&1 | tee -a "$REPORT"
+fi
+out ""
+
+outb "=== IPERF3 ==="
+out "  Server: iperf3 -s"
+out "  Client: iperf3 -c <server-ip>"
+out ""
+
+# ── Summary ──
+outb "=============================================="
+outb "  SUMMARY: ${PASS} PASS, ${WARN} WARN, ${FAIL} FAIL"
+outb "  Report: $REPORT"
+outb "=============================================="
