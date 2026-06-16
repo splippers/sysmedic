@@ -5,6 +5,60 @@
 
 ---
 
+## Session 2026-06-16 (Part 4) — Capture/Restore OS Image Module
+
+### Goal
+- Build a menu-driven OS imaging module (`sysmedic-capture-restore`) based on the manual workflow from Part 3
+- Integrate as Option 28 in the main recovery menu
+
+### Hardware (this session)
+- **System:** Dell Latitude 3410 (Serial: 3C1NN93)
+- **CPU:** Intel(R) Core(TM) i5-10210U @ 1.60GHz (4 cores, 8 threads)
+- **RAM:** 16 GB (2 × 8 GB DDR5-5600 SODIMM)
+- **Disks:** SanDisk 119G (data), KIOXIA 238G NVMe (target)
+
+### Steps Taken
+
+#### 1. UX Polish
+- Added pause between preflight banner and OpenCode launch (`menu.sh` line 121)
+- User can now read the hardware identification before the AI starts
+- Prompt says: "Press ENTER to launch SysMedic"
+
+#### 2. Capture/Restore Script
+Created `/opt/sysmedic/scripts/capture-restore.sh` with three modes:
+
+| Mode | Description |
+|------|-------------|
+| **Capture installed OS** | Scans all disks → detects Windows/Linux/macOS → saves partition table (`sfdisk`) + per-partition images with `partclone`/`dd` → compresses with `zstd -3` |
+| **Restore from image** | Lists captures → select → pick target disk → restore partition table + partitions → ready for bootloader repair |
+| **List captured images** | Shows all captures with OS name, date, partition count, total size |
+
+Key design decisions:
+- Uses `partclone` for NTFS/ext4 (skips free space), falls back to `dd` for other filesystems
+- Saves `metadata.json` with OS name, version, capture date, source device
+- Saves `partition_table.sfdisk` for exact partition layout reproduction
+- Stores captures in `/mnt/sandisk/captures/` by default (user-configurable)
+- All images wrapped in `zstd -3` for fast compression/decompression
+
+#### 3. Menu Integration
+- Reorganised utilities: Option 28 = Capture/Restore, Option 29 = Reboot
+- Capture/Restore opens a submenu with clean options (Capture / Restore / List / Back)
+
+### Key Lessons
+1. Partclone is the right capture tool — only stores used blocks, dramatically reduces image sizes
+2. Storing partition tables separately (sfdisk dump) makes restore more reliable than sector-by-sector dd
+3. The menu structure was getting crowded — at 29 options it's worth considering a hierarchical layout for v3.0
+4. This completes the loop: diagnose → capture → repair → restore
+
+### Relevant Files
+| Path | Description |
+|------|-------------|
+| `/opt/sysmedic/scripts/capture-restore.sh` | Capture/restore module (566 lines) |
+| `/opt/sysmedic/menu.sh` | Updated with Option 28 + pause at launch |
+| `/mnt/sandisk/captures/` | Default capture storage |
+
+---
+
 ## Session 2026-06-16 (Part 3) — Windows Image Optimization & Storage Analysis
 
 ### Goal
