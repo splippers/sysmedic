@@ -8,10 +8,11 @@ while true; do
     clear
     echo ""
     echo -e "${BOLD}  ╔══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}  ║         🩺  SysMedic Recovery System  v2.0         ║${NC}"
+    echo -e "${BOLD}  ║      🩺  SysMedic Recovery System  v2.1             ║${NC}"
+    echo -e "${BOLD}  ║      Hardware-aware · Mesh-connected                ║${NC}"
     echo -e "${BOLD}  ╠══════════════════════════════════════════════════════╣${NC}"
     echo -e "${BOLD}  ║  DIAGNOSTICS                                        ║${NC}"
-    echo -e "${BOLD}  ║   1)  OpenCode AI Rescue Assistant                  ║${NC}"
+    echo -e "${BOLD}  ║   1)  OpenCode AI Rescue (preflight + context)      ║${NC}"
     echo -e "${BOLD}  ║   2)  Quick diagnostics (sysmedic-diagnose)         ║${NC}"
     echo -e "${BOLD}  ║   3)  Scan partitions & detect installed OSes       ║${NC}"
     echo -e "${BOLD}  ╠══════════════════════════════════════════════════════╣${NC}"
@@ -60,7 +61,15 @@ while true; do
 
     case "$choice" in
         1)  clear
+            # Run preflight to gather hardware context + mesh sync
+            if [ -x "$SCRIPTS/preflight.sh" ]; then
+                bash "$SCRIPTS/preflight.sh"
+                echo ""
+            fi
+            # Launch AI with context available
             if command -v opencode &>/dev/null; then
+                export SYSMEDIC_CONTEXT="/tmp/sysmedic-context.json"
+                echo -e "  ${GREEN}Launching OpenCode AI with full hardware context...${NC}\n"
                 opencode
             else
                 echo "OpenCode not found — try mounting persistence partition first"
@@ -121,7 +130,17 @@ while true; do
             ;;
 
         5)  clear
-            [ -x "$SCRIPTS/craic-connect.sh" ] && bash "$SCRIPTS/craic-connect.sh" || echo "CraicKen script not found"
+            echo -e "${BOLD}CraicKen Mesh Options${NC}"
+            echo ""
+            echo "  1) Connect & telemetry (register + diagnostics to mesh)"
+            echo "  2) Sync knowledge (push session log + wiki to CraicKen)"
+            echo "  0) Back"
+            echo ""
+            read -p "  Choose: " ck_opt
+            case "$ck_opt" in
+                1) [ -x "$SCRIPTS/craic-connect.sh" ] && bash "$SCRIPTS/craic-connect.sh" || echo "Script not found" ;;
+                2) [ -x "$SCRIPTS/craicken-sync.sh" ] && bash "$SCRIPTS/craicken-sync.sh" || echo "Script not found" ;;
+            esac
             read -p "Press Enter..."
             ;;
 
