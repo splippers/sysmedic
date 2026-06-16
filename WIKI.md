@@ -5,6 +5,83 @@
 
 ---
 
+## Session 2026-06-16 (Part 5) — Hardware Stress Test & Burn-In Suite (Tier 2)
+
+### Goal
+- Evolve SysMedic from diagnostic toolbox into proactive hardware validation platform
+- Add CPU, RAM, drive, and thermal stress testing as a unified menu-driven suite
+- Enable burn-in detection for latent hardware faults (the Latitude's 8 kernel panics need isolating)
+
+### Hardware (this session)
+- **System:** Dell Latitude 3410 (Serial: 3C1NN93)
+- **CPU:** Intel(R) Core(TM) i5-10210U @ 1.60GHz (4 cores, 8 threads)
+- **RAM:** 16 GB (2 × 8 GB DDR5-5600 SODIMM)
+- **Disks:**
+  - `/dev/nvme0n1` — KIOXIA KBG40ZNS256G (238 GB NVMe, target machine, 91% life remaining)
+  - `/dev/sda` — SanDisk SD8SB8U-119G (119 GB external data)
+  - `/dev/sdb` — SysMedic boot USB (238 GB)
+
+### Steps Taken
+
+#### 1. Created `stress-test.sh` — Complete Hardware Burn-In Suite
+New script at `/opt/sysmedic/scripts/stress-test.sh` with **7 test modes**:
+
+| # | Test | Tools | Configurable |
+|---|------|-------|-------------|
+| 1 | **CPU Stress** | `stress-ng --cpu --cpu-method all` | Duration, all cores |
+| 2 | **Memory Stress** | `memtester` (quick) + `stress-ng --vm 80%` (soak) | Duration, % RAM |
+| 3 | **Drive Stress** | `stress-ng --hdd` + optional `badblocks -svn` | Disk selection, duration |
+| 4 | **SMART Long Test** | `smartctl -t long` + auto-monitor | Disk selection, wait/background |
+| 5 | **Temperature Monitor** | `sensors` live watch with logging | Poll interval |
+| 6 | **Full Burn-In Suite** | All tests sequential with SMART deltas | Pre-set or custom durations |
+| 7 | **Quick Sanity Check** | 5-cycle multi-stress (CPU+mem+I/O) | — |
+
+Key design decisions:
+- **All results logged** to `/root/sysmedic/reports/stress-<timestamp>/` with structured summary
+- **Graceful Ctrl+C** — kills stress-ng/memtester, saves partial results
+- **Color-coded output** — PASS/WARN/FAIL per test, summary at exit
+- **SMART delta comparison** in Full Burn-In (reallocated/pending/uncorrectable sectors before vs after)
+- **Sensor-aware** — reads coretemp + NVMe temps via `sensors`, falls back to `/sys/class/thermal/`
+
+#### 2. Fixed Temperature Parsing Bug
+- Initial regex `grep -oP '[\+\-][0-9]+\.[0-9]+°C'` matched sensor **threshold values** from parenthesized fields (e.g., `(high = +65261.8°C)` from NVMe Sensor 1's invalid max, `(crit = +100.0°C)` from cooling device states)
+- This produced bogus readings like `65261.8°C` in the Quick Sanity output
+- **Fix**: Added `grep -v '('` to exclude threshold annotations before extracting temps
+- Now correctly shows actual sensor readings (e.g., `73.0°C`, `56.0°C`, `46.0°C`)
+
+#### 3. Integrated into Menu v3.0 Diagnostics Submenu
+- Added **Option 5** to Diagnostics: "Stress Test / Burn-In Suite — CPU, RAM, disk, temps"
+- Updated prompt range from `[0-4]` to `[0-5]`
+- Loads stress test main menu which shows live system summary (cores, RAM, disks, CPU/NVMe temps)
+
+#### 4. Smoke Test Results (Quick Sanity Check)
+- Ran 4.5 / 5 cycles of the Quick Sanity Check (timed out by tool wrapper at 420s, not by script)
+- Each cycle: CPU 30s (8 cores, all methods) + Cache/Mem 30s (2x VM, 512 MB) + I/O 30s (1 HDD worker)
+- **All cycles completed without errors**
+- Temperatures remained stable (peak ~84°C observed on CPU package)
+- Script cleanup correctly terminated background stress-ng processes on abort
+
+### Key Lessons
+1. **`stress-ng` is the Swiss Army knife** — covers CPU, cache, VM, I/O, and more with a single tool. The `--cpu-method all` flag cycles through dozens of computational methods (FFT, matrix, prime, etc.) for thorough coverage.
+2. **SMART deltas matter more than absolute values** — comparing reallocated/pending sectors before and after a burn-in is the real diagnostic signal for marginal drives
+3. **Sensor threshold values can poison temperature regex** — Always exclude parenthesized annotations (`(low = ...)`, `(high = ...)`, `(crit = ...)`) when parsing `sensors` output
+4. **The Quick Sanity Check** (5 min) is a good "pre-flight" before committing to a multi-hour burn-in — catches obvious thermal or stability issues fast
+5. **Tier 2 is now complete** — SysMedic can validate CPU, RAM, disk, and thermal subsystems before attempting OS-level repairs, which is critical for the Latitude with 8 prior kernel panics
+
+### Next Steps (Tier 3)
+- **AI-Assisted Repair**: Pipe stress test findings + smart-repair diagnostics into OpenCode for automatic root cause analysis and suggested fix scripts
+- The burn-in can now be used to stress the Latitude's NVMe install and determine if the 8 kernel panics are hardware- or software-induced
+
+### Relevant Files
+| Path | Description |
+|------|-------------|
+| `/opt/sysmedic/scripts/stress-test.sh` | Complete stress test suite (500+ lines, 7 test modes) |
+| `/opt/sysmedic/menu.sh` | Diagnostics submenu updated with Option 5 |
+| `/root/sysmedic/reports/stress-20260616-214543/` | Smoke test logs (Quick Sanity Check) |
+| `/root/sysmedic/reports/stress-20260616-214547/` | Partial sanity check output from interrupted run |
+
+---
+
 ## Session 2026-06-16 (Part 4) — Capture/Restore OS Image Module
 
 ### Goal
