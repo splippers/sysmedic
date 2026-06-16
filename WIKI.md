@@ -5,7 +5,117 @@
 
 ---
 
-## Session 2026-06-16 — RAM Diagnostics & Secure Boot Toggle via `cctk`
+## Session 2026-06-16 (Part 2) — v2.1: Context-Aware Preflight & CraicKen Mesh
+
+### Goal
+- Make SysMedic hardware-aware on every boot (preflight detection)
+- Wire SysMedic into the CraicKen fleet mesh for knowledge sharing
+- Set `opencode/big-pickle` as the default AI model
+- Display prominent hardware banner (make/model/BIOS serial) at AI session start
+
+### Hardware (this session)
+- **System:** Dell Latitude 3450 (Serial: 9D9XG74)
+- **BIOS:** 1.22.1 (04/09/2026)
+- **CPU:** 13th Gen Intel(R) Core(TM) i3-1315U (6 cores, 8 threads)
+- **RAM:** 15.3 GB DDR5-5600 (Micron MTC4C10163S1SC56BD1 BF, configured 5200 MT/s)
+- **Disks:** KXG50ZNV256G 238.5G SSD (SMART PASSED), PC476.9G NVMe SSD (SMART PASSED)
+- **GPU:** Intel Raptor Lake-P [UHD Graphics]
+- **Secure Boot:** Enabled (confirmed via mokutil + cctk)
+- **Network:** WiFi SSID "ICT-Room", IP 192.168.88.55
+- **Detected OS:** Ubuntu 24.04.3 LTS on /dev/sda2
+
+### Steps Taken
+
+#### 1. CraicKen API Discovery
+- Explored the CraicKen OpenAPI spec at `https://meta.splippers.com/openapi.json`
+- Key endpoints identified:
+  - `POST /api/v1/context/ingest` — store session knowledge
+  - `GET /api/v1/context/retrieve` — search fleet knowledge
+  - `GET /api/v1/wiki/article` — read wiki articles
+  - `POST /api/v1/wiki/article` — write wiki articles
+  - `GET /api/v1/wiki/list` — list all wiki articles
+  - `GET /api/v1/net/agents` — list online fleet agents
+- Health check: `{"status":"ok","version":"5.0","total":11424,"craic":11078,"ken":346,"net":{"agents_online":19}}`
+- Bearer token: `111JbCV3_BSzwygG0XJ-6kFWDz8v-LHx0rwb8zGv7H8`
+- Written a `sysmedic` article to the CraicKen wiki
+
+#### 2. Preflight Script (`scripts/preflight.sh`)
+- Created a comprehensive hardware detection script that runs before AI launch
+- Collects:
+  - System: vendor, product, serial, BIOS version/date
+  - CPU: model, cores, threads, architecture
+  - Memory: total, per-DIMM details from dmidecode
+  - Disks: device, size, model, type (SSD/HDD), SMART health status
+  - GPU: vendor/model from lspci
+  - Network: interfaces (name, MAC, IPv4), WiFi SSID
+  - Battery: name, status, capacity, wear percentage
+  - Secure Boot: mokutil + cctk status
+  - dmesg: boot-time errors/warnings
+  - Detected OSes: mounts partitions and reads os-release
+- On network: pulls latest CraicKen wiki article + git pull from origin
+- Outputs structured JSON to `/tmp/sysmedic-context.json`
+
+#### 3. CraicKen Sync Script (`scripts/craicken-sync.sh`)
+- Created to push session knowledge back to the fleet mesh
+- On session end:
+  - Ingests session context to CraicKen context API
+  - Updates the `sysmedic` wiki article on CraicKen
+  - Pushes local WIKI.md changes to git origin
+
+#### 4. Menu Integration (`menu.sh`)
+- **Option 1** now: preflight → hardware banner → launch AI
+- Hardware banner displayed prominently before OpenCode starts:
+  ```
+  ╔══════════════════════════════════════════════════════════════╗
+  ║               🖥️  TARGET SYSTEM IDENTIFICATION              ║
+  ╚══════════════════════════════════════════════════════════════╝
+    Make:        Dell Inc.
+    Model:       Latitude 3450
+    Serial:      9D9XG74
+    BIOS:        1.22.1 (04/09/2026)
+    CPU:         13th Gen Intel(R) Core(TM) i3-1315U
+    RAM:         15.3 GB
+    Secure Boot: SecureBoot enabled
+    OS:          Ubuntu 24.04.3 LTS on /dev/sda2
+    Disks:       /dev/sda 238.5G SSD (PASSED); /dev/nvme0n1 476.9G SSD (PASSED)
+  ╔══════════════════════════════════════════════════════════════╗
+  ```
+- **Option 5** now: CraicKen submenu (1: Connect & telemetry, 2: Sync knowledge)
+
+#### 5. Big Pickle Default Model
+- Changed default AI model from `opencode-go/deepseek-v4-flash-free` to `opencode/big-pickle`
+- Updated live config (`~/.config/opencode/config.json`)
+- Updated repo dotfiles (`dotfiles/config.json`)
+- Updated README example config
+- Verified: AI responds "I'm powered by **big-pickle** (model ID: `opencode/big-pickle`)"
+
+#### 6. Git & Mesh Sync
+- All changes pushed to `github.com/splippers/sysmedic` (commits: `b6a16df`, `05e0b0c`, `8e663c4`)
+- Session contexts ingested to CraicKen (IDs: 14102, 14103, 14104)
+- SysMedic wiki article created/updated on CraicKen
+- CraicKen health at end: 11,427 total entries, 19 agents online
+
+### Key Lessons
+1. The CraicKen mesh (`meta.splippers.com`) is the knowledge backbone — use context API for searchable session logs and wiki API for structured documentation
+2. The `opencode` provider (separate from `opencode-go`) hosts the `big-pickle` model — config must reference `opencode/big-pickle` not `opencode-go/...`
+3. Python's `shlex.quote()` is essential for safely injecting Python-extracted values into shell `eval`
+4. Hardware context changes on every USB boot — the preflight makes the AI aware of what it's running on without manual input
+5. The boot flow is now: Menu → Preflight (detect + sync) → Hardware Banner → AI Launch
+
+### Relevant Files
+| Path | Description |
+|------|-------------|
+| `/opt/sysmedic/scripts/preflight.sh` | Hardware detection + context gathering (runs before AI) |
+| `/opt/sysmedic/scripts/craicken-sync.sh` | Push session knowledge to CraicKen mesh |
+| `/opt/sysmedic/menu.sh` | Recovery menu (option 1: preflight+banner+AI, option 5: CraicKen submenu) |
+| `/opt/sysmedic/dotfiles/config.json` | Default OpenCode config (big-pickle model) |
+| `/tmp/sysmedic-context.json` | Current session hardware context (regenerated every boot) |
+| `/opt/sysmedic/WIKI.md` | This file — local CraicWiki |
+| `https://meta.splippers.com/api/v1/wiki/article?name=sysmedic` | CraicKen wiki article (fleet-wide) |
+
+---
+
+## Session 2026-06-16 (Part 1) — RAM Diagnostics & Secure Boot Toggle via `cctk`
 
 ### Goal
 - Run full RAM diagnostics (in-OS + boot-time memtest86+)
@@ -93,12 +203,11 @@ Usage:
 ### Goal
 - ...
 
-### Hardware
+### Hardware (this session)
 - ...
 
 ### Steps Taken
 1. ...
-2. ...
 
 ### Key Lessons
 - ...
