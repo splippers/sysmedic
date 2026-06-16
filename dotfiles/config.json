@@ -1,11 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "opencode-go/deepseek-v4-flash-free",
+  "model": "opencode/big-pickle",
   "provider": {
-    "opencode-go": {
+    "opencode": {
       "models": {
-        "deepseek-v4-flash-free": {
-          "name": "DeepSeek v4 Flash",
+        "big-pickle": {
+          "name": "Big Pickle",
           "limit": {
             "context": 128000,
             "output": 16000

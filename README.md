@@ -108,9 +108,21 @@ mkdir -p ~/.config/opencode
 Create `~/.config/opencode/config.json`:
 ```json
 {
-  "provider": "opencode-go",
-  "model": "deepseek-v4-flash-free",
-  "system_prompt": "You are SysMedic, an expert system recovery and hardware diagnostics AI..."
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/big-pickle",
+  "provider": {
+    "opencode": {
+      "models": {
+        "big-pickle": {
+          "name": "Big Pickle",
+          "limit": {
+            "context": 128000,
+            "output": 16000
+          }
+        }
+      }
+    }
+  }
 }
 ```
 
