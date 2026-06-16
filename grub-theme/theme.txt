@@ -1,0 +1,81 @@
+# SysMedic GRUB Theme v1.0
+# Clean, high-contrast theme for recovery environments
+# Works in both framebuffer (gfxterm) and text mode
+
+title-text: "🩺  SysMedic Boot Manager"
+title-font: "Unifont Regular 24"
+title-color: "#00bfff"
+title-align: "center"
+
+desktop-image: ""
+desktop-color: "#000000"
+
+terminal-font: "Unifont Regular 16"
+
++ boot_menu {
+    left = 15%
+    top = 20%
+    width = 70%
+    height = 60%
+    item_color = "#cccccc"
+    selected_item_color = "#00ff88"
+    item_height = 32
+    item_padding = 8
+    item_spacing = 4
+    item_font = "Unifont Regular 16"
+    selected_item_font = "Unifont Bold 16"
+    item_icon_space = 0
+    scrollbar = true
+    scrollbar_width = 8
+}
+
++ label {
+    text = ""
+    font = "Unifont Regular 12"
+    color = "#888888"
+    align = "center"
+    left = 15%
+    top = 85%
+    width = 70%
+    height = 10%
+}
+
+- hsep {
+    left = 15%
+    top = 18%
+    width = 70%
+    height = 2
+    color = "#333333"
+}
+
+- vsep {
+    left = 15%
+    top = 18%
+    width = 2
+    height = 2
+    color = "#444444"
+}
+
+progress_bar {
+    left = 15%
+    top = 82%
+    width = 70%
+    height = 12
+    fg_color = "#00bfff"
+    bg_color = "#222222"
+    text_color = "#ffffff"
+    font = "Unifont Regular 12"
+}
+
+# Timer / countdown styling
++ label {
+    id = "__timeout__"
+    text = "Booting in %d seconds..."
+    font = "Unifont Regular 14"
+    color = "#aaaaaa"
+    align = "center"
+    left = 15%
+    top = 87%
+    width = 70%
+    height = 8%
+}

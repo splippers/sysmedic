@@ -281,6 +281,137 @@ PROFILE
 
 ##############################################################################
 
+step_grub_customize() {
+    header "STEP 4b: Customizing GRUB Boot Menu"
+
+    local iso_grub_dir="${ISO_DIR}/boot/grub"
+    local iso_grub_cfg="${iso_grub_dir}/grub.cfg"
+    local iso_theme_dir="${iso_grub_dir}/themes/sysmedic"
+
+    if [ ! -f "$iso_grub_cfg" ]; then
+        warn "No GRUB config found at $iso_grub_cfg — trying alternate locations..."
+        iso_grub_cfg=$(find "$ISO_DIR" -name "grub.cfg" -path "*/boot/grub/*" 2>/dev/null | head -1)
+        if [ -z "$iso_grub_cfg" ]; then
+            fail "Cannot find GRUB config in ISO — skipping GRUB customization"
+            return 1
+        fi
+        iso_grub_dir="$(dirname "$iso_grub_cfg")"
+    fi
+
+    info "Found GRUB config at $iso_grub_cfg"
+
+    # ── 1. Install SysMedic GRUB theme ──
+    if [ -d "${SYSMEDIC_DIR}/grub-theme" ]; then
+        mkdir -p "$iso_theme_dir"
+        cp -r "${SYSMEDIC_DIR}/grub-theme/"* "$iso_theme_dir/"
+        ok "SysMedic GRUB theme installed to ISO"
+    fi
+
+    # ── 2. Add custom GRUB entries ──
+    # We inject emergency boot options into the ISO's GRUB config
+    # We'll add them before the normal menu entries to appear at the top
+    local emergency_entries_file="${iso_grub_dir}/sysmedic-emergency.cfg"
+
+    cat > "$emergency_entries_file" << 'EMERGENCY_CFG'
+# SysMedic Emergency Boot Options — injected by build-iso.sh
+# These provide fallback boot modes for problematic hardware
+
+insmod gzio
+if [ x$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+
+menuentry '🩺  SysMedic — Boot Live System' --class sysmedic --class gnu-linux {
+    set gfxpayload=keep
+    linux /casper/vmlinuz boot=casper quiet splash ---
+    initrd /casper/initrd
+}
+
+menuentry '🩺  SysMedic — Verbose Debug Mode' --class verbose --class gnu-linux {
+    set gfxpayload=keep
+    linux /casper/vmlinuz boot=casper quiet=0 loglevel=7 debug earlyprintk ---
+    initrd /casper/initrd
+}
+
+menuentry '🩺  SysMedic — Safe Graphics (nomodeset)' --class nomodeset --class gnu-linux {
+    set gfxpayload=text
+    linux /casper/vmlinuz boot=casper nomodeset vga=normal nofb ---
+    initrd /casper/initrd
+}
+
+menuentry '🩺  SysMedic — ACPI Off (legacy hardware)' --class acpi --class gnu-linux {
+    set gfxpayload=text
+    linux /casper/vmlinuz boot=casper acpi=off noapic nolapic ---
+    initrd /casper/initrd
+}
+
+menuentry '🩺  SysMedic — RAM Test Mode' --class memtest {
+    set gfxpayload=keep
+    linux /casper/vmlinuz boot=casper memtest=4 ---
+    initrd /casper/initrd
+}
+
+menuentry '🧪  Memtest86+' --class memtest {
+    linux /boot/memtest86+x64.efi
+}
+
+if [ "$grub_platform" = "efi" ]; then
+    fwsetup --is-supported
+    if [ "$?" = 0 ]; then
+        menuentry '⚙️  UEFI Firmware Settings' {
+            fwsetup
+        }
+    fi
+fi
+
+menuentry '🔁  Boot from Next Volume' {
+    exit
+}
+EMERGENCY_CFG
+
+    # ── 3. Modify the main GRUB config to include our entries and theme ──
+    # We do this by inserting our config before the existing menu entries
+    if grep -q "^menuentry" "$iso_grub_cfg" 2>/dev/null; then
+        # Backup original
+        cp "$iso_grub_cfg" "${iso_grub_cfg}.bak"
+
+        # Insert theme config
+        if [ -d "$iso_theme_dir" ]; then
+            if ! grep -q "GRUB_THEME" "$iso_grub_cfg"; then
+                sed -i "1i set grub_theme=\"${iso_theme_dir}/theme.txt\"" "$iso_grub_cfg"
+            fi
+        fi
+
+        # Replace the first menuentry (the default option) with our SysMedic boot
+        # Add source for emergency entries before first menuentry
+        awk -v emergency="$emergency_entries_file" '
+        /^menuentry/ && !done {
+            print "source " emergency
+            print ""
+            done = 1
+        }
+        { print }
+        ' "$iso_grub_cfg" > "${iso_grub_cfg}.new" && mv "${iso_grub_cfg}.new" "$iso_grub_cfg"
+
+        ok "GRUB menu customized with SysMedic emergency entries"
+    else
+        warn "GRUB config has unexpected format — appending entries instead"
+        cat "$emergency_entries_file" >> "$iso_grub_cfg"
+        ok "GRUB entries appended"
+    fi
+
+    # ── 4. Set default timeout and boot option ──
+    # Make the first SysMedic entry the default, with 15s timeout
+    if grep -q "^set timeout=" "$iso_grub_cfg" 2>/dev/null; then
+        sed -i 's/^set timeout=.*/set timeout=15/' "$iso_grub_cfg"
+    fi
+    if grep -q "^set default=" "$iso_grub_cfg" 2>/dev/null; then
+        sed -i 's/^set default=.*/set default=0/' "$iso_grub_cfg"
+    fi
+
+    ok "GRUB boot menu customization complete"
+}
+
+##############################################################################
+
 install_packages_in_chroot() {
     info "Setting up chroot for package installation..."
 
@@ -510,6 +641,7 @@ case "$ACTION" in
         step_extract
         step_unsquash
         step_customize
+        step_grub_customize
         step_resquash
         step_repack
         ;;
@@ -524,11 +656,15 @@ case "$ACTION" in
         fi
         install_packages_in_chroot
         ;;
+    --grub|grub)
+        step_grub_customize
+        ;;
     --all)
         step_download
         step_extract
         step_unsquash
         step_customize
+        step_grub_customize
         step_resquash
         step_repack
         echo ""
@@ -551,6 +687,7 @@ case "$ACTION" in
         echo "  --extract         Extract ISO contents"
         echo "  --unsquash        Unsquash root filesystem"
         echo "  --customize       Add SysMedic scripts and tools (prompts for package install)"
+        echo "  --grub            Customize ISO GRUB boot menu with SysMedic entries"
         echo "  --install-packages Install extra packages into rootfs (requires chroot setup)"
         echo "  --resquash        Resquash modified rootfs"
         echo "  --repack          Repack into new ISO"
@@ -562,6 +699,10 @@ case "$ACTION" in
         echo "Typical workflow:"
         echo "  sudo $0 --build"
         echo "  sudo $0 --write /dev/sdX"
+        echo ""
+        echo "Replicate GRUB menu across all nodes:"
+        echo "  # On each target system (or in chroot):"
+        echo "  sudo /opt/sysmedic/scripts/grub-customizer.sh install"
         echo ""
         echo "Build requirements:"
         echo "  - xorriso, squashfs-tools, rsync, wget"
