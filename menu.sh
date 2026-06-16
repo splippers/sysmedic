@@ -51,11 +51,12 @@ while true; do
     echo -e "${BOLD}  ║  25)  Full system diagnostic report                 ║${NC}"
     echo -e "${BOLD}  ║  26)  Clone/rescue drive (ddrescue)                 ║${NC}"
     echo -e "${BOLD}  ║  27)  Drop to shell (exit to return)                ║${NC}"
-    echo -e "${BOLD}  ║  28)  Reboot                                         ║${NC}"
+    echo -e "${BOLD}  ║  28)  Capture/Restore OS image                      ║${NC}"
+    echo -e "${BOLD}  ║  29)  Reboot                                         ║${NC}"
     echo -e "${BOLD}  ║   0)  Shutdown                                       ║${NC}"
     echo -e "${BOLD}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -ne "  ${CYAN}Choice [0-28]:${NC} "
+    echo -ne "  ${CYAN}Choice [0-29]:${NC} "
     read choice
     echo ""
 
@@ -448,7 +449,11 @@ PYEOF
             bash
             ;;
 
-        28) echo "Rebooting..."; reboot ;;
+        28) clear
+            bash "$SCRIPTS/capture-restore.sh"
+            ;;
+
+        29) echo "Rebooting..."; reboot ;;
 
         0)  echo "Shutting down..."; poweroff ;;
 
