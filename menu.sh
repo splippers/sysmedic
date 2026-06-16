@@ -117,7 +117,7 @@ PYEOF
                 echo -e "  ${GREEN}➜  Context file: /tmp/sysmedic-context.json${NC}"
                 echo -e "  ${GREEN}➜  AI model: opencode/big-pickle${NC}"
                 echo ""
-                echo -e "  ${YELLOW}Press Enter to launch Big Pickle...${NC}"
+                echo -e "  ${YELLOW}Press ENTER to launch SysMedic${NC}"
                 read -r
                 echo ""
                 opencode
