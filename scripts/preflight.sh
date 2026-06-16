@@ -19,6 +19,20 @@ echo -e "${BOLD}  ║   Detecting hardware & gathering     ║${NC}"
 echo -e "${BOLD}  ║   context from the mesh...           ║${NC}"
 echo -e "${BOLD}  ╚══════════════════════════════════════╝${NC}"
 echo ""
+# ──────────────────────────────────────────────
+# Set up persistence (session save/restore)
+# ──────────────────────────────────────────────
+if [ -x "$(dirname "$0")/sysmedic-persist.sh" ]; then
+    bash "$(dirname "$0")/sysmedic-persist.sh" setup
+fi
+
+# ──────────────────────────────────────────────
+# Check for updates (non-blocking, background)
+# ──────────────────────────────────────────────
+if [ -x "$(dirname "$0")/sysmedic-update.sh" ]; then
+    bash "$(dirname "$0")/sysmedic-update.sh" check &
+fi
+
 info "Collecting hardware data..."
 
 # ──────────────────────────────────────────────
@@ -258,4 +272,9 @@ if [ -f "$CONTEXT_FILE" ] && python3 -c "import json; json.load(open('$CONTEXT_F
 else
     warn "JSON generation failed — check $CONTEXT_FILE"
     cat "$CONTEXT_FILE" 2>/dev/null | head -10
+fi
+
+# Save session to persistent storage
+if [ -x "$(dirname "$0")/sysmedic-persist.sh" ]; then
+    bash "$(dirname "$0")/sysmedic-persist.sh" save "preflight"
 fi

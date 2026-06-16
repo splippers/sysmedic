@@ -560,6 +560,103 @@ Usage:
 
 ---
 
+## Session 2026-06-16 (Part 6) — AI-Deep Analysis Pipeline (Tier 3) + ISO Builder Fix
+
+### Goal
+- Evolve SysMedic from diagnostic toolbox into AI-driven root cause analysis platform
+- Create a structured diagnostic aggregation pipeline that feeds into OpenCode for AI analysis
+- Fix the ISO builder (build-iso.sh) — SysMedic rebranding, chroot fix, modernisation
+
+### Hardware (this session)
+- **System:** Dell Inc. Precision 3591 (Serial: 2Y4XG74)
+- **CPU:** Intel(R) Core(TM) Ultra 7 165H @ 1.60GHz (16 cores, 22 threads)
+- **RAM:** 64 GB (62.3 GB available)
+- **Disks:**
+  - `/dev/sda` — Toshiba KXG50ZNV256G (238 GB NVMe, boot device, ext4)
+  - `/dev/nvme0n1` — WD SN8000S 1TB (953 GB NVMe, BitLocker partition, pristine)
+- **BIOS:** Dell 1.21.0 (Apr 2026)
+- **Battery:** BYD 100% capacity, 0% wear
+
+### Steps Taken
+
+#### 1. Created `sysmedic-analyze.sh` — AI-Deep Diagnostic Analysis Pipeline
+New script at `/opt/sysmedic/scripts/sysmedic-analyze.sh` that:
+
+| Section | Analysis | Data Sources |
+|---------|----------|-------------|
+| 1 | System Context | Preflight JSON or direct dmidecode fallback |
+| 2 | Disk Health (SMART) | `smartctl -H`, temp, reallocated/pending/uncorrectable sectors |
+| 3 | Stress Test History | Scans `/root/sysmedic/reports/stress-*/` for past results |
+| 4 | Kernel Log (dmesg) | Error/fail/panic/oops/hung/blocked pattern matching |
+| 5 | Thermal Analysis | sensors peak temps, core delta detection |
+| 6 | Detected OS Issues | dpkg errors, kernel panics, BSOD minidumps, disk usage |
+| 7 | Bootloader Integrity | EFI partition scan (GRUB, Windows Boot Manager) |
+| 8 | Network Status | Interface listing + connectivity test |
+| 9 | Hardware Anomaly Detection | Core temp delta, IRQ storms, memory errors |
+| 10 | AI JSON Generation | Structured JSON for OpenCode consumption |
+
+Key design decisions:
+- **Two modes**: `--quick` (skip long tests) and `--full` (complete analysis)
+- **AI launch**: `--ai` flag auto-launches OpenCode with analysis data
+- **Safe eval**: uses Python `repr()` via temp files instead of `eval` for shell variable passing (avoids shell injection from system names like `Intel(R) Core(TM)`)
+- **Reports** saved to `/root/sysmedic/reports/analysis-<timestamp>/` with summary.txt
+- **AI-ready JSON** at `/tmp/sysmedic-analysis.json` with all diagnostic data structured for AI consumption
+
+#### 2. Fixed Critical Bugs in Analysis Script
+- **SMART temp parsing**: Was showing "Celsius°C" because `awk '{print $NF}'` picked up the attribute name column instead of the raw value. Fixed to use `awk '{print $10}'` for raw value column.
+- **System info eval failure**: `eval "$(python3 ...)"` broke on values with special chars like `Dell Inc.` (space treated as command separator) and `Intel(R) Core(TM)` (parentheses caused syntax errors). Replaced with Python `repr()` → temp file → `source` approach.
+- **Context fallback**: Script now runs `preflight.sh` automatically if context JSON missing, with direct `dmidecode` fallback.
+
+#### 3. Added Menu Integration
+- New Diagnostics menu option **6) AI Deep Analysis** with 4 sub-options:
+  - Quick analysis (skip long tests)
+  - Full analysis (all checks)
+  - Quick + launch AI
+  - Full + launch AI
+
+#### 4. Fixed `build-iso.sh` — ISO Builder (Tier 4)
+Complete rewrite of the ISO build pipeline:
+- **Rebranded** from `fog-ambulance` to `sysmedic` throughout (paths, volume labels, MOTD, auto-launch)
+- **Fixed chroot package install**: Added proper `mount --bind` for /dev, /proc, /sys before `chroot apt-get install`, with clean umount on completion
+- **Fixed typo**: `AMBUSANCE_LAUNCHED` → `SYSMEDIC_LAUNCHED`
+- **Added package list**: smartmontools, stress-ng, memtester, lvm2, mdadm, ntfs-3g, testdisk, partclone, hfsprogs, chntpw, nmap, iperf3, lm-sensors, nvme-cli, and more
+- **New features**: Persistent partition instructions, SHA256 checksum generation, `--install-packages` standalone mode, backward-compatible `ambulance` symlink
+
+#### 5. Updated ROADMAP.md
+- Rebranded from FOG-Ambulance to SysMedic v3.0
+- Updated architecture diagram with current file structure
+- Marked all Phase 1 milestones as completed
+- Added "Current Hardware Context" section
+
+### Key Technical Decisions
+1. **Python `repr()` for safe variable passing**: Instead of `eval` which breaks on special chars, use `Python → file with repr() → source` pattern. This is critical when system names contain parentheses and special characters.
+2. **Two-tier analysis**: Quick mode for rapid triage (skips OS mount probing and multi-pass checks), full mode for comprehensive RCA.
+3. **Diagnostic aggregation over live monitoring**: Rather than running new stress tests, the analysis collects ALL existing diagnostic data — building a cumulative picture rather than just a point-in-time snapshot.
+4. **JSON structure designed for AI consumption**: The `/tmp/sysmedic-analysis.json` file includes preflight context, raw sensor data, SMART reports, dmesg errors, and stress history — everything the AI needs for meaningful root cause analysis.
+
+### Health Check Findings (this session on Precision 3591)
+- **CPU**: Intel Ultra 7 165H — 16 cores/22 threads, idle temps nominal (peak 60°C)
+- **RAM**: 64 GB — 62 GB available, 0B swap (clean)
+- **Disks**: Both PASSED SMART health (Toshiba 238G + WD SN8000S 1TB)
+- **Network**: Internet reachable via wlp0s20f3 (192.168.88.55/24)
+- **Battery**: BYD 100% capacity, 0% wear, "Not charging" (plugged in)
+- **dmesg**: 16 entries matching error patterns (mostly benign: ACPI EC interrupt, PCI ROM assign fail, EDAC IBECC correctable, iwlwifi log pointer)
+- **dpkg**: 32 errors on live USB system (expected for live session)
+- **Thermal anomaly**: Core temp delta 59°C (known Precision 3591 issue — Core 8 hotspot, documented in prior session)
+- **Memory**: 9 IBECC correctable errors (normal for Intel In-Band ECC on this platform)
+
+### Relevant Files
+| Path | Description |
+|------|-------------|
+| `/opt/sysmedic/scripts/sysmedic-analyze.sh` | AI-Deep Analysis pipeline — 700+ lines |
+| `/opt/sysmedic/menu.sh` | v3.0 with AI Deep Analysis option (6) in Diagnostics |
+| `/opt/sysmedic/build-iso.sh` | Fixed ISO builder — SysMedic v3.0 rebrand |
+| `/opt/sysmedic/ROADMAP.md` | Updated to v3.0 with full milestone tracking |
+| `/tmp/sysmedic-analysis.json` | Latest AI-ready analysis JSON (30K) |
+| `/root/sysmedic/reports/analysis-20260616-230835/` | Full analysis report with summary |
+
+---
+
 ## Session Template
 
 ```markdown

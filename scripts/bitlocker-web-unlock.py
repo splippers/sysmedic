@@ -102,24 +102,46 @@ def get_disk_info(dev_path):
 
 
 def detect_bitlocker_volumes():
-    """Find BitLocker-protected partitions."""
-    volumes = []
-    rc, out, _ = run_cmd(["lsblk", "-nro", "NAME"])
-    if rc != 0:
-        return volumes
+    """Find BitLocker-protected partitions.
     
-    for line in out.split('\n'):
-        dev = f"/dev/{line.strip()}"
-        if not os.path.exists(dev):
-            continue
-        # Check with dislocker
-        rc2, out2, _ = run_cmd(["dislocker", "-V", dev])
-        if rc2 == 0 and ('BitLocker' in out2 or 'bitlocker' in out2.lower()):
-            size = ""
-            rc3, out3, _ = run_cmd(["lsblk", "-nro", "SIZE", dev])
-            if rc3 == 0:
-                size = out3
-            volumes.append({"device": dev, "size": size})
+    Uses blkid as the primary detector (more reliable), with dislocker -V
+    as a secondary check for older volumes.
+    """
+    volumes = []
+    seen = set()
+    
+    # Method 1: blkid (most reliable — detects even if dislocker -V chokes)
+    rc, out, _ = run_cmd(["blkid"])
+    if rc == 0:
+        for line in out.split('\n'):
+            if 'TYPE="BitLocker"' in line or 'TYPE="bitlocker"' in line:
+                dev = line.split(':')[0].strip()
+                if not os.path.exists(dev):
+                    continue
+                if dev in seen:
+                    continue
+                seen.add(dev)
+                size = ""
+                rc3, out3, _ = run_cmd(["lsblk", "-nro", "SIZE", dev])
+                if rc3 == 0:
+                    size = out3
+                volumes.append({"device": dev, "size": size})
+    
+    # Method 2: dislocker -V (fallback for volumes blkid might miss)
+    rc, out, _ = run_cmd(["lsblk", "-nro", "NAME"])
+    if rc == 0:
+        for line in out.split('\n'):
+            dev = f"/dev/{line.strip()}"
+            if not os.path.exists(dev) or dev in seen:
+                continue
+            rc2, out2, _ = run_cmd(["dislocker", "-V", dev])
+            if rc2 == 0 and ('BitLocker' in out2 or 'bitlocker' in out2.lower()):
+                seen.add(dev)
+                size = ""
+                rc3, out3, _ = run_cmd(["lsblk", "-nro", "SIZE", dev])
+                if rc3 == 0:
+                    size = out3
+                volumes.append({"device": dev, "size": size})
     
     return volumes
 
@@ -314,8 +336,12 @@ def read_diagnostics():
 
 def unlock_bitlocker(dev_path, recovery_key):
     """Attempt to unlock a BitLocker volume with the given recovery key."""
-    # Clean the key
-    clean_key = re.sub(r'[^0-9A-Fa-f]', '', recovery_key)
+    # Clean the key — dislocker expects exactly "XXXXXX-XXXXXX-...-XXXXXX" (48 digits + 7 dashes)
+    # Strip all non-digits, then re-insert dashes every 6 digits
+    digits = re.sub(r'[^0-9]', '', recovery_key)
+    if len(digits) != 48:
+        return False, f"Recovery key must have 48 digits (got {len(digits)})"
+    clean_key = '-'.join(digits[i:i+6] for i in range(0, 48, 6))
     
     os.makedirs(BITLOCKER_DIR, exist_ok=True)
     
@@ -323,8 +349,9 @@ def unlock_bitlocker(dev_path, recovery_key):
     run_cmd(["umount", WINDOWS_MOUNT])
     run_cmd(["umount", BITLOCKER_DIR])
     
-    # Run dislocker
-    rc, out, err = run_cmd(["dislocker", "-V", dev_path, "-p", clean_key, "-r", "--", BITLOCKER_DIR], timeout=60)
+    # Run dislocker (with -s to skip state check, common fix for modern BitLocker volumes)
+    # Note: -pKEY must be concatenated (no space) or dislocker tries to open tty
+    rc, out, err = run_cmd(["dislocker", "-V", dev_path, f"-p{clean_key}", "-s", "-r", "--", BITLOCKER_DIR], timeout=60)
     
     if rc != 0:
         return False, f"dislocker failed (rc={rc}): {err[:200] if err else out[:200]}"

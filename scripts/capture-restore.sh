@@ -12,7 +12,7 @@ header(){ echo -e "${BOLD}\n  ╔═══════════════�
           echo -e "${BOLD}  ║  $1${NC}"; 
           echo -e "${BOLD}  ╚══════════════════════════════════════════════════════════════╝${NC}"; }
 
-DEFAULT_CAPTURE_DIR="/mnt/sandisk/captures"
+DEFAULT_CAPTURE_DIR="/root/sysmedic/captures"
 TMP_MOUNT="/mnt/tmp_capture"
 
 # ──────────────────────────────────────────────
@@ -23,7 +23,24 @@ detect_oses() {
     local index=0
     mkdir -p "$TMP_MOUNT" 2>/dev/null
 
-    for dev in $(lsblk -nlo NAME,FSTYPE 2>/dev/null | grep -E 'ntfs|ext4|vfat|fat32|hfsplus|apfs' | awk '{print "/dev/"$1}'); do
+    while read -r name fstype; do
+        [ -z "$fstype" ] && continue
+        local dev=""
+        case "$name" in
+            *-*)    # LVM or multi-part name
+                if [ -b "/dev/mapper/$name" ]; then
+                    dev="/dev/mapper/$name"
+                elif [ -b "/dev/$name" ]; then
+                    dev="/dev/$name"
+                else
+                    continue
+                fi
+                ;;
+            *)
+                dev="/dev/$name"
+                ;;
+        esac
+        [ ! -b "$dev" ] && continue
         # Skip partitions that are already mounted
         mount | grep -q "^$dev " && continue
 
@@ -63,7 +80,7 @@ detect_oses() {
                 index=$((index + 1))
             fi
         fi
-    done
+    done < <(lsblk -nlo NAME,FSTYPE 2>/dev/null | grep -E 'ntfs|ext4|vfat|fat32|hfsplus|apfs')
     rmdir "$TMP_MOUNT" 2>/dev/null
 
     # Return the array
@@ -85,12 +102,37 @@ get_disk_partitions() {
 # ──────────────────────────────────────────────
 get_parent_disk() {
     local dev="$1"
-    local basename=$(basename "$dev")
-    # Remove trailing digits to get parent
-    local parent=$(echo "$basename" | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
-    # Handle NVMe naming (nvme0n1p1 → nvme0n1)
-    parent=$(echo "$parent" | sed 's/p$//')
-    echo "/dev/$parent"
+    # Use lsblk tree output (works for LVM mapper → PV → disk)
+    local pkname
+    pkname=$(lsblk -nlpo NAME,PKNAME 2>/dev/null | grep -F "$dev " | awk '{print $2}')
+    if [ -n "$pkname" ] && [ -b "$pkname" ]; then
+        # pkname is the immediate parent (e.g., /dev/nvme0n1p3 for an LV)
+        # Check if it has a grandparent (i.e., it's a partition)
+        local grandparent
+        grandparent=$(lsblk -nlpo NAME,PKNAME 2>/dev/null | grep -F "$pkname " | awk '{print $2}')
+        if [ -n "$grandparent" ] && [ -b "$grandparent" ]; then
+            echo "$grandparent"
+        else
+            echo "$pkname"
+        fi
+    elif echo "$dev" | grep -q "/mapper/"; then
+        # Fallback for LVM: get PV from lvm tools, then strip to disk
+        local pv_dev
+        pv_dev=$(pvs --noheadings -o pv_name 2>/dev/null | head -1 | sed 's/^ *//')
+        if [ -n "$pv_dev" ]; then
+            # PV is usually a partition (e.g., /dev/nvme0n1p3) — strip to get disk
+            local pv_base=$(basename "$pv_dev")
+            local disk_name=$(echo "$pv_base" | sed 's/p[0-9]*$//' | sed 's/[0-9]*$//')
+            echo "/dev/$disk_name"
+        else
+            echo ""
+        fi
+    else
+        # Regular partition → strip trailing digits/NVMe suffix
+        local basename=$(basename "$dev")
+        local result=$(echo "$basename" | sed 's/p[0-9]*$//' | sed 's/[0-9]*$//')
+        echo "/dev/$result"
+    fi
 }
 
 # ──────────────────────────────────────────────
@@ -271,6 +313,47 @@ capture_os() {
         part_count=$((part_count + 1))
     done
 
+    # ── Capture LVM logical volumes if the OS lives on one ──
+    local lvm_vg=""
+    local lvm_lv_count=0
+    if command -v lvs &>/dev/null; then
+        local lv_path_raw=""
+        lv_path_raw=$(lvdisplay "$dev" 2>/dev/null | grep "LV Path" | awk '{print $3}')
+        if [ -n "$lv_path_raw" ]; then
+            lvm_vg=$(lvdisplay "$dev" 2>/dev/null | grep "VG Name" | awk '{print $3}')
+            info "Detected LVM — capturing logical volumes in VG '$lvm_vg'"
+            echo ""
+
+            # Back up LVM metadata
+            vgcfgbackup -f "${capture_path}/lvm_${lvm_vg}.vgcfg" "$lvm_vg" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                ok "LVM metadata saved (${capture_path}/lvm_${lvm_vg}.vgcfg)"
+            fi
+
+            # List all LVs in this VG
+            while read -r lv_path lv_size; do
+                [ -z "$lv_path" ] && continue
+                local lv_basename=$(basename "$lv_path")
+                local lv_label="lvm_${lv_basename}"
+                echo ""
+                info "LVM LV: $lv_path ($lv_size)"
+                local image_file="${capture_path}/${lv_label}.img"
+
+                # Attempt partclone first for compressible FS capture
+                echo "  → Capturing logical volume..."
+                partclone.ext4 -c -s "$lv_path" -o - 2>/dev/null | zstd -3 -o "${image_file}.zst" 2>/dev/null
+                if [ ${PIPESTATUS[0]} -eq 0 ]; then
+                    ok "Captured LV ($(ls -lh "${image_file}.zst" | awk '{print $5}'))"
+                else
+                    warn "partclone failed, falling back to dd"
+                    dd if="$lv_path" bs=4M status=none | zstd -3 -o "${image_file}.zst" 2>/dev/null
+                    ok "Captured LV via dd ($(ls -lh "${image_file}.zst" | awk '{print $5}'))"
+                fi
+                lvm_lv_count=$((lvm_lv_count + 1))
+            done < <(lvs --noheadings -o lv_path,lv_size --select "vg_name=${lvm_vg}" 2>/dev/null | sed 's/^ *//')
+        fi
+    fi
+
     # Save metadata
     cat > "${capture_path}/metadata.json" << JSON
 {
@@ -281,6 +364,9 @@ capture_os() {
     "source_device": "$dev",
     "source_disk": "$parent_disk",
     "partition_count": $part_count,
+    "lvm": $( [ -n "$lvm_vg" ] && echo "true" || echo "false" ),
+    "lvm_vg": "${lvm_vg:-}",
+    "lvm_lv_count": $lvm_lv_count,
     "tool": "sysmedic-capture v1.0",
     "compression": "zstd -3",
     "capture_tool": "partclone / dd"
@@ -445,7 +531,76 @@ restore_capture() {
         info "You will need to create partitions manually"
     fi
 
-    # Restore each partition image
+    # ── Set up LVM if the capture used it ──
+    local has_lvm=false
+    local lvm_vg=""
+    if [ -f "${selected}/metadata.json" ]; then
+        has_lvm=$(grep -o '"lvm": true' "${selected}/metadata.json" &>/dev/null && echo true || echo false)
+        lvm_vg=$(grep -o '"lvm_vg": "[^"]*"' "${selected}/metadata.json" 2>/dev/null | cut -d'"' -f4)
+    fi
+
+    if [ "$has_lvm" = "true" ] && [ -n "$lvm_vg" ] && command -v lvm &>/dev/null; then
+        echo ""
+        info "Setting up LVM for VG '$lvm_vg'..."
+        # Find the LVM PV partition (typically an sda3/nvme0n1p3 with no FS or LVM type)
+        local pv_dev=""
+        while read -r pv_candidate; do
+            [ -z "$pv_candidate" ] && continue
+            local pv_fs=$(lsblk -nlo FSTYPE "$pv_candidate" 2>/dev/null)
+            # LVM PVs show no filesystem, or have type 'LVM2_member'
+            if [ -z "$pv_fs" ] || [ "$pv_fs" = "LVM2_member" ]; then
+                # Check if partition type in sfdisk dump indicates LVM
+                if grep -q "$(basename $pv_candidate).*LVM\|$(basename $pv_candidate).*8e\|$(basename $pv_candidate).*E6D6D379" "${selected}/fdisk_output.txt" 2>/dev/null; then
+                    pv_dev="$pv_candidate"
+                    break
+                fi
+                # Fallback: use first partition with no FS
+                [ -z "$pv_dev" ] && pv_dev="$pv_candidate"
+            fi
+        done < <(lsblk -nlo NAME,TYPE "$target_disk" 2>/dev/null | awk '/ part /{print "/dev/"$1}')
+
+        if [ -n "$pv_dev" ] && [ -b "$pv_dev" ]; then
+            echo "  → Initializing PV on $pv_dev..."
+            pvcreate -ff "$pv_dev" 2>/dev/null
+            # Restore VG metadata if backed up
+            if [ -f "${selected}/lvm_${lvm_vg}.vgcfg" ]; then
+                echo "  → Restoring VG '$lvm_vg' from backup..."
+                vgcfgrestore "$lvm_vg" -f "${selected}/lvm_${lvm_vg}.vgcfg" 2>/dev/null
+                # If vgcfgrestore fails (e.g. new disk geometry), create VG manually
+                if [ $? -ne 0 ]; then
+                    echo "  → vgcfgrestore failed — creating VG manually"
+                    vgcreate "$lvm_vg" "$pv_dev" 2>/dev/null
+                    # Create LVs with correct sizes from metadata
+                    if [ -f "${selected}/metadata.json" ]; then
+                        local lv_count=$(grep -o '"lvm_lv_count": [0-9]*' "${selected}/metadata.json" | grep -oP '\d+')
+                        if [ "$lv_count" -gt 0 ]; then
+                            # Get VG free space and distribute
+                            local vg_free=$(vgs --noheadings -o vg_free --units b "$lvm_vg" 2>/dev/null | sed 's/ *//g')
+                            local each_size=$(( $(echo "$vg_free" | sed 's/B//') / lv_count ))
+                            # Create LVs from the capture file names
+                            for lv_img in "$selected"/lvm_*.img.zst; do
+                                [ -f "$lv_img" ] || continue
+                                local lv_name=$(basename "$lv_img" .img.zst | sed 's/lvm_//')
+                                lvcreate -L ${each_size}B -n "$lv_name" "$lvm_vg" 2>/dev/null
+                            done
+                        fi
+                    fi
+                fi
+            else
+                echo "  → No VG backup found — creating VG '$lvm_vg' on $pv_dev"
+                vgcreate "$lvm_vg" "$pv_dev" 2>/dev/null
+            fi
+            # Activate all LVs
+            vgchange -ay "$lvm_vg" 2>/dev/null
+            ok "LVM set up — VG '$lvm_vg' active"
+            sleep 1
+        else
+            warn "Could not identify LVM PV partition on $target_disk"
+            info "You may need to set up LVM manually after restore"
+        fi
+    fi
+
+    # Restore each partition/LV image
     echo ""
     for img in "$selected"/*.zst; do
         [ -f "$img" ] || continue
@@ -455,9 +610,37 @@ restore_capture() {
         echo ""
         info "Restoring $part_label..."
 
-        # Determine which partition device to use
-        # We need to figure out which partition corresponds to this image
-        # Try matching by partition number in the filename
+        # Handle LVM logical volumes
+        if echo "$part_label" | grep -q "^lvm_"; then
+            local lv_name=$(echo "$part_label" | sed 's/^lvm_//')
+            local target_lv=""
+            # Find the LV device path
+            if [ -n "$lvm_vg" ]; then
+                target_lv="/dev/${lvm_vg}/${lv_name}"
+                [ ! -b "$target_lv" ] && target_lv="/dev/mapper/${lvm_vg}-${lv_name}"
+            fi
+            if [ -n "$target_lv" ] && [ -b "$target_lv" ]; then
+                echo "  → Target LV: $target_lv"
+                echo "  → Decompressing and restoring..."
+                local restored=0
+                zstd -dc "$img" 2>/dev/null | partclone.ext4 -r -o "$target_lv" - 2>/dev/null
+                restored=$?
+                if [ $restored -ne 0 ]; then
+                    zstd -dc "$img" 2>/dev/null | dd of="$target_lv" bs=4M status=none 2>/dev/null
+                    restored=$?
+                fi
+                if [ $restored -eq 0 ]; then
+                    ok "LVM LV $lv_name restored to $target_lv"
+                else
+                    warn "LVM LV $lv_name had restore issues (exit code: $restored)"
+                fi
+            else
+                warn "LVM LV $lv_name target not found — LV may not have been created"
+            fi
+            continue
+        fi
+
+        # Regular partition image — determine target device
         local part_num=$(echo "$part_label" | grep -oP 'part\d+' | grep -oP '\d+')
         if [ -n "$part_num" ]; then
             local target_part="${target_disk}${part_num}"
@@ -476,7 +659,6 @@ restore_capture() {
         echo "  → Target: $target_part"
         echo "  → Decompressing and restoring..."
 
-        # Detect if this was a partclone image or dd image by trying partclone restore first
         local restored=0
         if echo "$part_label" | grep -qiE "ntfs|windows"; then
             zstd -dc "$img" 2>/dev/null | partclone.ntfs -r -o "$target_part" - 2>/dev/null
@@ -488,7 +670,6 @@ restore_capture() {
             zstd -dc "$img" 2>/dev/null | dd of="$target_part" bs=4M status=none 2>/dev/null
             restored=$?
         else
-            # Try partclone generic, fall back to dd
             zstd -dc "$img" 2>/dev/null | partclone.restore -o "$target_part" - 2>/dev/null
             restored=$?
             if [ $restored -ne 0 ]; then
