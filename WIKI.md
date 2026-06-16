@@ -5,6 +5,97 @@
 
 ---
 
+## Session 2026-06-16 (Part 3) — Windows Image Optimization & Storage Analysis
+
+### Goal
+- Investigate the Windows 11 image project on the SanDisk data drive
+- Analyze d1p3 (NTFS partition image) for storage optimization potential
+- Determine the absolute smallest size achievable without breakage
+
+### Hardware (this session)
+- **System:** Dell Latitude 3410 (Serial: 3C1NN93)
+- **CPU:** Intel(R) Core(TM) i5-10210U @ 1.60GHz (4 cores, 8 threads)
+- **RAM:** 16 GB (2 × 8 GB DDR5-5600 SODIMM, Micron, configured 5200 MT/s)
+- **Disks:**
+  - `/dev/sda` — SanDisk SD8SB8U-119G (119 GB, external data drive, 40292 power-on hours)
+  - `/dev/sdb` — MZVLB256HAHQ-000 (238 GB, SysMedic boot USB)
+  - `/dev/nvme0n1` — KIOXIA KBG40ZNS256G (238 GB NVMe, target machine internal drive, 91% life remaining)
+- **Network:** WiFi, IP 192.168.1.193
+
+### Steps Taken
+
+#### 1. Full System Diagnostics
+- Ran `sysmedic-diagnose` multiple times — all PASS with minor warnings (console-setup service failed, eno1 down — both expected)
+- System stable, temperatures normal (35-75°C depending on sensor)
+- Battery: 32% degraded, 2405/3556 mAh remaining
+
+#### 2. RAM Stress Testing
+- **memtester**: 12 GB + 4 GB passes — ✅ zero errors
+- **stressapptest**: 512 MB, 120 seconds, ~20 GB/s throughput — ✅ zero errors
+- **Verdict**: Both DDR5 SODIMM sticks fully functional, no ECC errors, no MCE events
+
+#### 3. Windows Image Project Discovery
+On the SanDisk data drive (`/mnt/sandisk/`), found the project `Windows11-25H2-April-26S-OPTIMIZED/` containing:
+
+| File | Size | Format | Notes |
+|------|------|--------|-------|
+| `d1p1.img` | 14 MB | partclone v0.3.27 + zstd | EFI system partition (FAT32) |
+| `d1p2.img` | 89 MB | partclone v0.3.27 + zstd | MS reserved partition |
+| `d1p3.img` | **21.5 GB** | partclone v0.3.27 + zstd | **Windows NTFS — current optimized** |
+| `d1p3.img.orig` | **25.1 GB** | partclone v0.3.33 + zstd | Original backup (larger) |
+| `d1p3-raw.img` | **58 GB** (45G sparse) | raw dd | Raw block-for-block dump |
+| `d1.mbr`, `d1.partitions`, etc. | — | text/partition tables | GPT partition layout metadata |
+
+#### 4. NTFS Image Analysis
+- Mounted `d1p3-raw.img` via loopback and examined the Windows 11 installation:
+  - **Total NTFS size**: 58 GB
+  - **Used data**: 35 GB
+  - **Free space**: 23 GB
+  - **Key consumers**: Program Files (12G), Windows (12G), WinSxS (8.9G), ProgramData (1.4G)
+  - No hiberfil.sys or pagefile.sys (already removed)
+  - No Windows.old present
+- `ntfsresize --info` reported minimum shrink size: **34.5 GB**
+
+#### 5. Compression Optimization Analysis
+Tested compression ratios on samples to find the smallest achievable size:
+
+| Method | Ratio (500MB sample) | Estimated full size | Time estimate |
+|--------|---------------------|--------------------|---------------|
+| **zstd -3 (current)** | 39.01% | **21.5 GB** | — |
+| zstd -10 | 38.16% | ~21.0 GB | ~30 min |
+| zstd -15 | 38.07% | ~20.9 GB | ~1 hr |
+| **zstd -19** | 37.33% | **~20.6 GB** | ~2.5 hr |
+| xz -9e | ~36% | **~19.8 GB** | ~3+ hr |
+| NTFS shrink → zstd -19 | — | **~20 GB** | shrink + re-image + compress |
+
+- **Partclone** already skips free space — only clones used NTFS blocks
+- The current `d1p3.img` (21.5 GB) is already a 63% reduction from the raw 58 GB dump
+- Higher compression levels give diminishing returns (zstd -19 saves only ~0.9 GB)
+
+#### 6. Started & Cancelled zstd -19 Re-compression
+- Launched a background zstd -19 re-compression pipeline
+- Estimated 2.5 hours for <1 GB savings
+- **Cancelled as not worth the time/effort** for marginal gain
+
+### Key Lessons
+1. **Partclone is the right tool** for NTFS imaging — it already skips free space, making raw dd unnecessary for compressed backups
+2. **zstd -3 is the sweet spot** for this data — higher levels give rapidly diminishing returns (level 19 saves only ~4% more)
+3. The Windows 11 install is already fairly clean (no hibernation, no pagefile, no Windows.old)
+4. The biggest potential savings (~5-7 GB) would come from WinSxS cleanup inside the Windows install, but this carries some risk
+5. **58 GB raw → 21.5 GB optimized** = 63% reduction with partclone + zstd -3 is already an excellent result
+
+### Relevant Files
+| Path | Description |
+|------|-------------|
+| `/mnt/sandisk/Windows11-25H2-April-26S-OPTIMIZED/d1p3.img` | Optimized NTFS image (21.5 GB, partclone v0.3.27 + zstd) |
+| `/mnt/sandisk/Windows11-25H2-April-26S-OPTIMIZED/d1p3.img.orig` | Original NTFS image backup (25.1 GB, partclone v0.3.33 + zstd) |
+| `/mnt/sandisk/d1p3-raw.img` | Raw dd dump (58 GB sparse, 45G on disk) |
+| `/mnt/sandisk/Windows11-25H2-April-26S-OPTIMIZED/` | Full Windows image project (partition tables, MBR, p1/p2/p3) |
+| `/root/reports/ram_test_results_20260616_094426.txt` | RAM diagnostic report |
+| `/root/reports/ram_diagnostic_20260616_092101.txt` | RAM hardware details |
+
+---
+
 ## Session 2026-06-16 (Part 2) — v2.1: Context-Aware Preflight & CraicKen Mesh
 
 ### Goal
