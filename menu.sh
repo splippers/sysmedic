@@ -64,16 +64,66 @@ while true; do
             # Run preflight to gather hardware context + mesh sync
             if [ -x "$SCRIPTS/preflight.sh" ]; then
                 bash "$SCRIPTS/preflight.sh"
-                echo ""
             fi
             # Launch AI with context available
             if command -v opencode &>/dev/null; then
                 export SYSMEDIC_CONTEXT="/tmp/sysmedic-context.json"
-                echo -e "  ${GREEN}Launching OpenCode AI with full hardware context...${NC}\n"
+
+                # Prominent hardware banner
+                echo ""
+                echo -e "${BOLD}  ╔══════════════════════════════════════════════════════════════╗${NC}"
+                echo -e "${BOLD}  ║               🖥️  TARGET SYSTEM IDENTIFICATION              ║${NC}"
+                echo -e "${BOLD}  ╚══════════════════════════════════════════════════════════════╝${NC}"
+
+                # Extract context values via Python, display with shell colors
+                eval "$(python3 << 'PYEOF' 2>/dev/null
+import json, shlex
+with open('/tmp/sysmedic-context.json') as f:
+    d = json.load(f)
+s = d.get('system', {})
+c = d.get('cpu', {})
+m = d.get('memory', {})
+sb = d.get('secure_boot', {})
+oses = d.get('detected_oses', [])
+disks = d.get('disks', [])
+def esc(v):
+    return shlex.quote(str(v))
+print(f'SYS_VENDOR={esc(s.get("vendor", ""))}')
+print(f'SYS_PRODUCT={esc(s.get("product", ""))}')
+print(f'SYS_SERIAL={esc(s.get("serial", ""))}')
+print(f'SYS_BIOS={esc(s.get("bios_version", ""))}')
+print(f'SYS_BIOS_DATE={esc(s.get("bios_date", ""))}')
+print(f'CPU_MODEL={esc(c.get("model", "")[:65])}')
+print(f'MEM_GB={esc(m.get("total_gb", "?"))}')
+print(f'SB_STATUS={esc(sb.get("mokutil", ""))}')
+os_list = '; '.join([f'{o.get("name","?")} on {o.get("device","?")}' for o in oses])
+print(f'OS_LIST={esc(os_list)}')
+disk_parts = [f'{d.get("device","?")} {d.get("size","?")} {d.get("type","?")} ({d.get("smart","?")})' for d in disks[:2]]
+print(f'DISK_LIST={esc("; ".join(disk_parts))}')
+PYEOF
+)"
+
+                echo -e "  ${CYAN}Make:${NC}        $SYS_VENDOR"
+                echo -e "  ${CYAN}Model:${NC}       $SYS_PRODUCT"
+                echo -e "  ${CYAN}Serial:${NC}      $SYS_SERIAL"
+                echo -e "  ${CYAN}BIOS:${NC}        $SYS_BIOS ($SYS_BIOS_DATE)"
+                echo -e "  ${CYAN}CPU:${NC}         $CPU_MODEL"
+                echo -e "  ${CYAN}RAM:${NC}         $MEM_GB GB"
+                echo -e "  ${CYAN}Secure Boot:${NC} $SB_STATUS"
+                [ -n "$OS_LIST" ] && echo -e "  ${CYAN}OS:${NC}          $OS_LIST"
+                [ -n "$DISK_LIST" ] && echo -e "  ${CYAN}Disks:${NC}      $DISK_LIST"
+                echo -e "${BOLD}  ╔══════════════════════════════════════════════════════════════╗${NC}"
+                echo ""
+                echo -e "  ${GREEN}➜  Context file: /tmp/sysmedic-context.json${NC}"
+                echo -e "  ${GREEN}➜  AI model: opencode/big-pickle${NC}"
+                echo -e "  ${GREEN}➜  Powering up Big Pickle...${NC}"
+                echo ""
+                sleep 1
                 opencode
             else
-                echo "OpenCode not found — try mounting persistence partition first"
-                read -p "Press Enter..."
+                echo ""
+                echo -e "  ${RED}OpenCode not found — try mounting persistence partition first${NC}"
+                read -p "  Press Enter..."
             fi
             ;;
 
