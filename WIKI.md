@@ -1,3 +1,146 @@
+## Session 2026-06-17 (Part 1) — APFS Read-Write & macOS Recovery from Linux
+
+### Goal
+- Boot macOS recovery from Linux after a bricked OCLP update on a MacBookPro6,2
+- Read/write APFS container from Linux to fix the broken cryptex graft and revert a partial Ventura 13.6→13.6.6 minor update
+- Understand the macOS sealed system volume (SSV) boot chain well enough to repair it without a second Mac
+
+### Hardware (this session)
+- **System:** MacBookPro6,2 (mid-2010 15" MacBook Pro, Serial: 34028xxxxxx)
+- **CPU:** Intel Core i5 M 520 @ 2.40GHz (2 cores, 4 threads — **no AVX2**)
+- **RAM:** 8 GB (2 × 4 GB DDR3-1067)
+- **GPU:** Intel HD Graphics (Ironlake) + NVIDIA GeForce GT 330M (switchable)
+- **Disks:**
+  - `/dev/sda` — Crucial MX200 250 GB SSD (APFS, internal, macOS Ventura via OCLP)
+  - `/dev/sdb` — SanDisk "STORE N GO" 32 GB USB (SysMedic live boot)
+- **OCLP:** 1.4.3, MacBookPro6,2 profile, FileVault allowed (`-allow_fv`)
+- **macOS state:** Ventura 13.6.6 (22G630) partially applied over 13.6 (22G120) — cryptex graft failed, system unbootable
+
+### Steps Taken
+
+#### 1. APFS Kernel Module Setup (linux-apfs-rw 0.3.2)
+- Built and loaded `apfs-dkms` (linux-apfs-rw 0.3.2) via dkms for kernel 6.8.0-71-generic
+- Source at `/usr/src/linux-apfs-rw-0.3.2-0ubuntu6.2/` with dkms.conf for auto-rebuild
+- Modprobe needed: `libcrc32c` dependency
+- Version 0.3.2 supports read-only by default; write support is flagged "experimental" and requires explicit `readwrite` mount option
+
+#### 2. APFS Container Volume Discovery (Major Finding)
+Mounting `-o vol=N` exposed **6 APFS volumes** within the single container (`/dev/sda2`):
+
+| Vol | Role | Key Content |
+|-----|------|-------------|
+| 0 | **Data** | User data (mounted by default), 94% full, 14 GB free |
+| 1 | **Preboot** | Boot files for snapshot `2F81E5BC-12BB-3D23-BA88-A2E3B4DBD528` — `boot.efi`, `.im4m` manifests, `cryptex1/current/` (old cryptex), `cryptex1/proposed/` (new 13.6.6 cryptex), `Firmware/`, `downlevel/`, `restore/` |
+| 2 | **Recovery** | `BaseSystem.dmg` (1.15 GB, full macOS Recovery environment), `BootKernelExtensions.kc`, post-update manifests (027/025) alongside pre-update manifests (021/019), `PlatformSupport.plist` |
+| 3 | **System (SSV)** | Sealed system volume — **Ventura 13.6.6 (22G630)**, dated May 4-5 2024, `boot.efi` present (723512 bytes), `KernelCollections/`, `.file` SSV seal marker |
+| 4 | **Update** | `Update.plist`, `restore.log` (13,863 lines, 1.4 MB), `last_update_result.plist`, `brain_path.plist`, `Bookmarks.plist`, per-user mount dirs (`msutargetcontroller-mount-*`), `nvram.plist`, `smstats` |
+| 5 | **kernelcore** | `kernelcore` binary (1 MB), likely the kernel collection cache |
+
+**Critical insight:** Each volume is a separate APFS filesystem with its own object tree inside the shared container. The `nx_fs_oid[vol_nr]` array in the container superblock maps volume numbers to their root object IDs. The kernel module defaults to volume 0 (Data), but supports `vol=` mount option for others.
+
+#### 3. macOS Update State Analysis
+- **System volume** (vol=3): Successfully updated to 13.6.6 (22G630) — `SystemVersion.plist` shows BuildID `5B87F82A-E416-11EE-AE2E-6A5F8564FF43`, files dated March 17 and May 4-5 2024
+- **Preboot volume** (vol=1): Partially updated — `boot.efi` is from May 5 2024 (new version), but `SystemVersion.plist` in CoreServices still shows 13.6 (22G120, BuildID `08092712-545D-11EE-A672-9E5E5052B769`)
+- **Update volume** (vol=4): `Update.plist` confirms this was `is-minor-os-update = true` with `Build = 22G630`, `OSVersion = 13.6.6`, `_UpdateType = Minor`. UpdateBrainService built Feb 24 2024. `BootedOSUUID = E511DD2A-602F-4C3A-89FD-1A577B0D6606`, `BootedOSVersion = 22G120`.
+- **restore.log sequence** (vol=4):
+  1. Created update volume, mounted at `/System/Volumes/Data/private/tmp/tmp-mount-TcB8PM`
+  2. Cleaned up proposed directory in preboot (`ramrod_splat_cleanup`)
+  3. "Skip sealing flag is set. System may not boot after update." ← **warning logged during update**
+  4. Package verified: `Package updates (ANY)->22G115` (initial), then `(ANY)->22G630` (latest)
+  5. Session 2 (Feb 24 2024 build): `Reverting to snapshot: com.apple.os.update-MSUPrepareUpdate`, `context validated`
+  6. Log ends at "context validated" — **no explicit error**, update preparation completed but cryptex graft failed on reboot
+
+#### 4. Preboot & Cryptex State
+- `cryptex1/current/` — Old 13.6 cryptex: `os.dmg` (4.45 GB), `app.dmg` (18 MB), dated Sep 21 2023
+- `cryptex1/proposed/` — New 13.6.6 cryptex: `os.dmg` (4.46 GB), `app.dmg` (18 MB), dated May 4 2024
+- `cryptex1/proposed/` has `os.clone.dmg` and `app.clone.dmg` alongside originals — the copy-on-write mechanism for cryptex updates
+- `cryptex1/current/` has older manifests (Build IDs 48320-021, 48352-019 from Aug 28 2023)
+- `cryptex1/proposed/` has newer manifests (Build IDs 48320-027, 48352-025 from Sep 16 2023 and Mar 17 2024)
+- `downlevel/current/` — Contains `CryptexUpgradeManifest.plist`, `app.dmg`, and per-model `apticket.*.im4m` files — this is the "downlevel" (old) cryptex for fallback
+
+**Summary:** The update downloaded and staged the 13.6.6 cryptex into `proposed/`. On reboot, boot.efi tried to graft (activate) the new cryptex into the boot chain via `Cryptexes/OS/`, but the cryptex graft failed ("cryptex failed to graft: name = os, graft point = Cryptexes/OS" found in NVRAM). The system couldn't complete boot. `CryptexFixup.kext` with `-lilufw=off` boot-arg should bypass the graft check and use the old cryptex from `current/`.
+
+#### 5. SSV (Sealed System Volume) Constraints
+- **libfsapfs** (FUSE driver v20201107) failed to parse the container: `libfsapfs_container_key_bag_read_file_io_handle: unable to initialize encryption context` at offset `10737893376 (0x280074000)`. The container uses a key bag for volume encryption, which the older 2020-era FUSE driver can't handle.
+- **APFS kernel module** (0.3.2) can mount the **Data volume** (vol=0) and read user data but doesn't expose the sealed system volume through the Data mount point
+- **Multiple volume mounting** via `vol=N` is required to access the SSV, Preboot, Recovery, and Update volumes
+- The **sealed system volume** (vol=3) is read-only by design — it's a cryptographically verified snapshot of macOS system files. Snapshots within the system volume can't be enumerated from the kernel module's API.
+
+#### 6. NVRAM Analysis
+All macOS and OCLP NVRAM variables readable from Linux via `/sys/firmware/efi/efivars/`:
+
+| Variable | Value |
+|----------|-------|
+| `efi-boot-device` | Volume UUID `726E0424-4C38-428B-A347-9AEB004D3485` → snapshot `2F81E5BC-12BB-3D23-BA88-A2E3B4DBD528` → `\System\Library\CoreServices\boot.efi` |
+| `auto-boot` | `true` |
+| `boot-args` | `keepsyms=1 -lilubetaall -lilufw=off -btlfxallowanyaddr ipc_control_port_options=0 -nokcmismatchpanic amfi_get_out_of_my_way=1` |
+| `OCLP-Model` | `MacBookPro6,2` |
+| `OCLP-Version` | `1.4.3` |
+| `OCLP-Settings` | `-allow_fv` |
+| `BootOrder` | Boot0000 → Boot0001 → Boot0080 |
+| `OCBtOrder` | OpenCore boot order (same entries) |
+| `AAPL,PanicInfo0000/0001` | Encrypted binary panic logs (2 entries, unreadable) |
+
+#### 7. Recovery Volume (vol=2) Discovery
+The Recovery volume contains a complete macOS Recovery environment:
+- `BaseSystem.dmg` (1.15 GB) — mountable DMG with macOS Recovery tools (Disk Utility, Terminal, bless)
+- `BaseSystem.chunklist` — integrity verification
+- `BootKernelExtensions.kc.*.im4m` — kernel collection manifests per Mac model
+- `boot.efi.*.im4m` — boot.efi manifests
+- `bootbase.efi.*.im4m` — boot base manifests
+- `apticket.*.im4m` — Apple signing tickets
+- `PlatformSupport.plist` — supported board IDs and model properties
+- `SystemVersion.plist` — Recovery OS version
+- `BridgeVersion.bin/plist` — Firmware bridge info
+
+**This means recovery IS available from Linux** — OpenCore can boot it via the normal picker.
+
+#### 8. Write Support Attempt (FAILED)
+Three approaches attempted for writing to APFS:
+
+1. **Kernel module R/W mount** — `mount -t apfs -o readwrite,vol=1 /dev/sda2 /mnt/preboot` succeeds (shown as `rw,relatime`), but any write operation (`touch`, `echo > file`) causes a kernel crash:
+   - `Segmentation fault` in `touch`
+   - Crash trace shows BUG() instruction (`0f 0b` = ud2) in `setattr_prepare` → `security_inode_need_killpriv` path
+   - The write support in linux-apfs-rw 0.3.2 is fundamentally unstable on kernel 6.8 — the transaction/CoW extent management is incomplete
+   - BUG_ON/ASSERT macros are compiled as no-ops (no `CONFIG_APFS_DEBUG`), the crash is in the kernel VFS layer triggered by improperly initialized inode metadata during file creation
+
+2. **libfsapfs FUSE mount** — `fsapfsmount v20201107` fails with checksum mismatch on container superblock backup at offset `11298840576 (0x2a176a000)` and key bag encryption context initialization failure
+
+3. **apfsck write** — `apfsck -c` check mode times out after 60s, no output
+
+**Conclusion:** From Linux, APFS is read-only. Write support requires either a newer kernel module (potentially building from git source with write fixes) or booting macOS Recovery from the internal Preboot volume.
+
+### Key Lessons
+1. **linux-apfs-rw 0.3.2 can discover ALL APFS volumes** — the `vol=N` mount option is the critical feature. Each volume is a separate logical filesystem inside the shared container. Without this, you only see the Data volume and miss the Preboot, Recovery, and System volumes.
+2. **macOS minor updates (13.6→13.6.6) fail on OCLP for two reasons**: cryptex graft failure (AVX2 requirement for modern cryptex binaries) and stripped root patches. The `-lilufw=off` boot-arg from CryptexFixup.kext addresses the first; the second requires Post-Install Root Patch after boot.
+3. **The macOS boot chain is complex**: OpenCore → Preboot boot.efi → cryptex graft (Cryptexes/OS/) → mount SSV snapshot → load kernel → boot. If ANY step fails, the system hangs with no visible diagnostic. The NVRAM `efi-boot-device` stores the exact volume UUID + snapshot UUID pair.
+4. **Recovery always exists if the Preboot volume is intact** — the BaseSystem.dmg (1.15 GB) on vol=2 is a fully bootable macOS Recovery that OpenCore can chainload. This is the escape hatch for any SSV/cryptex issue.
+5. **Write support on linux-apfs-rw is NOT production-ready on kernel 6.8** — the module compiles and mounts rw, but the transaction/extent system is incomplete and crashes on any file creation or modification. For write operations, boot macOS Recovery or build from latest git source.
+6. **The `Skip sealing flag` warning** in restore.log is a red flag for OCLP systems — macOS knows the system volume can't be properly sealed because OCLP modified system files. This is expected but means updates must be carefully managed.
+
+### Next Steps
+- [ ] Build linux-apfs-rw from latest git source with write fixes for kernel 6.8
+- [ ] OR boot macOS Recovery from Preboot (via OpenCore) and use `bless` to revert to pre-update snapshot
+- [ ] Verify APFS snapshot enumeration from within Recovery (`diskutil apfs listSnapshots`)
+- [ ] Delete `cryptex1/proposed/` from within Recovery to prevent future graft attempts
+- [ ] Reapply OCLP Post-Install Root Patch from Recovery after reverting snapshot
+
+### Relevant Files
+| Path | Description |
+|------|-------------|
+| `/usr/src/linux-apfs-rw-0.3.2-0ubuntu6.2/` | APFS kernel module source (dkms) |
+| `/mnt/efi/EFI/OC/config.plist` | OpenCore 1.0.1 config (MacBookPro6,2) with cryptex fix |
+| `/sys/firmware/efi/efivars/` | Raw NVRAM variables (all macOS/OCLP boot entries) |
+| `/mnt/apfs/` (vol=0) | macOS Data volume (read-only) |
+| `/mnt/apfs3/` (vol=3) | macOS System volume - Ventura 13.6.6 (read-only) |
+| `/mnt/apfs4/Update.plist` | Full update metadata (13.6→13.6.6, cryptex info) |
+| `/mnt/apfs4/restore.log` | UpdateBrainService log (13,863 lines) |
+| `/mnt/preboot/cryptex1/proposed/` | Staged 13.6.6 cryptex payload (os.dmg 4.46GB) |
+| `/mnt/preboot/cryptex1/current/` | Active 13.6 cryptex payload |
+| `/mnt/apfs2/BaseSystem.dmg` | macOS Recovery environment (1.15 GB) |
+
+---
+
 # 🩺 SysMedic CraicWiki — Knowledge Base & Session Log
 
 **Maintainer:** SysMedic AI Agent  
