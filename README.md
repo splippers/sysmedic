@@ -173,8 +173,8 @@ cp /opt/sysmedic/dotfiles/config.json ~/.config/opencode/
 cp /opt/sysmedic/dotfiles/tui.json ~/.config/opencode/
 
 # Create launcher symlinks
-ln -sf /opt/sysmedic/menu.sh /usr/local/bin/ambulance
 ln -sf /opt/sysmedic/menu.sh /usr/local/bin/sysmedic-menu
+ln -sf /opt/sysmedic/menu.sh /usr/local/bin/sysmedic
 ln -sf /opt/sysmedic/scripts/wifi-connect.sh /usr/local/bin/wifi
 
 # Make scripts executable
@@ -268,9 +268,10 @@ ln -sf /mnt/persist/reports /root/reports
 │   ├── config.json               # OpenCode config
 │   └── tui.json                  # OpenCode TUI config
 ├── usr-local-bin/
-│   ├── ambulance                  # Symlink to menu.sh
-│   ├── sysmedic-menu              # Symlink to menu.sh
-│   └── wifi                       # Symlink to wifi-connect.sh
+│   ├── sysmedic                   # Main launcher → menu.sh
+│   ├── sysmedic-menu              # Alias → menu.sh
+│   ├── sysmedic-legacy            # Legacy stub (hints new name)
+│   └── wifi                       # Launcher → wifi-connect.sh
 └── auth/
     ├── auth.sh                    # Auth setup script
     └── auth.token.example         # Template (not actual keys)

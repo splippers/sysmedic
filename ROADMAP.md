@@ -133,7 +133,7 @@ USB Stick (ISO9660 + writable persistence partition)
 
 ### CraicKen Integration
 - [ ] Every repair logged as ken entry (source, timestamp, outcome)
-- [ ] CraicKen agent can dispatch ambulance to new targets
+- [ ] CraicKen agent can dispatch SysMedic to new targets
 - [ ] Fleet-wide repair history available on any boot
 
 ### Remote Triage

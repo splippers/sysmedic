@@ -201,8 +201,14 @@ exec bash /opt/sysmedic/menu.sh "$@"
 SCRIPT
     chmod +x "${SQUASH_DIR}/usr/local/bin/sysmedic"
 
-    # Also create 'ambulance' as alias for backward compatibility
-    ln -sf /usr/local/bin/sysmedic "${SQUASH_DIR}/usr/local/bin/ambulance" 2>/dev/null || true
+    # Also create 'sysmedic-menu' and 'sysmedic-legacy' as aliases
+    ln -sf /usr/local/bin/sysmedic "${SQUASH_DIR}/usr/local/bin/sysmedic-menu" 2>/dev/null || true
+    cat > "${SQUASH_DIR}/usr/local/bin/sysmedic-legacy" << 'LEGACY'
+#!/usr/bin/env bash
+echo "SysMedic: use 'sysmedic-menu' instead"
+exec bash /opt/sysmedic/menu.sh "$@"
+LEGACY
+    chmod +x "${SQUASH_DIR}/usr/local/bin/sysmedic-legacy"
 
     # ── 4c. MOTD banner ──
     mkdir -p "${SQUASH_DIR}/etc/update-motd.d"
