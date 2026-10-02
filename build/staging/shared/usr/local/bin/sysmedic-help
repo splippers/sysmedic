@@ -1,0 +1,19 @@
+#!/bin/bash
+# sysmedic-help — read the SysMedic documentation on this drive.
+#   sysmedic-help              list the guides and pick one
+#   sysmedic-help field        open a guide by (part of) its name, e.g. bitlocker, hardware, network
+D=/usr/local/share/doc/sysmedic
+[ -d "$D" ] || { echo "Documentation not installed ($D)."; exit 1; }
+docs=("$D/README.md" $(ls "$D"/docs/*.md 2>/dev/null))
+if [ -n "${1:-}" ]; then
+    f=$(printf '%s\n' "${docs[@]}" | grep -i -m1 -- "$1")
+    [ -n "$f" ] || { echo "No guide matching '$1'."; exit 1; }
+    exec less -R "$f"
+fi
+echo ""
+echo "  SysMedic $(cat /etc/sysmedic/edition 2>/dev/null) edition v$(cat /etc/sysmedic/version 2>/dev/null) — documentation"
+echo ""
+i=0; for f in "${docs[@]}"; do i=$((i+1)); printf '  %2d) %-26s %s\n' $i "$(basename "$f" .md)" "$(grep -m1 -E '^# ' "$f" | sed 's/^# //')"; done
+echo ""
+read -r -p "  Open which (number, Enter to quit)? " n
+[ -n "$n" ] && [ "$n" -ge 1 ] 2>/dev/null && [ "$n" -le $i ] && exec less -R "${docs[$((n-1))]}"

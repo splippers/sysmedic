@@ -49,6 +49,11 @@ core, ed = open(sys.argv[1]).read(), open(sys.argv[2]).read()
 print(core.replace("<!-- SYSMEDIC EDITION SECTION -->", ed.strip() + "\n\n---"), end="")
 EOF
     sudo install -D -o root -g root -m 644 "$WORK/agent.md" "$root/opt/sysmedic/SYSMEDIC-AGENT.md"
+    # The documentation (repo docs/ + README) goes on the drive for offline reading: sysmedic-help
+    local repo; repo=$(cd "$(realpath "$ST")/../.." && pwd)
+    sudo rm -rf "$root/usr/local/share/doc/sysmedic"
+    sudo install -D -o root -g root -m 644 "$repo/README.md" "$root/usr/local/share/doc/sysmedic/README.md"
+    sudo rsync -rlpt --chown=root:root "$repo/docs/" "$root/usr/local/share/doc/sysmedic/docs/"
     sudo ln -sf sysmedic-guard "$root/usr/local/sbin/sysmedic-lock"
     sudo ln -sf sysmedic-guard "$root/usr/local/sbin/sysmedic-unlock"
     sudo ln -sf ambulance "$root/usr/local/bin/menu"

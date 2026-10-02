@@ -32,6 +32,7 @@ if [ -t 0 ] && [ "$console" = /dev/tty2 ]; then
     echo '  sysmedic-lock              protect everything again'
     echo '  sysmedic-note "text"       add a note to the job report · sysmedic-report builds it'
     echo '  sysmedic-note --feedback "…"  note something SysMedic should do better (goes to claude-review.md)'
+    echo '  sysmedic-help              the SysMedic guides (field guide, BitLocker, hardware tests, ...)'
     echo '  This session is being recorded for later review (output only, not keystrokes).'
     echo '  Alt+F1 returns to the assistant.'
     echo ''
