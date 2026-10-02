@@ -1,0 +1,30 @@
+#!/bin/bash
+# Mount the SysMedic persistence partition at /mnt/persist.
+# Only ever mounts a partition labelled FOG_AMB_PERSIST that lives on the same
+# USB device SysMedic booted from — never a filesystem on the machine being repaired.
+
+PERSIST_DIR="/mnt/persist"
+PERSIST_LABEL="FOG_AMB_PERSIST"
+
+mountpoint -q "$PERSIST_DIR" && exit 0
+
+# udev may still be enumerating the USB stick early in boot
+for _ in $(seq 1 10); do
+    PERSIST_DEV=$(blkid -l -o device -t LABEL="$PERSIST_LABEL" 2>/dev/null)
+    [ -n "$PERSIST_DEV" ] && break
+    sleep 1
+done
+[ -z "$PERSIST_DEV" ] && { echo "  No $PERSIST_LABEL partition found — running without persistence"; exit 0; }
+
+# The boot medium is whatever casper mounted at /cdrom
+BOOT_DISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE /cdrom 2>/dev/null)" 2>/dev/null | head -1)
+PERSIST_DISK=$(lsblk -no PKNAME "$PERSIST_DEV" 2>/dev/null | head -1)
+if [ -n "$BOOT_DISK" ] && [ "$BOOT_DISK" != "$PERSIST_DISK" ]; then
+    echo "  WARNING: $PERSIST_DEV is labelled $PERSIST_LABEL but is not on the SysMedic USB — not mounting it"
+    exit 1
+fi
+
+mkdir -p "$PERSIST_DIR"
+mount -o noatime "$PERSIST_DEV" "$PERSIST_DIR" 2>/dev/null || { echo "  Could not mount $PERSIST_DEV"; exit 1; }
+mkdir -p "$PERSIST_DIR/logs" "$PERSIST_DIR/backups" "$PERSIST_DIR/sessions"
+echo "  Persistence mounted: $PERSIST_DEV → $PERSIST_DIR ($(df -h --output=avail "$PERSIST_DIR" | tail -1 | tr -d ' ') free)"

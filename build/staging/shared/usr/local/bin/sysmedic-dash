@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""sysmedic-dash — phone dashboard for the current SysMedic visit.
+
+  sysmedic-dash --serve    run the dashboard (started automatically at boot)
+  sysmedic-dash            show its address and a QR code to scan with a phone
+
+Shows live status, findings, write protection, the audit trail and backups;
+takes job details and notes; builds and serves the job report. It cannot
+repair, unlock or change anything on the computer being worked on.
+Access needs the random token in the QR code; the phone must be on the same
+network (same Wi-Fi, or USB tethering from the phone).
+"""
+import http.server
+import json
+import os
+import secrets
+import socket
+import subprocess
+import sys
+import threading
+import urllib.parse
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+import session  # noqa: E402
+
+PORT = 8080
+TOKEN_FILE = Path("/run/sysmedic/dash.token")
+seen_clients = set()
+report_lock = threading.Lock()
+
+
+def token():
+    if TOKEN_FILE.exists():
+        return TOKEN_FILE.read_text().strip()
+    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    t = secrets.token_urlsafe(9)
+    TOKEN_FILE.write_text(t)
+    os.chmod(TOKEN_FILE, 0o600)
+    return t
+
+
+def addresses():
+    out = subprocess.run(["ip", "-j", "-4", "addr"], capture_output=True, text=True).stdout
+    try:
+        return [a["local"] for i in json.loads(out) if i["ifname"] != "lo" for a in i.get("addr_info", [])]
+    except (json.JSONDecodeError, KeyError):
+        return []
+
+
+def status():
+    scans = session.scans()
+    last = scans[-1] if scans else {}
+    job = session.load_job()
+    lines = session.audit_lines()
+    ai = "cloud" if any("CONSENT cloud AI: yes" in l for l in lines) else "offline"
+    s = last.get("system", {})
+    d = session.session_dir()
+    return {"machine": f"{s.get('manufacturer', '')} {s.get('model', '')}".strip(),
+            "cpu": s.get("cpu", ""), "ram_gb": round(s.get("ram_bytes", 0) / 2**30),
+            "firmware": s.get("firmware", ""), "secure_boot": s.get("secure_boot"),
+            "oses": sorted({f["os"] for f in last.get("filesystems", []) if f.get("os")}),
+            "scan_time": last.get("time", ""), "scans": len(scans),
+            "findings": last.get("findings", []), "guard": session.guard_state(),
+            "online": last.get("network", {}).get("online"), "ai": ai,
+            "audit": lines[-40:], "backups": session.backups(), "job": job,
+            "report": (d / "report.html").exists(), "session": d.name}
+
+
+PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>SysMedic</title>
+<style>
+:root{--bg:#0f1420;--card:#182032;--ink:#e8ecf4;--muted:#93a0b8;--line:#263049;--crit:#ff6b5b;--warn:#f5b041;--info:#6cb4ff;--ok:#4cd27e;--accent:#6c8cff}
+@media (prefers-color-scheme:light){:root{--bg:#f3f5f9;--card:#fff;--ink:#1b2333;--muted:#5d6779;--line:#dde2ea;--crit:#c0392b;--warn:#b26a00;--info:#1f6fd1;--ok:#1a8a43;--accent:#2457c5}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:2;background:var(--bg);padding:12px 16px 8px;border-bottom:1px solid var(--line)}
+header h1{font-size:17px;margin:0}header .sub{color:var(--muted);font-size:13px}
+main{padding:12px 16px 80px;max-width:760px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:12px 0}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat{text-align:center}.stat b{display:block;font-size:24px}.stat span{font-size:12px;color:var(--muted)}
+.f{border-left:3px solid var(--line);padding:6px 0 6px 10px;margin:6px 0}.f.critical{border-color:var(--crit)}.f.warning{border-color:var(--warn)}.f.info{border-color:var(--info)}.f.ok{border-color:var(--ok)}
+.f small{display:block;color:var(--muted);font-size:13px}.pill{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--line);margin:2px 4px 2px 0}
+.pill.locked{color:var(--ok)}.pill.WRITABLE{color:var(--warn);font-weight:700}
+pre{white-space:pre-wrap;word-break:break-word;font-size:11.5px;margin:0;color:var(--muted)}
+input,textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;margin:4px 0}
+textarea{min-height:70px}button,.btn{display:inline-block;font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 14px;background:var(--accent);color:#fff;margin:6px 6px 0 0;text-decoration:none;cursor:pointer}
+button.secondary{background:var(--line);color:var(--ink)}.muted{color:var(--muted)}label{font-size:13px;color:var(--muted)}
+details summary{cursor:pointer;color:var(--muted);font-size:13px}#toast{position:fixed;bottom:16px;left:16px;right:16px;text-align:center;background:var(--accent);color:#fff;padding:10px;border-radius:10px;display:none}
+</style>
+<header><h1 id=machine>SysMedic</h1><div class=sub id=sub>connecting…</div></header>
+<main>
+<div class=card><div class=stats>
+ <div class=stat><b id=nc>–</b><span>critical</span></div><div class=stat><b id=nw>–</b><span>warnings</span></div>
+ <div class=stat><b id=nb>–</b><span>backups</span></div><div class=stat><b id=ng>–</b><span>unlocked</span></div></div></div>
+<div class=card><h2>Findings</h2><div id=findings></div></div>
+<div class=card><h2>Disk write protection</h2><div id=guard></div><p class=muted style="font-size:13px;margin:8px 0 0">Unlocking is only possible on the rescue computer's console (Alt+F2).</p></div>
+<div class=card><h2>Job</h2>
+ <label>Customer</label><input id=customer><label>Contact</label><input id=contact>
+ <label>Reported problem</label><input id=complaint><label>Engineer</label><input id=engineer><label>Job reference</label><input id=job_ref>
+ <button onclick=saveJob()>Save job details</button></div>
+<div class=card><h2>Notes</h2><div id=notes></div><textarea id=note placeholder="e.g. Customer says it started after a power cut"></textarea>
+ <button onclick=addNote()>Add note</button></div>
+<div class=card><h2>Job report</h2><p class=muted id=rstate>Not generated yet.</p>
+ <button onclick=makeReport() id=rbtn>Generate report</button><a class=btn id=ropen href=report target=_blank style="display:none">Open report</a></div>
+<div class=card><h2>Backups on the stick</h2><div id=backups class=muted>none</div></div>
+<div class=card><details><summary>Audit trail (latest)</summary><pre id=audit></pre></details></div>
+</main><div id=toast></div>
+<script>
+const T=new URLSearchParams(location.search).get('t')||'';const H={'Content-Type':'application/json','X-Token':T};
+const $=id=>document.getElementById(id);let jobLoaded=false;
+function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
+function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2500)}
+function size(n){return n>1e9?(n/1e9).toFixed(1)+' GB':n>1e6?(n/1e6).toFixed(1)+' MB':n>1e3?Math.round(n/1e3)+' KB':n+' B'}
+async function refresh(){
+ let s;try{const r=await fetch('api/status?t='+T);if(!r.ok)throw 0;s=await r.json()}catch(e){$('sub').textContent='offline — retrying…';return}
+ $('machine').textContent=s.machine||'SysMedic';
+ $('sub').textContent=[s.oses.join(', ')||'no OS found',s.ram_gb+' GB RAM',s.firmware+(s.secure_boot?' · Secure Boot':''),'AI: '+s.ai,'scan '+(s.scan_time||'').slice(11,16)].join(' · ');
+ const c=s.findings.filter(f=>f.severity=='critical').length,w=s.findings.filter(f=>f.severity=='warning').length,u=Object.values(s.guard).filter(v=>v!='locked').length;
+ $('nc').textContent=c;$('nw').textContent=w;$('nb').textContent=s.backups.length;$('ng').textContent=u;
+ const F=$('findings');F.replaceChildren();for(const f of s.findings){const d=el('div','f '+f.severity,f.title);if(f.next_step&&f.severity!='ok')d.append(el('small','', '→ '+f.next_step));F.append(d)}
+ const G=$('guard');G.replaceChildren();for(const [k,v] of Object.entries(s.guard))G.append(el('span','pill '+v,k.replace('/dev/','')+' '+v));
+ const N=$('notes');N.replaceChildren();for(const n of (s.job.notes||[])){const d=el('div','f',n.text);d.prepend(el('small','',n.time.slice(11,16)+' · '+n.author));N.append(d)}
+ if(!jobLoaded){for(const k of ['customer','contact','complaint','engineer','job_ref'])$(k).value=s.job[k]||'';jobLoaded=true}
+ const B=$('backups');B.replaceChildren();for(const b of s.backups)B.append(el('div','',b.path+' · '+size(b.bytes)));if(!s.backups.length)B.textContent='none';
+ $('audit').textContent=s.audit.join('\n');
+ $('ropen').href='report?t='+encodeURIComponent(T);if(s.report){$('ropen').style.display='inline-block';$('rstate').textContent='Report ready.';}
+}
+async function post(path,body){const r=await fetch(path+'?t='+T,{method:'POST',headers:H,body:JSON.stringify(body)});if(!r.ok)throw new Error(await r.text());return r.json()}
+async function saveJob(){const j={};for(const k of ['customer','contact','complaint','engineer','job_ref'])j[k]=$(k).value;await post('api/job',j);toast('Job details saved')}
+async function addNote(){const t=$('note').value.trim();if(!t)return;await post('api/note',{text:t});$('note').value='';toast('Note added');refresh()}
+async function makeReport(){$('rbtn').disabled=true;$('rstate').textContent='Re-scanning and building the report (about 30 s)…';
+ try{const r=await post('api/report',{});$('rstate').textContent=r.summary;$('ropen').style.display='inline-block'}catch(e){$('rstate').textContent='Failed: '+e.message}
+ $('rbtn').disabled=false;refresh()}
+refresh();setInterval(refresh,5000);
+</script></html>"""
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    server_version = "SysMedic"
+
+    def log_message(self, *a):
+        pass
+
+    def authed(self):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        sent = self.headers.get("X-Token") or (q.get("t") or [""])[0]
+        ok = secrets.compare_digest(sent, token())
+        if ok and self.client_address[0] not in seen_clients:
+            seen_clients.add(self.client_address[0])
+            session.audit("phone", f"dashboard opened from {self.client_address[0]}")
+        return ok
+
+    def send(self, code, body, ctype="application/json"):
+        data = body if isinstance(body, bytes) else (body if isinstance(body, str) else json.dumps(body)).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith("text") or ctype.endswith("json") else ""))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        if not self.authed():
+            return self.send(403, "Scan the QR code shown on the SysMedic console (Alt+F2, or run sysmedic-dash).", "text/plain")
+        if path == "/":
+            return self.send(200, PAGE, "text/html")
+        if path == "/api/status":
+            return self.send(200, status())
+        if path in ("/report", "/report.txt"):
+            f = session.session_dir() / ("report.html" if path == "/report" else "report.txt")
+            if not f.exists():
+                return self.send(404, "No report yet — generate it first.", "text/plain")
+            return self.send(200, f.read_bytes(), "text/html" if path == "/report" else "text/plain")
+        return self.send(404, "not found", "text/plain")
+
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        # Writes need the token in a header, which a page on another site cannot send (CSRF)
+        if not self.headers.get("X-Token") or not self.authed():
+            return self.send(403, "forbidden", "text/plain")
+        try:
+            body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 20000)) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self.send(400, "bad request", "text/plain")
+        if path == "/api/note":
+            session.add_note(str(body.get("text", "")), "phone")
+            return self.send(200, {"ok": True})
+        if path == "/api/job":
+            job = session.load_job()
+            changed = [k for k in ("customer", "contact", "complaint", "engineer", "job_ref")
+                       if k in body and job.get(k) != str(body[k])[:300]]
+            for k in changed:
+                job[k] = str(body[k]).strip()[:300]
+            session.save_job(job)
+            if changed:
+                session.audit("phone", "JOB details updated: " + ", ".join(changed))
+            return self.send(200, {"ok": True})
+        if path == "/api/report":
+            with report_lock:
+                p = subprocess.run(["/usr/local/bin/sysmedic-report"], capture_output=True, text=True, timeout=300)
+            summary = next((l.strip() for l in p.stdout.splitlines() if l.strip().startswith("SysMedic found")), "Report built.")
+            return self.send(200 if p.returncode == 0 else 500, {"ok": p.returncode == 0, "summary": summary})
+        return self.send(404, "not found", "text/plain")
+
+
+def show_qr():
+    t = token()
+    ips = addresses()
+    print("\n  SysMedic phone dashboard (read-only + job notes)")
+    if not ips:
+        print("  No network yet. Put the phone on the same Wi-Fi, or plug it in and turn on USB tethering,")
+        print("  then run: sysmedic-dash")
+        return
+    for ip in ips:
+        url = f"http://{ip}:{PORT}/?t={t}"
+        print(f"\n  {url}")
+        # Plain ANSI colour blocks: the Linux console font has no half-block characters
+        subprocess.run(["qrencode", "-t", "ANSI", "-m", "2", url])
+    print("  Scan with the phone camera. Anyone with this link can see this visit's findings.")
+
+
+def serve():
+    token()
+    httpd = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    httpd.daemon_threads = True
+    httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    if "--serve" in sys.argv:
+        serve()
+    else:
+        show_qr()

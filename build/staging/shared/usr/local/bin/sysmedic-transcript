@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""sysmedic-transcript — bundle this visit into one Markdown file for improving SysMedic later.
+
+Writes <session>/claude-review.md and a copy in /mnt/persist/claude-review/, containing:
+the job and engineer feedback, findings before/after, the audit trail, every AI
+conversation (offline assistant and OpenCode, with tool calls and output) and the
+console transcripts (terminal control codes stripped).
+
+  sysmedic-transcript            bundle the current session
+  sysmedic-transcript --list     list sessions on this drive and whether they're bundled
+  sysmedic-transcript --quiet    (used at shutdown)
+
+The bundle contains customer data (findings, command output, notes). It stays on
+the SysMedic drive; review it before sharing.
+"""
+import datetime
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+import session  # noqa: E402
+
+PERSIST = Path("/mnt/persist")
+def is_mounted(path):
+    """True if path is a mount point. Unlike Path.is_mount(), this also sees bind mounts on the same filesystem."""
+    target = os.path.realpath(str(path))
+    try:
+        with open("/proc/self/mountinfo") as f:
+            return any(line.split()[4] == target for line in f)
+    except OSError:
+        return False
+
+
+MAX_TRANSCRIPT = 150_000          # characters kept per console transcript (the end is kept: that's where the work is)
+ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>78DEHMZc]")
+
+
+def clean_terminal(raw):
+    text = ANSI.sub("", raw.replace("\r\n", "\n"))
+    lines = []
+    for line in text.split("\n"):
+        if "\r" in line:                       # carriage-return overwrites: keep what was finally shown
+            line = line.split("\r")[-1]
+        while "\b" in line:
+            line = re.sub(r".?\x08", "", line, count=1)
+        line = "".join(ch for ch in line if ch == "\t" or ord(ch) >= 32)
+        lines.append(line.rstrip())
+    out, blank = [], 0
+    for l in lines:                            # squeeze runs of blank lines
+        blank = blank + 1 if not l else 0
+        if blank <= 1:
+            out.append(l)
+    return "\n".join(out).strip()
+
+
+def session_start(sd):
+    m = re.match(r"(\d{8}-\d{6})", sd.name)
+    return datetime.datetime.strptime(m.group(1), "%Y%m%d-%H%M%S") if m else None
+
+
+def transcripts_for(sd):
+    start = session_start(sd)
+    files = []
+    for d in (PERSIST / "transcripts", Path("/run/sysmedic/transcripts")):
+        for f in sorted(d.glob("*.log")) if d.is_dir() else []:
+            m = re.match(r"(\d{8}-\d{6})", f.name)
+            begun = datetime.datetime.strptime(m.group(1), "%Y%m%d-%H%M%S") if m else None
+            ended = datetime.datetime.fromtimestamp(f.stat().st_mtime)
+            # consoles start just before the scan creates the session; include anything active during it
+            if start is None or (begun and begun <= datetime.datetime.now() and ended >= start - datetime.timedelta(minutes=5)):
+                files.append(f)
+    return files
+
+
+def render_ask(path):
+    out = [f"### Offline assistant — `{path.name}`\n"]
+    for line in path.read_text(errors="replace").splitlines():
+        try:
+            m = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        role = m.get("role")
+        if role == "user":
+            out.append(f"**Engineer:** {m.get('content', '').strip()}\n")
+        elif role == "assistant":
+            if m.get("content", "").strip():
+                out.append(f"**AI:** {m['content'].strip()}\n")
+            for c in m.get("tool_calls") or []:
+                args = c.get("function", {}).get("arguments") or {}
+                cmd = args.get("command", args) if isinstance(args, dict) else args
+                out.append(f"**AI → run:** `{cmd}`" + (f" — {args.get('why')}" if isinstance(args, dict) and args.get("why") else "") + "\n")
+        elif role == "tool":
+            body = m.get("content", "").strip()
+            out.append("```\n" + (body[:4000] + ("\n…" if len(body) > 4000 else "")) + "\n```\n")
+    return "\n".join(out)
+
+
+def render_opencode(storage):
+    """OpenCode keeps messages and their parts as JSON files under storage/."""
+    msgs = []
+    for f in storage.rglob("*.json"):
+        if "/message/" in str(f):
+            try:
+                msgs.append(json.loads(f.read_text(errors="replace")))
+            except (json.JSONDecodeError, OSError):
+                pass
+    parts = {}
+    for f in storage.rglob("*.json"):
+        if "/part/" in str(f):
+            try:
+                p = json.loads(f.read_text(errors="replace"))
+                parts.setdefault(p.get("messageID"), []).append(p)
+            except (json.JSONDecodeError, OSError):
+                pass
+    msgs.sort(key=lambda m: (m.get("time") or {}).get("created", 0))
+    out = [f"### Cloud assistant (OpenCode) — `{storage.parent.name}/{storage.name}`\n"]
+    for m in msgs:
+        who = "Engineer" if m.get("role") == "user" else "AI"
+        for p in sorted(parts.get(m.get("id"), []), key=lambda p: (p.get("time") or {}).get("start", 0)):
+            if p.get("type") == "text" and p.get("text", "").strip() and not p.get("synthetic"):
+                out.append(f"**{who}:** {p['text'].strip()}\n")
+            elif p.get("type") == "tool":
+                st = p.get("state") or {}
+                inp = st.get("input") or {}
+                cmd = inp.get("command") or inp.get("filePath") or json.dumps(inp)[:200]
+                out.append(f"**AI → {p.get('tool')}:** `{cmd}`\n")
+                res = str(st.get("output") or "").strip()
+                if res:
+                    out.append("```\n" + res[:4000] + ("\n…" if len(res) > 4000 else "") + "\n```\n")
+    return "\n".join(out) if len(out) > 1 else ""
+
+
+def findings_block(scan, title):
+    if not scan:
+        return ""
+    rows = [f"- **{f['severity']}** {f['title']}" + (f" → {f['next_step']}" if f.get("next_step") and f["severity"] in ("critical", "warning") else "")
+            for f in scan.get("findings", [])]
+    return f"### {title} ({scan.get('time', '')})\n" + "\n".join(rows) + "\n"
+
+
+def bundle(quiet=False):
+    sd = session.session_dir()
+    if sd == session.RUN:
+        if not quiet:
+            print("  No session yet (run sysmedic-scan first).")
+        return None
+    job = session.load_job()
+    scans = session.scans()
+    s = scans[-1].get("system", {}) if scans else {}
+    out = [f"# SysMedic session review — {sd.name}\n",
+           "_For improving SysMedic in a later Claude session. SysMedic is an AI-assisted rescue system "
+           "(build kit and sources: `~/sysmedic-build` on the build PC; installed copy: `/opt/sysmedic`, "
+           "`/usr/local/bin/sysmedic-*`). This file contains customer data — review before sharing._\n",
+           "## What to look for\n",
+           "- Engineer feedback and moments where the AI was wrong, slow, refused, or the engineer had to work around SysMedic\n"
+           "- Commands that failed with *tool not installed* or timed out\n"
+           "- Findings that stayed unfixed, and steps the engineer did by hand that SysMedic could automate\n",
+           "## Visit\n",
+           f"- SysMedic: {s.get('sysmedic_edition', 'dev')} edition, v{s.get('sysmedic_version', 'dev')}",
+           f"- Machine: {s.get('manufacturer', '')} {s.get('model', '')} · {s.get('cpu', '')} · {round(s.get('ram_bytes', 0) / 2**30)} GB RAM · {s.get('firmware', '')}",
+           f"- Job: {job.get('job_ref') or '-'} · customer: {job.get('customer') or '-'} · engineer: {job.get('engineer') or '-'}",
+           f"- Reported problem: {job.get('complaint') or '-'}\n"]
+    if job.get("feedback"):
+        out.append("## Engineer feedback on SysMedic\n" + "\n".join(f"- {f['time'][:16]} ({f['author']}): {f['text']}" for f in job["feedback"]) + "\n")
+    if job.get("notes"):
+        out.append("## Job notes\n" + "\n".join(f"- {n['time'][:16]} ({n['author']}): {n['text']}" for n in job["notes"]) + "\n")
+    out.append("## Findings\n" + findings_block(scans[0] if scans else None, "First scan")
+               + ("\n" + findings_block(scans[-1], "Latest scan") if len(scans) > 1 else ""))
+    ask_text = "\n".join(p.read_text(errors="replace") for p in (sd / "ai").glob("ask-*.jsonl")) if (sd / "ai").is_dir() else ""
+    missing = sorted(set(re.findall(r"([A-Za-z0-9_.+-]+): command not found", ask_text.replace("\\n", "\n"))))
+    if missing:
+        out.append("## Tools the AI wanted but weren't installed\n" + ", ".join(f"`{m}`" for m in missing if m) + "\n")
+    out.append("## Audit trail\n```\n" + "\n".join(session.audit_lines()) + "\n```\n")
+    convs = []
+    ai = sd / "ai"
+    for f in sorted(ai.glob("ask-*.jsonl")) if ai.is_dir() else []:
+        convs.append(render_ask(f))
+    for d in sorted(ai.glob("opencode-*")) if ai.is_dir() else []:
+        r = render_opencode(d)
+        if r:
+            convs.append(r)
+    out.append("## AI conversations\n" + ("\n".join(convs) if convs else "_none recorded_\n"))
+    trs = transcripts_for(sd)
+    out.append("## Console transcripts\n")
+    for f in trs:
+        text = clean_terminal(f.read_text(errors="replace"))
+        if len(text) > MAX_TRANSCRIPT:
+            text = "…[earlier output trimmed]…\n" + text[-MAX_TRANSCRIPT:]
+        out.append(f"### `{f.name}`\n```\n{text}\n```\n")
+    if not trs:
+        out.append("_none recorded_\n")
+    doc = "\n".join(out)
+    (sd / "claude-review.md").write_text(doc)
+    copy_dir = PERSIST / "claude-review" if is_mounted(PERSIST) else session.RUN / "claude-review"
+    copy_dir.mkdir(parents=True, exist_ok=True)
+    (copy_dir / f"{sd.name}.md").write_text(doc)
+    if not quiet:
+        print(f"  Session review written ({len(doc) // 1024} KB): {sd / 'claude-review.md'}\n  Copy: {copy_dir / (sd.name + '.md')}")
+    return sd
+
+
+def list_sessions():
+    base = PERSIST / "sessions"
+    for d in sorted(base.iterdir()) if base.is_dir() else []:
+        print(f"  {'✔' if (d / 'claude-review.md').exists() else ' '} {d.name}")
+
+
+if __name__ == "__main__":
+    if "--list" in sys.argv:
+        list_sessions()
+    else:
+        bundle(quiet="--quiet" in sys.argv)

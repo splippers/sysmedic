@@ -1,0 +1,223 @@
+#!/bin/bash
+# sysmedic-guard — kernel-level write protection for the machine being repaired.
+#
+# Every disk except the SysMedic USB stick is set read-only at the block layer
+# (BLKROSET) as soon as udev sees it, so no tool — the AI, a script, a typo —
+# can write to it. Writing needs a deliberate human unlock on a real console,
+# which first backs up the partition table and filesystem metadata.
+#
+#   sysmedic-guard status          show protection state
+#   sysmedic-lock [DEV|all]        re-protect (default: all)
+#   sysmedic-unlock DEV            unlock one partition (or a whole disk) for repair
+#   sysmedic-guard udev KNAME      (called by udev for each new block device)
+#
+# Scope: this stops accidents and an over-eager AI. It is not a sandbox against
+# a root process that deliberately sets out to bypass it.
+
+set -uo pipefail
+PERSIST=/mnt/persist
+RUN=/run/sysmedic
+
+session_dir() {
+    local d
+    d=$(readlink -f "$RUN/latest" 2>/dev/null)
+    [ -n "$d" ] && [ -d "$d" ] && echo "$d" || { mkdir -p "$RUN"; echo "$RUN"; }
+}
+
+audit() {   # audit SOURCE MESSAGE...
+    local src=$1; shift
+    local line
+    line="$(date -Is) [$src] $*"
+    echo "$line" >> "$(session_dir)/audit.log" 2>/dev/null
+    [ "$(session_dir)" != "$RUN" ] && echo "$line" >> "$RUN/audit.log" 2>/dev/null
+    logger -t sysmedic-guard -- "$*" 2>/dev/null || true
+}
+
+# The SysMedic stick: the disk holding our ISO (/cdrom) or the persistence partition
+is_sysmedic_disk() {
+    local disk=$1 labels cd
+    labels=$(lsblk -nro LABEL "/dev/$disk" 2>/dev/null)
+    grep -qxE 'SYSMEDIC_2404|FOG_AMB_PERSIST' <<<"$labels" && return 0
+    # Installed SysMedic (e.g. the caddy SSD): the disk the running system lives on
+    local rootsrc
+    rootsrc=$(findmnt -no SOURCE / 2>/dev/null)
+    [ -b "$rootsrc" ] && [ "$(lsblk -no PKNAME "$rootsrc" 2>/dev/null | head -1)" = "$disk" ] && return 0
+    cd=$(findmnt -no SOURCE /cdrom 2>/dev/null)
+    [ -n "$cd" ] && [ "$(lsblk -no PKNAME "$cd" 2>/dev/null | head -1)" = "$disk" ]
+}
+
+parent_disk() {   # kname → its whole-disk kname
+    local k=$1
+    if [ -e "/sys/class/block/$k/partition" ]; then
+        basename "$(readlink -f "/sys/class/block/$k/..")"
+    else
+        echo "$k"
+    fi
+}
+
+guarded_kind() {   # only real storage: skip loop, ram, zram, optical, device-mapper, md, floppy
+    [[ $1 =~ ^(loop|ram|zram|sr|dm-|md|fd|nbd) ]] && return 1
+    return 0
+}
+
+ro_state() { [ "$(cat "/sys/class/block/$1/ro" 2>/dev/null)" = 1 ] && echo locked || echo WRITABLE; }
+
+cmd_udev() {
+    local k=$1 disk
+    guarded_kind "$k" || exit 0
+    disk=$(parent_disk "$k")
+    is_sysmedic_disk "$disk" && exit 0
+    blockdev --setro "/dev/$k" && logger -t sysmedic-guard "write-protected /dev/$k"
+}
+
+cmd_status() {
+    local any=0
+    printf '  %-16s %-9s %-10s %-8s %s\n' DEVICE STATE SIZE FS LABEL
+    while read -r name type size fs label; do
+        guarded_kind "$name" || continue
+        disk=$(parent_disk "$name")
+        is_sysmedic_disk "$disk" && continue
+        any=1
+        printf '  %-16s %-9s %-10s %-8s %s\n' "/dev/$name" "$(ro_state "$name")" "$size" "${fs:--}" "${label:-}"
+    done < <(lsblk -nrpo KNAME,TYPE,SIZE,FSTYPE,LABEL | sed 's|^/dev/||')
+    [ $any = 0 ] && echo "  (no disks besides the SysMedic stick)"
+}
+
+cmd_lock() {
+    local target=${1:-all} n=0
+    if [ "$target" = all ]; then
+        for k in $(lsblk -nro KNAME); do
+            guarded_kind "$k" || continue
+            is_sysmedic_disk "$(parent_disk "$k")" && continue
+            blockdev --setro "/dev/$k" && n=$((n + 1))
+        done
+        audit "$(whoami)@$(tty 2>/dev/null | sed 's|/dev/||')" "LOCK all ($n devices write-protected)"
+        echo "  All customer disks are write-protected again ($n devices)."
+    else
+        local k=${target#/dev/}
+        blockdev --setro "/dev/$k" || exit 1
+        audit "$(whoami)" "LOCK /dev/$k"
+        echo "  /dev/$k is write-protected."
+    fi
+}
+
+# Refuse unlocks that don't come from a person at a real console
+called_by_ai() {
+    [ -n "${SYSMEDIC_AI:-}" ] && return 0
+    local pid=$$ comm args
+    while [ "$pid" -gt 1 ]; do
+        comm=$(cat "/proc/$pid/comm" 2>/dev/null)
+        args=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+        case "$comm $args" in
+            *opencode*|*sysmedic-ask*|*ollama*) return 0 ;;
+        esac
+        pid=$(awk '{print $4}' "/proc/$pid/stat" 2>/dev/null || echo 1)
+    done
+    return 1
+}
+
+backup_before_unlock() {   # backup_before_unlock KNAME DEST
+    local k=$1 dest=$2 disk fs size free
+    disk=$(parent_disk "$k")
+    mkdir -p "$dest"
+    sfdisk -d "/dev/$disk" > "$dest/partition-table-$disk.sfdisk" 2>/dev/null \
+        && echo "    partition table of /dev/$disk → $(basename "$dest")/partition-table-$disk.sfdisk"
+    [ "$k" = "$disk" ] && return 0          # whole-disk unlock: the table is the metadata
+    fs=$(lsblk -no FSTYPE "/dev/$k")
+    size=$(blockdev --getsize64 "/dev/$k")
+    free=$(df --output=avail -B1 "$dest" | tail -1)
+    case "$fs" in
+        ext2|ext3|ext4)
+            echo "    saving ext4 metadata (inodes, directories, journal)…"
+            e2image -Q "/dev/$k" "$dest/$k.e2image.qcow2" && echo "    → $(basename "$dest")/$k.e2image.qcow2  (restore: e2image -r)" ;;
+        ntfs)
+            echo "    saving NTFS metadata (MFT, directories)…"
+            ntfsclone --metadata --save-image --force -o "$dest/$k.ntfs-metadata.img" "/dev/$k" >/dev/null 2>&1 \
+                && echo "    → $(basename "$dest")/$k.ntfs-metadata.img  (inspect/restore: ntfsclone --restore-image)" ;;
+        vfat|exfat|"")
+            if [ "$size" -le 2147483648 ] && [ "$free" -gt $((size * 2)) ]; then
+                echo "    small partition: saving a full copy…"
+                dd if="/dev/$k" bs=4M status=none | zstd -q -T0 -o "$dest/$k.img.zst" \
+                    && echo "    → $(basename "$dest")/$k.img.zst  (restore: zstd -dc … | dd of=/dev/$k)"
+            fi ;;
+        *)  echo "    no metadata backup available for '$fs' — consider imaging with ddrescue first" ;;
+    esac
+}
+
+cmd_unlock() {
+    local target=${1:-} k disk tty reason typed dest
+    if [ -z "$target" ]; then
+        echo "Usage: sysmedic-unlock /dev/PARTITION   (see: sysmedic-guard status)"; exit 2
+    fi
+    k=${target#/dev/}
+    [ -b "/dev/$k" ] || { echo "No such device: $target"; exit 2; }
+    disk=$(parent_disk "$k")
+    if is_sysmedic_disk "$disk"; then echo "/dev/$k is the SysMedic stick — it is never locked."; exit 0; fi
+
+    if called_by_ai; then
+        audit ai "REFUSED unlock of /dev/$k requested by the AI assistant"
+        echo "REFUSED: unlocking a disk needs the engineer, not the AI assistant."
+        echo "Ask the engineer to switch to console 2 (Alt+F2) and run: sysmedic-unlock /dev/$k"
+        exit 3
+    fi
+    tty=$(tty 2>/dev/null || true)
+    # A recorded console (session transcript) runs the shell on a pty under `script`;
+    # accept it only if that `script` process itself sits on a real VT (checked via /proc, not env).
+    if [[ $tty =~ ^/dev/pts/ ]]; then
+        local pid=$$ ttynr
+        while [ "$pid" -gt 1 ]; do
+            if [ "$(cat /proc/$pid/comm 2>/dev/null)" = script ]; then
+                ttynr=$(awk '{print $7}' /proc/$pid/stat 2>/dev/null)
+                if [ -n "$ttynr" ] && [ $(( (ttynr >> 8) & 0xfff )) -eq 4 ] && [ $(( ttynr & 0xff )) -ge 1 ] && [ $(( ttynr & 0xff )) -le 63 ]; then
+                    tty=/dev/tty$(( ttynr & 0xff ))
+                fi
+                break
+            fi
+            pid=$(awk '{print $4}' /proc/$pid/stat 2>/dev/null || echo 1)
+        done
+    fi
+    if [[ ! $tty =~ ^/dev/tty[0-9]+$ ]]; then
+        echo "REFUSED: run sysmedic-unlock on a local console (Alt+F2), not via a pipe or remote session."
+        audit "$(whoami)" "REFUSED unlock of /dev/$k: not a local console ($tty)"
+        exit 3
+    fi
+
+    echo ""
+    echo "  Unlock for WRITING:"
+    lsblk -o NAME,SIZE,FSTYPE,LABEL,MODEL "/dev/$k" | sed 's/^/    /'
+    [ "$k" = "$disk" ] && echo "    !! This is a WHOLE DISK — every partition on it becomes writable."
+    echo ""
+    read -r -p "  Why? (one line, goes in the audit log): " reason
+    [ -n "$reason" ] || { echo "  Cancelled."; exit 1; }
+    read -r -p "  Type the device name ($k) to confirm: " typed
+    [ "$typed" = "$k" ] || { echo "  Cancelled (name didn't match)."; audit "$(whoami)@${tty#/dev/}" "CANCELLED unlock of /dev/$k"; exit 1; }
+
+    dest="$(session_dir)/backups/before-unlock-$k-$(date +%H%M%S)"
+    echo "  Backing up before unlocking:"
+    backup_before_unlock "$k" "$dest"
+
+    blockdev --setrw "/dev/$disk"                  # the whole-disk flag covers every partition…
+    if [ "$k" != "$disk" ]; then
+        blockdev --setrw "/dev/$k"                 # …so open the disk, then keep its other partitions locked
+        for p in $(lsblk -nro KNAME "/dev/$disk" | tail -n +2); do
+            [ "$p" = "$k" ] || blockdev --setro "/dev/$p"
+        done
+    fi
+    audit "$(whoami)@${tty#/dev/}" "UNLOCK /dev/$k — reason: $reason — backups: $dest"
+    echo ""
+    echo "  /dev/$k is now WRITABLE. Its sibling partitions stay protected."
+    [ "$k" != "$disk" ] && echo "  Note: the kernel also allows writes to the whole-disk node /dev/$disk while this is unlocked."
+    echo "  When the repair is done: sysmedic-lock"
+}
+
+case "$(basename "$0")" in
+    sysmedic-lock)   cmd_lock "${1:-all}"; exit ;;
+    sysmedic-unlock) cmd_unlock "${1:-}"; exit ;;
+esac
+case "${1:-status}" in
+    udev)   cmd_udev "$2" ;;
+    status) cmd_status ;;
+    lock)   cmd_lock "${2:-all}" ;;
+    unlock) cmd_unlock "${2:-}" ;;
+    *)      sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

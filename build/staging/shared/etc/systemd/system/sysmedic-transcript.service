@@ -1,0 +1,14 @@
+[Unit]
+Description=SysMedic: bundle the session transcript at shutdown (claude-review.md)
+After=local-fs.target mnt-persist.mount
+RequiresMountsFor=/mnt/persist
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/bin/sysmedic-transcript --quiet
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

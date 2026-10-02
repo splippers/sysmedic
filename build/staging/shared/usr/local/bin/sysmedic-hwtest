@@ -1,0 +1,180 @@
+#!/bin/bash
+# sysmedic-hwtest — hardware testing with the standard Linux tools.
+#
+#   sysmedic-hwtest                 menu
+#   sysmedic-hwtest report          read-only health summary: temps, fans, battery, SMART, hardware errors
+#   sysmedic-hwtest cpu [MIN]       CPU + cooling stress (stress-ng, default 5 min), temps logged
+#   sysmedic-hwtest ram             RAM test of free memory (memtester, 1 pass)
+#   sysmedic-hwtest disk DEV        SMART short self-test + read-only speed test (never writes)
+#   sysmedic-hwtest surface DEV     read-only surface scan for bad sectors (badblocks, slow)
+#   sysmedic-hwtest gpu             3D benchmark/stress without a desktop (glmark2-es2-drm)
+#   sysmedic-hwtest input           keyboard / touchpad / buttons (libinput debug-events)
+#   sysmedic-hwtest audio           speaker left/right test, then a 5 s microphone recording
+#   sysmedic-hwtest battery         battery health: design vs full capacity, cycles
+#   sysmedic-hwtest inventory       full hardware inventory (inxi, serials filtered)
+#
+# Results are appended to the session (hwtest.log) so they appear in the job report.
+set -uo pipefail
+B='\033[1m'; G='\033[0;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; N='\033[0m'
+
+log_file() { local d; d=$(readlink -f /run/sysmedic/latest 2>/dev/null); [ -d "$d" ] || d=/run/sysmedic; mkdir -p "$d"; echo "$d/hwtest.log"; }
+record() { echo "$(date -Is) $*" >> "$(log_file)"; }
+hdr() { echo -e "\n${B}== $* ==${N}"; }
+
+temps() {   # one line: hottest CPU/package temperature and fan speeds
+    sensors 2>/dev/null | awk '
+        /^(Package id 0|Tctl|Tdie|CPU|Core 0)/ && /°C/ { for (i=1;i<=NF;i++) if ($i ~ /^\+[0-9.]+°C$/) { gsub(/[+°C]/,"",$i); if ($i>max) max=$i; break } }
+        /fan[0-9]*:/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/ && $(i+1)=="RPM") fans = fans " " $i "rpm" }
+        END { printf "%s%s", (max ? "CPU " max "°C" : "CPU temp n/a"), (fans ? " · fans" fans : "") }'
+}
+
+report() {
+    hdr "Temperatures & fans"
+    sensors-detect --auto >/dev/null 2>&1 || true
+    sensors 2>/dev/null | grep -E '°C|RPM|^[a-z].*-' | sed 's/^/  /' | head -40 || echo "  (no sensors found)"
+    hdr "Throttling & CPU"
+    lscpu | grep -E 'Model name|^CPU\(s\)|MHz' | sed 's/^/  /'
+    for f in /sys/devices/system/cpu/cpu0/thermal_throttle/{core,package}_throttle_count; do
+        [ -r "$f" ] && echo "  $(basename "$f"): $(cat "$f")"
+    done
+    hdr "Battery"
+    battery_summary
+    hdr "Disks (SMART)"
+    for d in $(lsblk -dno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -vE '^(loop|sr|zram)'); do
+        h=$(smartctl -H "/dev/$d" 2>/dev/null | grep -iE 'overall|result' | sed 's/.*: *//')
+        t=$(smartctl -A "/dev/$d" 2>/dev/null | awk '/^Temperature:/ {print $2; exit} /Temperature_Celsius|Airflow_Temperature/ {print $10; exit}')
+        printf "  %-10s %-40s health: %-8s %s\n" "/dev/$d" "$(lsblk -dno MODEL "/dev/$d" | cut -c1-40)" "${h:-n/a}" "${t:+temp ${t}°C}"
+    done
+    hdr "Hardware errors (machine checks, ECC memory, PCIe)"
+    if command -v ras-mc-ctl >/dev/null && ras-mc-ctl --summary 2>/dev/null | grep -qvE 'No .* errors|^$'; then
+        ras-mc-ctl --summary 2>/dev/null | sed 's/^/  /'
+    else
+        echo "  none recorded by rasdaemon"
+    fi
+    journalctl -k -b --no-pager 2>/dev/null | grep -iE 'mce:|machine check|edac .*(error|ce|ue)|pcieport.*(error|AER)|corrected error' | tail -8 | sed 's/^/  /'
+    record "report run: $(temps)"
+}
+
+battery_summary() {
+    local bat; bat=$(upower -e 2>/dev/null | grep -m1 BAT)
+    if [ -z "$bat" ]; then echo "  no battery"; return; fi
+    upower -i "$bat" | grep -E 'vendor|model|state|percentage|energy-full:|energy-full-design|capacity|charge-cycles' | sed 's/^ */  /'
+    local cap; cap=$(upower -i "$bat" | awk '/capacity:/ {print int($2)}')
+    [ -n "$cap" ] && [ "$cap" -lt 70 ] && echo -e "  ${Y}Battery holds only ${cap}% of its design capacity: worn, consider replacing.${N}"
+}
+
+cpu() {
+    local min=${1:-5}
+    hdr "CPU & cooling stress: ${min} min (Ctrl-C to stop early)"
+    echo "  Watch for: temperature climbing past ~95°C, fans not spinning up, or the machine switching off."
+    echo "  Before: $(temps)"
+    ( while sleep 15; do echo "  … $(temps)"; done ) & mon=$!
+    stress-ng --cpu 0 --cpu-method all --timeout "${min}m" --metrics-brief --tz 2>&1 | grep -vE '^stress-ng: info: +\[[0-9]+\] (dispatching|setting|cache|defaulting|note:)' | sed 's/^/  /'
+    rc=${PIPESTATUS[0]}
+    kill $mon 2>/dev/null; wait $mon 2>/dev/null
+    echo "  After:  $(temps)"
+    thr=$(cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count 2>/dev/null)
+    [ -n "$thr" ] && [ "$thr" != 0 ] && echo -e "  ${Y}The CPU throttled ${thr} times: cooling can't keep up (dust, dried thermal paste, fan).${N}"
+    [ "$rc" = 0 ] && echo -e "  ${G}✔ CPU stress completed without errors.${N}" || echo -e "  ${R}✖ stress-ng reported a failure (exit $rc): suspect CPU, RAM or power.${N}"
+    record "cpu stress ${min}m: exit $rc, end $(temps), throttles ${thr:-n/a}"
+}
+
+ram() {
+    local avail mb
+    avail=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+    mb=$(( avail * 80 / 100 ))
+    hdr "RAM test: ${mb} MB of free memory, 1 pass (Ctrl-C to stop)"
+    echo "  This tests memory not in use by SysMedic. For a full test of all RAM, reboot and pick"
+    echo "  'Memory test' in the boot menu (MemTest86+; Secure Boot must be off for it on UEFI)."
+    memtester "${mb}M" 1 2>&1 | sed 's/^/  /'
+    rc=${PIPESTATUS[0]}
+    [ "$rc" = 0 ] && echo -e "  ${G}✔ No memory errors found.${N}" || echo -e "  ${R}✖ MEMORY ERRORS FOUND (exit $rc): faulty RAM. Test one module at a time to find it.${N}"
+    record "memtester ${mb}M: exit $rc"
+}
+
+pick_disk() {
+    [ -n "${1:-}" ] && { echo "${1}"; return; }
+    lsblk -dno NAME,SIZE,MODEL,TRAN | grep -vE '^(loop|sr|zram)' | sed 's/^/  /' >&2
+    read -r -p "  Disk (e.g. /dev/nvme0n1): " d; echo "$d"
+}
+
+disk() {
+    local d; d=$(pick_disk "${1:-}"); [ -b "$d" ] || { echo "  No such disk: $d"; return 1; }
+    hdr "Disk test: $d (read-only: nothing is written)"
+    smartctl -H "$d" | grep -iE 'overall|result' | sed 's/^/  /'
+    if smartctl -t short "$d" >/dev/null 2>&1; then
+        echo "  SMART short self-test started (about 2 minutes)…"
+        for _ in $(seq 1 30); do sleep 10; smartctl -c "$d" 2>/dev/null | grep -qiE 'in progress' || break; done
+        smartctl -l selftest "$d" 2>/dev/null | sed -n '1,12p' | grep -iE 'Num|#|Short|Completed|fail' | head -4 | sed 's/^/  /'
+    else
+        echo "  (this drive or its USB adapter doesn't support SMART self-tests)"
+    fi
+    echo "  Read speed (30 s, direct, read-only):"
+    fio --name=read --filename="$d" --readonly --rw=read --bs=1M --direct=1 --runtime=30 --time_based \
+        --ioengine=libaio --iodepth=8 --group_reporting 2>/dev/null | grep -E 'READ:|lat \(usec\): min|clat percentiles' | head -3 | sed 's/^/  /'
+    echo "  Random read latency (15 s):"
+    fio --name=rand --filename="$d" --readonly --rw=randread --bs=4k --direct=1 --runtime=15 --time_based \
+        --ioengine=libaio --iodepth=1 2>/dev/null | grep -E 'IOPS=|clat \(usec\)' | head -2 | sed 's/^/  /'
+    record "disk test $d done"
+}
+
+surface() {
+    local d; d=$(pick_disk "${1:-}"); [ -b "$d" ] || { echo "  No such disk: $d"; return 1; }
+    hdr "Read-only surface scan: $d (can take hours on big disks; Ctrl-C stops)"
+    badblocks -sv -b 4096 "$d" 2>&1 | tail -5 | sed 's/^/  /'
+    record "badblocks read-only scan $d: exit ${PIPESTATUS[0]}"
+}
+
+gpu() {
+    hdr "GPU test (glmark2, fullscreen on this console; takes about 2 minutes)"
+    lspci | grep -iE 'vga|3d|display' | sed 's/^/  /'
+    if command -v glmark2-es2-drm >/dev/null; then
+        glmark2-es2-drm 2>&1 | grep -E 'GL_RENDERER|Score|\[|FPS' | tail -12 | sed 's/^/  /'
+        record "glmark2: $(glmark2-es2-drm --off-screen 2>/dev/null | awk '/Score/ {print $NF}' | tail -1)"
+    fi
+    echo "  Live GPU load: intel_gpu_top (Intel), radeontop (AMD), nvtop (NVIDIA/all)"
+}
+
+input() {
+    hdr "Keyboard, touchpad & buttons: press keys / move / click; Ctrl-C when done"
+    libinput debug-events --show-keycodes 2>/dev/null || evtest
+}
+
+audio() {
+    hdr "Audio"
+    aplay -l 2>/dev/null | grep -E '^card' | sed 's/^/  /' || echo "  no sound card found"
+    echo "  Speakers: you should hear 'Front Left', then 'Front Right'."
+    speaker-test -c 2 -t wav -l 1 >/dev/null 2>&1
+    echo "  Microphone: recording 5 seconds… speak now."
+    arecord -d 5 -f cd /tmp/sysmedic-mic.wav 2>/dev/null && { echo "  Playing it back…"; aplay /tmp/sysmedic-mic.wav 2>/dev/null; }
+    rm -f /tmp/sysmedic-mic.wav
+}
+
+battery() { hdr "Battery"; battery_summary; acpi -V 2>/dev/null | grep -iE 'battery|adapter' | sed 's/^/  /'; record "battery: $(upower -i "$(upower -e | grep -m1 BAT)" 2>/dev/null | awk '/capacity:/ {print $2}')"; }
+inventory() { hdr "Hardware inventory (serial numbers hidden)"; inxi -Fxxz -c0 2>/dev/null || hwinfo --short; }
+
+menu() {
+    while true; do
+        echo -e "\n${B}  Hardware tests${N}   ${C}(results go into this visit's job report)${N}"
+        echo "   1) Health report (temps, battery, SMART, hardware errors) — read-only"
+        echo "   2) CPU & cooling stress (5 min)        7) Keyboard / touchpad / buttons"
+        echo "   3) RAM test (free memory)               8) Speakers & microphone"
+        echo "   4) Disk: SMART self-test + speed        9) Battery health"
+        echo "   5) Disk: read-only surface scan        10) Full hardware inventory"
+        echo "   6) GPU 3D test                           0) Back"
+        echo "   Full RAM test: reboot → boot menu → 'Memory test' (MemTest86+)."
+        read -r -p "  Choose: " c
+        case "$c" in
+            1) report ;; 2) cpu 5 ;; 3) ram ;; 4) disk ;; 5) surface ;; 6) gpu ;; 7) input ;; 8) audio ;; 9) battery ;; 10) inventory ;;
+            0|"") return ;;
+        esac
+        read -r -p "  Press Enter..." _
+    done
+}
+
+[ "$(id -u)" = 0 ] || { echo "Run as root"; exit 1; }
+case "${1:-menu}" in
+    menu) menu ;; report) report ;; cpu) cpu "${2:-5}" ;; ram) ram ;; disk) disk "${2:-}" ;; surface) surface "${2:-}" ;;
+    gpu) gpu ;; input) input ;; audio) audio ;; battery) battery ;; inventory) inventory ;;
+    *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

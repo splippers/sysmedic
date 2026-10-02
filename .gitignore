@@ -1,9 +1,8 @@
-# SysMedic — git ignore
-__pycache__/
-*.pyc
+# build artifacts and customer data never go in the repo
+/rescue-menu.sh
+/SYSMEDIC-AGENT.md
 auth/auth.token
-auth/google_client.json
-auth/sysmedic-bypass
-*.swp
-*.swo
-.DS_Store
+build/tests/fixtures/
+*.iso
+*.img
+__pycache__/

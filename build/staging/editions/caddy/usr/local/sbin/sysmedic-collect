@@ -1,0 +1,59 @@
+#!/bin/bash
+# sysmedic-collect — copy sessions, transcripts and review bundles from a SysMedic stick
+# onto this caddy, so all field feedback ends up in one place (/srv/sysmedic).
+#
+#   sysmedic-collect            find a plugged-in SysMedic stick and collect from it
+#   sysmedic-collect /dev/sdX4  collect from that stick's persistence partition
+#
+# Runs automatically when a SysMedic stick is plugged in (udev → sysmedic-collect@.service).
+# The stick is mounted read-only; nothing on it is changed or deleted. Only files the
+# caddy doesn't already have are copied.
+set -uo pipefail
+DEST=/srv/sysmedic
+LOG=$DEST/logs/collect.log
+
+say() {
+    echo "  $*"
+    echo "$(date -Is) $*" >> "$LOG" 2>/dev/null
+    # tell the engineer on console 2 (console 1 may be running the AI's full-screen UI)
+    [ -t 1 ] || printf '\r\n  [SysMedic] %s\r\n' "$*" > /dev/tty2 2>/dev/null || true
+}
+
+root_disk=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -1)
+is_sysmedic_stick() {    # persistence partition AND the SysMedic ISO on the same disk
+    local part=$1 disk
+    [ "$(blkid -o value -s LABEL "$part" 2>/dev/null)" = FOG_AMB_PERSIST ] || return 1
+    disk=$(lsblk -no PKNAME "$part" 2>/dev/null | head -1)
+    [ -n "$disk" ] && [ "$disk" != "$root_disk" ] || return 1
+    lsblk -nro LABEL "/dev/$disk" 2>/dev/null | grep -qx SYSMEDIC_2404
+}
+
+parts=()
+if [ $# -gt 0 ]; then
+    parts=("$1")
+else
+    while read -r p; do parts+=("$p"); done < <(blkid -t LABEL=FOG_AMB_PERSIST -o device 2>/dev/null)
+fi
+
+mkdir -p "$DEST/logs"
+found=0
+for part in "${parts[@]}"; do
+    is_sysmedic_stick "$part" || continue
+    found=1
+    mnt=$(mktemp -d /run/sysmedic-collect.XXXX)
+    if ! mount -o ro,noload "$part" "$mnt" 2>/dev/null && ! mount -o ro "$part" "$mnt" 2>/dev/null; then
+        say "Couldn't mount the SysMedic stick ($part) read-only"; rmdir "$mnt"; continue
+    fi
+    total=0
+    for d in sessions transcripts claude-review private; do
+        [ -d "$mnt/$d" ] || continue
+        mkdir -p "$DEST/$d"
+        n=$(rsync -a --ignore-existing --out-format='%n' "$mnt/$d/" "$DEST/$d/" 2>/dev/null | grep -cv '/$')
+        total=$((total + n))
+    done
+    chmod 700 "$DEST/private" 2>/dev/null
+    umount "$mnt"; rmdir "$mnt"
+    say "Collected $total new file(s) from the SysMedic stick ($part) into $DEST"
+done
+[ $found = 1 ] || { [ $# -gt 0 ] && say "$1 is not a SysMedic stick's persistence partition"; [ $# -eq 0 ] && echo "  No SysMedic stick found."; }
+exit 0

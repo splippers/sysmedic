@@ -211,23 +211,7 @@ for line in read_lines("lsblk -nr -o NAME,FSTYPE 2>/dev/null | grep -E 'ext4|ntf
         pass
 context["detected_oses"] = oses
 
-# CraicKen wiki sync (async — best effort)
-craicken_status = "offline"
-try:
-    rc = subprocess.call("ping -c1 -W2 8.8.8.8 >/dev/null 2>&1 || ping -c1 -W2 meta.splippers.com >/dev/null 2>&1", shell=True, timeout=5)
-    if rc == 0:
-        ck_out = subprocess.check_output(
-            "curl -s --max-time 10 'https://meta.splippers.com/api/v1/wiki/article?name=sysmedic'",
-            shell=True, timeout=15
-        ).decode()
-        wiki_data = json.loads(ck_out)
-        content = wiki_data.get("content", "")
-        with open("/tmp/sysmedic-preflight/craicken_wiki.md", "w") as f:
-            f.write(content)
-        craicken_status = "synced"
-except:
-    craicken_status = "unreachable"
-context["craicken_wiki"] = craicken_status
+# (CraicKen mesh sync removed: the service has been shut down)
 
 # Git sync (async — best effort)
 git_status = "offline"
@@ -261,7 +245,6 @@ print(f'  Secure Boot: {sb.get("mokutil")} (cctk: {sb.get("cctk")})')
 for os_item in context.get("detected_oses", []):
     print(f'  OS:      {os_item.get("name")} on {os_item.get("device")}')
 print(f'  Git:     {context.get("git_sync")}')
-print(f'  CraicKen: {context.get("craicken_wiki")}')
 PYEOF
 
 # Check result

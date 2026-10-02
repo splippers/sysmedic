@@ -1,0 +1,7 @@
+#!/bin/bash
+# SysMedic Wi-Fi: NetworkManager's on-screen network picker (arrow keys, Enter, Esc to leave).
+nmcli radio wifi on >/dev/null 2>&1
+nmtui connect "$@"
+echo ""
+nmcli -f DEVICE,TYPE,STATE,CONNECTION device | grep -E 'DEVICE|wifi|ethernet'
+ip -4 -br addr | grep -v '^lo'

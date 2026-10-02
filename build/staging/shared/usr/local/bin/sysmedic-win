@@ -1,0 +1,459 @@
+#!/usr/bin/env python3
+"""sysmedic-win — Windows rescue toolkit (works on the offline installation).
+
+Read-only (safe for the AI to run):
+  sysmedic-win                      list Windows installations and BitLocker volumes
+  sysmedic-win info     [PART]      version, Fast Startup, last shutdown, accounts, WinRE, pending reboots
+  sysmedic-win crashes  [PART]      blue-screen stop codes decoded, with what they usually mean
+  sysmedic-win events   [PART]      crashes, power loss, disk/hardware errors, failed services from the System log
+  sysmedic-win autoruns [PART]      everything that starts automatically, with suspicious entries flagged
+  sysmedic-win malware  [PART] [--full]   ClamAV scan of autostart files and user/program-data folders
+
+Engineer only (run on a console):
+  sysmedic-win bitlocker DEV        unlock a BitLocker volume with its recovery key (read-only)
+  sysmedic-win fix-update PART      roll back a half-installed update (renames WinSxS\\pending.xml)
+  sysmedic-win fix-hibernation PART discard Windows' hibernation/Fast Startup state so the disk can be repaired
+  sysmedic-win reset-password PART  blank a local account's password (chntpw)
+
+PART is a partition like /dev/nvme0n1p3 (or an unlocked BitLocker volume
+/dev/mapper/bitlocker-…). Without PART, every Windows installation is used.
+Repairs need the partition unlocked first: sysmedic-unlock PART on Alt+F2.
+"""
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+import winlib  # noqa: E402
+
+RUN = Path("/run/sysmedic")
+CLAMDB = Path("/mnt/persist/clamav")
+COLOR = sys.stdout.isatty()
+C = {k: (v if COLOR else "") for k, v in {"red": "\033[1;31m", "yel": "\033[1;33m", "grn": "\033[0;32m",
+                                          "cyan": "\033[0;36m", "bold": "\033[1m", "dim": "\033[2m", "end": "\033[0m"}.items()}
+
+
+def run(cmd, timeout=120, **kw):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout, **kw)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
+
+
+def audit(msg):
+    d = (RUN / "latest").resolve() if (RUN / "latest").exists() else RUN
+    tty = os.ttyname(0).replace("/dev/", "") if os.isatty(0) else ("ai" if os.environ.get("SYSMEDIC_AI") else "script")
+    with open(d / "audit.log", "a") as f:
+        f.write(f"{datetime.datetime.now().astimezone().isoformat(timespec='seconds')} [{tty}] sysmedic-win: {msg}\n")
+
+
+def called_by_ai():
+    if os.environ.get("SYSMEDIC_AI"):
+        return True
+    pid = os.getpid()
+    while pid > 1:
+        try:
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            args = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        if any(s in f"{comm} {args}" for s in ("opencode", "sysmedic-ask", "ollama")):
+            return True
+    return False
+
+
+def human_only(what):
+    if called_by_ai():
+        audit(f"REFUSED {what}: requested by the AI assistant")
+        sys.exit(f"REFUSED: '{what}' must be run by the engineer on a console (Alt+F2), not by the AI assistant.")
+    if not os.isatty(0):
+        sys.exit(f"REFUSED: '{what}' needs a person at a console to answer its questions.")
+
+
+def is_locked(dev):
+    k = os.path.basename(os.path.realpath(dev))
+    try:
+        return Path(f"/sys/class/block/{k}/ro").read_text().strip() == "1"
+    except OSError:
+        return False
+
+
+# ── Finding and mounting Windows volumes ───────────────────────────────────
+
+def ntfs_partitions():
+    p = run(["lsblk", "-lnpo", "NAME,FSTYPE,MOUNTPOINTS"])
+    out = []
+    for line in p.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) >= 2 and parts[1] == "ntfs":
+            out.append(parts[0])
+    return out
+
+
+def bitlocker_volumes():
+    p = run(["lsblk", "-lnpo", "NAME,FSTYPE"])
+    return [l.split()[0] for l in p.stdout.splitlines() if len(l.split()) == 2 and l.split()[1] == "BitLocker"]
+
+
+class Mounted:
+    """Context manager: mount an NTFS volume read-only (or read-write) somewhere temporary."""
+    def __init__(self, dev, rw=False, extra=""):
+        self.dev, self.rw, self.extra, self.path = dev, rw, extra, None
+
+    def __enter__(self):
+        existing = run(["findmnt", "-rno", "TARGET", "-S", self.dev]).stdout.split()
+        if existing and not self.rw:
+            self.path, self.ours = existing[0], False
+            return self.path
+        (RUN / "win").mkdir(parents=True, exist_ok=True)
+        self.path = tempfile.mkdtemp(prefix=os.path.basename(self.dev) + "-", dir=RUN / "win")
+        opts = ("rw" if self.rw else "ro") + ("," + self.extra if self.extra else "")
+        p = run(["ntfs-3g", "-o", opts, self.dev, self.path])
+        if p.returncode != 0:
+            os.rmdir(self.path)
+            raise RuntimeError((p.stderr or p.stdout).strip().splitlines()[-1] if (p.stderr or p.stdout).strip() else "mount failed")
+        self.ours = True
+        if self.rw and os.statvfs(self.path).f_flag & os.ST_RDONLY:
+            hib = winlib.ci_path(self.path, "hiberfil.sys")
+            hibernated = False
+            try:
+                hibernated = bool(hib) and hib.open("rb").read(4).lower() == b"hibr"
+            except OSError:
+                pass
+            self.__exit__()
+            raise RuntimeError("Windows is hibernated (Fast Startup), so the volume only mounts read-only. "
+                               f"Run first: sysmedic-win fix-hibernation {self.dev}" if hibernated else
+                               "the volume only mounted read-only (NTFS marked dirty or damaged — chkdsk from WinRE)")
+        return self.path
+
+    def __exit__(self, *exc):
+        if self.path and getattr(self, "ours", False):
+            run(["umount", self.path])
+            try:
+                os.rmdir(self.path)
+            except OSError:
+                pass
+
+
+def windows_installs(part=None):
+    """Yield (device, mountpoint) for each Windows system volume, mounted read-only."""
+    candidates = [part] if part else ntfs_partitions()
+    for dev in candidates:
+        try:
+            with Mounted(dev) as mp:
+                if winlib.ci_path(mp, "Windows/System32"):
+                    yield dev, mp
+        except RuntimeError as e:
+            if part:
+                sys.exit(f"Could not mount {dev} read-only: {e}")
+
+
+def header(dev, mp):
+    i = winlib.info(mp)
+    print(f"\n{C['bold']}{i['name']}{C['end']} on {dev}" + (f" — {i.get('computer_name')}" if i.get("computer_name") else ""))
+    return i
+
+
+# ── Read-only commands ─────────────────────────────────────────────────────
+
+def cmd_list(_args):
+    found = False
+    for dev, mp in windows_installs():
+        found = True
+        i = winlib.info(mp)
+        print(f"  {dev:22} {i['name']}" + (f"  ({i.get('computer_name')})" if i.get("computer_name") else ""))
+    for dev in bitlocker_volumes():
+        found = True
+        mapped = Path(f"/dev/mapper/bitlocker-{os.path.basename(dev)}")
+        state = f"unlocked → {mapped}" if mapped.exists() else "locked — sysmedic-win bitlocker " + dev
+        print(f"  {dev:22} {C['yel']}BitLocker{C['end']} ({state})")
+    if not found:
+        print("  No Windows installations or BitLocker volumes found.")
+
+
+def cmd_info(args):
+    for dev, mp in windows_installs(args[0] if args else None):
+        i = header(dev, mp)
+        rows = [("Edition", i.get("edition")), ("Last clean shutdown", i.get("last_shutdown") or "unknown")]
+        fs = "ON (Windows hibernates instead of shutting down)" if i.get("fast_startup") else "off"
+        rows.append(("Fast Startup", fs))
+        if i.get("hibernated"):
+            rows.append(("Hibernation", f"{C['yel']}HIBERNATED NOW: don't write to this volume (sysmedic-win fix-hibernation){C['end']}"))
+        pend = []
+        if i.get("pending_xml"):
+            pend.append("half-installed update (pending.xml)")
+        if i.get("reboot_pending_cbs"):
+            pend.append("servicing reboot pending")
+        if i.get("pending_renames"):
+            pend.append(f"{i['pending_renames']} file replacement(s) waiting for reboot")
+        rows.append(("Pending at next boot", ", ".join(pend) if pend else "nothing"))
+        rows.append(("Windows Recovery (WinRE)", {"configured": "available (Shift+Restart, or interrupt boot 3 times)",
+                                                 "disabled": f"{C['yel']}disabled — use Windows install media for repairs{C['end']}",
+                                                 "unknown": "unknown"}[i.get("winre", "unknown")]))
+        for p in i.get("profiles", []):
+            rows.append(("User profile", f"{p['name']}" + (f" (last used {p['last_used']})" if p.get("last_used") else "")))
+        st = os.statvfs(mp)
+        rows.append(("Free space", f"{st.f_bavail * st.f_frsize / 1e9:.1f} GB of {st.f_blocks * st.f_frsize / 1e9:.1f} GB"))
+        for k, v in rows:
+            print(f"  {k:26} {v}")
+
+
+def cmd_crashes(args):
+    for dev, mp in windows_installs(args[0] if args else None):
+        header(dev, mp)
+        cs = winlib.crashes(mp)
+        if not cs:
+            print("  No crash dumps found (Windows\\Minidump, MEMORY.DMP).")
+        counts = {}
+        for c in cs:
+            counts[c["code"]] = counts.get(c["code"], 0) + 1
+            print(f"  {c['time']}  {C['red']}{c['code'] or '?':12}{C['end']} {c['name']:36} {C['dim']}{c['hint']}{C['end']}")
+        if cs:
+            top, n = max(counts.items(), key=lambda kv: kv[1])
+            hint = next(c["hint"] for c in cs if c["code"] == top)
+            if n == len(cs) and n > 1:
+                print(f"\n  {C['bold']}Pattern:{C['end']} all {n} crashes share one stop code ({top}): {hint}.")
+            elif n > len(cs) / 2:
+                print(f"\n  {C['bold']}Pattern:{C['end']} {n} of {len(cs)} crashes are {top}: {hint}.")
+            elif len(counts) > 2:
+                print(f"\n  {C['bold']}Pattern:{C['end']} {len(counts)} different stop codes; varied codes often mean hardware (RAM, heat, power).")
+        evs = winlib.events(mp) or []
+        bsod = [e for e in evs if e["category"] == "crash"]
+        if bsod:
+            print(f"\n  Event log: {sum(e['count'] for e in bsod)} crash event(s), latest {bsod[0]['last']}")
+
+
+def cmd_events(args):
+    for dev, mp in windows_installs(args[0] if args and not args[0].startswith("-") else None):
+        header(dev, mp)
+        evs = winlib.events(mp)
+        if evs is None:
+            print("  System event log not found or unreadable.")
+            continue
+        if not evs:
+            print("  No notable events.")
+        colour = {"disk": "red", "hardware": "red", "crash": "red", "power": "yel", "persistence": "yel",
+                  "update": "yel", "service": "cyan", "error": "dim"}
+        for e in evs[:25]:
+            col = C[colour.get(e["category"], "dim")]
+            span = e["last"] if e["first"] == e["last"] else f"{e['first'][:10]} → {e['last']}"
+            print(f"  {col}{e['count']:5}× {e['meaning']}{C['end']}  {C['dim']}[{e['provider']} {e['id']}] {span}{C['end']}")
+            if e["category"] in ("persistence", "crash", "disk", "update"):
+                for x in e["examples"][:2]:
+                    detail = ", ".join(f"{k}={v}" for k, v in x.items() if k != "time")[:150]
+                    print(f"         {C['dim']}{x['time']}  {detail}{C['end']}")
+        if len(evs) > 25:
+            print(f"  … {len(evs) - 25} more groups")
+
+
+def cmd_autoruns(args):
+    for dev, mp in windows_installs(args[0] if args else None):
+        header(dev, mp)
+        items = winlib.autoruns(mp)
+        sus = [i for i in items if i["suspicious"]]
+        for i in sorted(items, key=lambda x: (not x["suspicious"], x["where"])):
+            mark = f"{C['red']}SUSPICIOUS{C['end']} " if i["suspicious"] else "           "
+            missing = f" {C['dim']}(file missing){C['end']}" if i["exists"] is False else ""
+            print(f"  {mark}{i['where']:24} {i['name'][:34]:34} {i['command'][:90]}{missing}")
+            if i["suspicious"]:
+                print(f"             {C['yel']}↳ {i['suspicious']}{C['end']}")
+        print(f"\n  {len(items)} autostart entries, {len(sus)} suspicious." +
+              (" Next: sysmedic-win malware " + dev if sus else ""))
+
+
+def cmd_malware(args):
+    full = "--full" in args
+    args = [a for a in args if a != "--full"]
+    if not CLAMDB.is_dir() or not any(CLAMDB.glob("*.c[vl]d")):
+        sys.exit("No ClamAV signatures on the stick (/mnt/persist/clamav). Connect to the internet and run: freshclam --datadir=/mnt/persist/clamav")
+    if run(["curl", "-s", "-o", "/dev/null", "--max-time", "5", "https://database.clamav.net"]).returncode == 0:
+        print("  Updating virus signatures…")
+        run(["freshclam", f"--datadir={CLAMDB}", "--quiet", "--foreground"], timeout=600)
+    age = (datetime.datetime.now() - datetime.datetime.fromtimestamp(max(f.stat().st_mtime for f in CLAMDB.glob("*.c[vl]d")))).days
+    print(f"  Signatures: {age} day(s) old")
+    for dev, mp in windows_installs(args[0] if args else None):
+        header(dev, mp)
+        if full:
+            targets = [mp]
+        else:
+            targets = {str(p) for i in winlib.autoruns(mp) if (p := winlib.win_to_local(mp, i["command"]))}
+            for rel in ["ProgramData", "Windows/Temp"]:
+                if (p := winlib.ci_path(mp, rel)):
+                    targets.add(str(p))
+            users = winlib.ci_path(mp, "Users")
+            for u in (users.iterdir() if users and users.is_dir() else []):
+                for rel in ["AppData/Roaming", "AppData/Local/Temp", "Downloads", "Desktop"]:
+                    if (p := winlib.ci_path(u, rel)):
+                        targets.add(str(p))
+            targets = sorted(targets)
+        print(f"  Scanning {'the whole volume' if full else f'{len(targets)} autostart files and user/program-data folders'} (read-only)…")
+        p = run(["clamscan", f"--database={CLAMDB}", "-r", "--infected", "--no-summary", "--max-filesize=200M", *targets], timeout=7200)
+        hits = list(dict.fromkeys(l for l in p.stdout.splitlines() if l.endswith(" FOUND")))
+        for h in hits:
+            path, sig = h[:-6].rsplit(": ", 1)
+            print(f"  {C['red']}INFECTED{C['end']} {sig:40} C:\\{os.path.relpath(path, mp)}")
+        print(f"  {len(hits)} infected file(s)." + ("" if not hits else
+              "  Don't delete in place: copy to /mnt/persist/backups for analysis, then quarantine from Windows or reinstall."))
+        audit(f"malware scan of {dev}: {len(hits)} detection(s)")
+
+
+# ── Engineer-only commands ─────────────────────────────────────────────────
+
+def cmd_bitlocker(args):
+    human_only("bitlocker unlock")
+    if not args:
+        sys.exit("Usage: sysmedic-win bitlocker /dev/PARTITION")
+    dev = args[0]
+    if run(["blkid", "-o", "value", "-s", "TYPE", dev]).stdout.strip() != "BitLocker":
+        sys.exit(f"{dev} is not a BitLocker volume.")
+    name = f"bitlocker-{os.path.basename(dev)}"
+    if Path(f"/dev/mapper/{name}").exists():
+        print(f"  Already unlocked: /dev/mapper/{name}")
+        return
+    rw = "--rw" in args
+    if rw and is_locked(dev):
+        sys.exit(f"For read-write access unlock the partition first: sysmedic-unlock {dev}")
+    print("  Enter the 48-digit BitLocker recovery key (or the user's BitLocker password).")
+    print(f"  {C['dim']}It is used once and never stored or logged.{C['end']}")
+    import getpass
+    key = getpass.getpass("  Key: ").strip()
+    if re.fullmatch(r"[\d\s-]{48,60}", key):
+        digits = re.sub(r"\D", "", key)
+        if len(digits) == 48:
+            key = "-".join(digits[i:i + 6] for i in range(0, 48, 6))
+    cmd = ["cryptsetup", "open", "--type", "bitlk", "--key-file=-", dev, name] + ([] if rw else ["--readonly"])
+    p = subprocess.run(cmd, input=key, capture_output=True, text=True)
+    key = None
+    if p.returncode != 0:
+        audit(f"BitLocker unlock of {dev} FAILED (wrong key?)")
+        sys.exit("  Unlock failed — check the key (Microsoft account: aka.ms/myrecoverykey).")
+    audit(f"BitLocker volume {dev} unlocked {'read-write' if rw else 'read-only'} → /dev/mapper/{name} (key not recorded)")
+    print(f"  {C['grn']}Unlocked{C['end']} {'read-write' if rw else 'read-only'} as /dev/mapper/{name}")
+    if run(["blkid", "-o", "value", "-s", "TYPE", f"/dev/mapper/{name}"]).stdout.strip() == "ntfs":
+        mp = RUN / "win" / name
+        mp.mkdir(parents=True, exist_ok=True)
+        m = run(["ntfs-3g", "-o", "ro", f"/dev/mapper/{name}", str(mp)])
+        if m.returncode == 0:
+            print(f"  Files are readable at {mp}")
+        else:
+            why = next((l for l in (m.stderr + m.stdout).splitlines() if "Failed" in l or "error" in l.lower()), "unknown error")
+            print(f"  {C['yel']}Decrypted, but the NTFS filesystem inside won't mount:{C['end']} {why}")
+            print(f"  The data may be damaged. Image it first: ddrescue /dev/mapper/{name} <external>/bitlocker.img <external>/bitlocker.map")
+        print(f"  Next: sysmedic-win info /dev/mapper/{name}   ·   copy data to /mnt/persist/backups or an external drive")
+    print(f"  Lock it again with: cryptsetup close {name}")
+
+
+def confirm(prompt):
+    return input(f"  {prompt} Type yes to continue: ").strip().lower() == "yes"
+
+
+def backup_dir():
+    d = (RUN / "latest").resolve() / "backups" if (RUN / "latest").exists() else RUN / "backups"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def cmd_fix_update(args):
+    human_only("fix-update")
+    part = args[0] if args else sys.exit("Usage: sysmedic-win fix-update /dev/PARTITION")
+    if is_locked(part):
+        sys.exit(f"  {part} is write-protected. Unlock it first on Alt+F2: sysmedic-unlock {part}")
+    print("  This makes Windows skip the half-installed update on next boot (it can be retried later).")
+    print(f"  {C['dim']}If WinRE works, the official route is: dism /image:C:\\ /cleanup-image /revertpendingactions{C['end']}")
+    if not confirm("Rename Windows\\WinSxS\\pending.xml?"):
+        return
+    try:
+        with Mounted(part, rw=True) as mp:
+            px = winlib.ci_path(mp, "Windows/WinSxS/pending.xml")
+            if not px:
+                print("  No pending.xml — nothing to roll back.")
+                return
+            shutil.copy2(px, backup_dir() / "pending.xml")
+            stamp = datetime.datetime.now().strftime("%Y%m%d%H%M")
+            px.rename(px.with_name(f"pending.xml.sysmedic-{stamp}"))
+            audit(f"fix-update on {part}: renamed WinSxS\\pending.xml (copy in backups/)")
+            print(f"  {C['grn']}Done.{C['end']} Original copied to backups/pending.xml. Boot Windows, then run Windows Update again.")
+    except RuntimeError as e:
+        sys.exit(f"  Not changed: {e}")
+
+
+def cmd_fix_hibernation(args):
+    human_only("fix-hibernation")
+    part = args[0] if args else sys.exit("Usage: sysmedic-win fix-hibernation /dev/PARTITION")
+    if is_locked(part):
+        sys.exit(f"  {part} is write-protected. Unlock it first on Alt+F2: sysmedic-unlock {part}")
+    print(f"  {C['yel']}Windows was hibernated (or Fast Startup is holding the disk).{C['end']}")
+    print("  Discarding it loses anything the user had open and unsaved. Their files on disk are not affected.")
+    print("  Better, if Windows still boots: start it, then Shift+Shut down.")
+    if not confirm("Discard the hibernation state?"):
+        return
+    if is_locked(part):
+        sys.exit(f"  {part} is write-protected. Unlock it first on Alt+F2: sysmedic-unlock {part}")
+    try:
+        with Mounted(part, rw=True, extra="remove_hiberfile"):
+            pass
+    except RuntimeError as e:
+        sys.exit(f"  Not changed: {e}")
+    audit(f"fix-hibernation on {part}: hiberfil.sys discarded")
+    print(f"  {C['grn']}Done.{C['end']} Also turn off Fast Startup in Windows (Power Options) to stop it recurring.")
+
+
+def cmd_reset_password(args):
+    human_only("reset-password")
+    part = args[0] if args else sys.exit("Usage: sysmedic-win reset-password /dev/PARTITION")
+    if is_locked(part):
+        sys.exit(f"  {part} is write-protected. Unlock it first on Alt+F2: sysmedic-unlock {part}")
+    print("  Works for LOCAL accounts only. Microsoft-account sign-ins (email address) must be reset at")
+    print("  account.live.com/password/reset. Make sure the machine's owner has authorised this.")
+    if not confirm("Open the password tool?"):
+        return
+    try:
+        mounted = Mounted(part, rw=True)
+        mp = mounted.__enter__()
+    except RuntimeError as e:
+        sys.exit(f"  Not changed: {e}")
+    try:
+        sam = winlib.ci_path(mp, "Windows/System32/config/SAM")
+        if not sam:
+            sys.exit("  SAM hive not found.")
+        shutil.copy2(sam, backup_dir() / "SAM")
+        audit(f"reset-password on {part}: chntpw opened (SAM backed up)")
+        subprocess.run(["chntpw", "-i", str(sam)])
+        audit(f"reset-password on {part}: chntpw closed")
+    finally:
+        mounted.__exit__()
+
+
+COMMANDS = {"info": cmd_info, "crashes": cmd_crashes, "events": cmd_events, "autoruns": cmd_autoruns,
+            "malware": cmd_malware, "bitlocker": cmd_bitlocker, "fix-update": cmd_fix_update,
+            "fix-hibernation": cmd_fix_hibernation, "reset-password": cmd_reset_password}
+
+
+def main():
+    if os.geteuid() != 0:
+        sys.exit("sysmedic-win must run as root")
+    args = sys.argv[1:]
+    if not args:
+        return cmd_list([])
+    if args[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    if args[0] not in COMMANDS:
+        sys.exit(f"Unknown command '{args[0]}'. Try: sysmedic-win help")
+    try:
+        COMMANDS[args[0]](args[1:])
+    except KeyboardInterrupt:
+        sys.exit("\n  Cancelled.")
+    except OSError as e:
+        sys.exit(f"  Error: {e}")
+
+
+if __name__ == "__main__":
+    main()

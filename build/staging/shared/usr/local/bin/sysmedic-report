@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""sysmedic-report — the job report for this visit.
+
+Compares the first scan of the session with a fresh one (what was found,
+what was fixed, what still needs doing), lists the work done from the audit
+trail, the data backed up and the engineer's notes, and writes:
+  <session>/report.html   self-contained; print it to PDF from any browser
+  <session>/report.txt    plain text
+Usage: sysmedic-report [--no-scan] [--print]
+"""
+import datetime
+import html
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+import session  # noqa: E402
+
+SEV_ORDER = {"critical": 0, "warning": 1, "info": 2, "ok": 3}
+
+
+def key(f):
+    # Titles carry device names and counts; strip volatile numbers so re-scans compare cleanly
+    return (f["area"], re.sub(r"\(\d+ devices\)|\d+ (GB|MB) free|latest [\d: -]+", "", f["title"]).strip())
+
+
+def compare(first, last):
+    problems = lambda s: {key(f): f for f in s.get("findings", []) if f["severity"] in ("critical", "warning")}
+    a, b = problems(first), problems(last)
+    fixed = [a[k] for k in a if k not in b]
+    remaining = [b[k] for k in b if k in a]
+    new = [b[k] for k in b if k not in a]
+    srt = lambda l: sorted(l, key=lambda f: SEV_ORDER[f["severity"]])
+    return srt(fixed), srt(remaining), srt(new)
+
+
+def work_done(lines):
+    acts, ai_cmds, console_cmds, refused, consent = [], 0, 0, 0, None
+    for line in lines:
+        m = re.match(r"(\S+) \[([^\]]+)\] (.*)", line)
+        if not m:
+            continue
+        when, src, msg = m.groups()
+        t = when[11:16]
+        if src.startswith("ai:"):
+            ai_cmds += 1
+            continue
+        if msg.startswith("CONSENT"):
+            consent = "yes" in msg.split(":", 1)[1]
+            continue
+        if "REFUSED" in msg:
+            refused += 1
+            continue
+        if msg.startswith("NOTE "):
+            continue
+        u = re.match(r"UNLOCK (\S+) — reason: (.*?) — backups: (.*)", msg)
+        if u:
+            acts.append((t, f"Unlocked {u.group(1)} for repair — reason: {u.group(2)}. Partition table and filesystem metadata backed up first."))
+            continue
+        if msg.startswith("LOCK all"):
+            acts.append((t, "Write protection restored on all customer disks."))
+            continue
+        w = re.match(r"sysmedic-win: (.*)", msg)
+        if w:
+            text = w.group(1)
+            text = re.sub(r"^fix-update on (\S+): .*", r"Rolled back a half-installed Windows update on \1 (original pending.xml kept in backups).", text)
+            text = re.sub(r"^fix-hibernation on (\S+): .*", r"Cleared Windows hibernation / Fast Startup lock on \1.", text)
+            text = re.sub(r"^BitLocker volume (\S+) unlocked (\S+) .*", r"Unlocked BitLocker volume \1 (\2) with the owner's recovery key (key not recorded).", text)
+            text = re.sub(r"^malware scan of (\S+): (\d+) detection.*", r"Malware scan of \1: \2 detection(s).", text)
+            text = re.sub(r"^reset-password on (\S+): chntpw opened.*", r"Opened the local password reset tool for \1 (SAM backed up first).", text)
+            if "chntpw closed" not in text:
+                acts.append((t, text[0].upper() + text[1:]))
+            continue
+        if src.startswith("tty"):
+            console_cmds += 1
+    return acts, ai_cmds, console_cmds, refused, consent
+
+
+def human_size(n):
+    for u in ["B", "KB", "MB", "GB"]:
+        if n < 1024 or u == "GB":
+            return f"{n:.0f} {u}" if u == "B" else f"{n:.1f} {u}"
+        n /= 1024
+
+
+def build():
+    scans = session.scans()
+    if not scans:
+        sys.exit("No scan in this session yet — run sysmedic-scan first.")
+    first, last = scans[0], scans[-1]
+    fixed, remaining, new = compare(first, last)
+    job = session.load_job()
+    ids = session.private_ids()
+    acts, ai_cmds, console_cmds, refused, consent = work_done(session.audit_lines())
+    s = last["system"]
+    oses = sorted({f["os"] for f in last.get("filesystems", []) if f.get("os")})
+    found = len(fixed) + len(remaining)
+    model = f"{s.get('manufacturer', '')} {s.get('model', '')}".strip() or "computer"
+    summary = (f"SysMedic found {found} problem{'s' if found != 1 else ''} on this {model}. "
+               f"{len(fixed)} {'was' if len(fixed) == 1 else 'were'} fixed during this visit"
+               + (f"; {len(remaining)} still need{'s' if len(remaining) == 1 else ''} attention" if remaining else "")
+               + (f"; {len(new)} new issue{'s' if len(new) != 1 else ''} appeared" if new else "") + ".")
+    return dict(first=first, last=last, fixed=fixed, remaining=remaining, new=new, job=job, ids=ids, acts=acts,
+                ai_cmds=ai_cmds, console_cmds=console_cmds, refused=refused, consent=consent, system=s,
+                oses=oses, summary=summary, backups=session.backups(), started=first["time"], finished=last["time"],
+                session=str(session.session_dir()), audit=session.audit_lines())
+
+
+# ── Rendering ──────────────────────────────────────────────────────────────
+
+CSS = """
+:root{--ink:#1d2433;--muted:#5d6779;--line:#d9dee7;--bg:#fff;--card:#f6f8fb;--crit:#b42318;--warn:#a15c00;--ok:#1a7f37;--accent:#2457c5}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+main{max-width:860px;margin:0 auto;padding:28px 18px 60px}
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;border-bottom:3px solid var(--ink);padding-bottom:14px}
+h1{font-size:24px;margin:0}h2{font-size:17px;margin:28px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.meta{color:var(--muted);font-size:13px;text-align:right}.summary{font-size:17px;background:var(--card);border-left:4px solid var(--accent);padding:12px 16px;margin:20px 0}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;width:32%}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:14px 0}
+.stat{background:var(--card);border-radius:8px;padding:10px 14px}.stat b{display:block;font-size:26px}.stat span{color:var(--muted);font-size:13px}
+.f{padding:8px 10px;border-left:4px solid var(--line);margin:6px 0;background:var(--card)}.f.critical{border-color:var(--crit)}.f.warning{border-color:var(--warn)}.f.fixed{border-color:var(--ok)}
+.f small{display:block;color:var(--muted)}.tag{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-right:6px}
+.tag.critical{color:var(--crit)}.tag.warning{color:var(--warn)}.tag.fixed{color:var(--ok)}
+ol,ul{padding-left:22px}li{margin:4px 0}.muted{color:var(--muted)}
+.sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:40px}.sign div{border-top:1px solid var(--ink);padding-top:6px;color:var(--muted);font-size:13px}
+details{margin-top:24px}pre{white-space:pre-wrap;font-size:11px;background:var(--card);padding:10px;border-radius:6px;overflow-x:auto}
+@media print{main{padding:0}details{display:none}.f{break-inside:avoid}}
+"""
+
+
+def fhtml(f, tag=None):
+    e = html.escape
+    t = tag or f["severity"]
+    return (f'<div class="f {t}"><span class="tag {t}">{e(t)}</span>{e(f["title"])}'
+            + (f'<small>{e(f["detail"])}</small>' if f.get("detail") else "")
+            + (f'<small>→ {e(f["next_step"])}</small>' if f.get("next_step") and t != "fixed" else "") + "</div>")
+
+
+def render_html(r):
+    e = html.escape
+    j, s = r["job"], r["system"]
+    serial = r["ids"].get("system_serial") or ""
+    disks = r["last"].get("disks", [])
+    rows = [("Computer", f"{s.get('manufacturer', '')} {s.get('model', '')}"), ("Serial number", serial),
+            ("Operating system(s)", ", ".join(r["oses"]) or "none found"),
+            ("Processor / memory", f"{s.get('cpu', '')} · {s.get('ram_bytes', 0) / 2**30:.0f} GB RAM"),
+            ("Firmware", f"{s.get('firmware', '')}" + (f", Secure Boot {'on' if s.get('secure_boot') else 'off'}" if s.get("secure_boot") is not None else ""))]
+    for d in disks:
+        h = d.get("health") or {}
+        state = "healthy" if h.get("passed") else ("FAILING" if h.get("passed") is False else "not reported")
+        extra = f", {h['power_on_hours']} h powered on" if h.get("power_on_hours") is not None else ""
+        rows.append((f"Disk {d['path']}", f"{d.get('model') or ''} {d['size'] / 1e9:.0f} GB, {state}{extra}"))
+    customer = [("Customer", j.get("customer")), ("Contact", j.get("contact")), ("Reported problem", j.get("complaint")),
+                ("Engineer", j.get("engineer")), ("Job reference", j.get("job_ref"))]
+    parts = [f"<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+             f"<title>SysMedic job report {e(j.get('job_ref') or '')}</title><style>{CSS}</style><main>",
+             f"<header><div><h1>Job report</h1><div class=muted>SysMedic rescue · {e(s.get('manufacturer', ''))} {e(s.get('model', ''))}</div></div>"
+             f"<div class=meta>{e(j.get('job_ref') or 'no job reference')}<br>{e(r['started'][:16].replace('T', ' '))} – {e(r['finished'][11:16])}</div></header>",
+             f"<p class=summary>{e(r['summary'])}</p>",
+             "<div class=grid>" + "".join(f"<div class=stat><b>{n}</b><span>{l}</span></div>" for n, l in [
+                 (len(r["fixed"]), "fixed"), (len(r["remaining"]), "still to do"), (len(r["backups"]), "files backed up"),
+                 (len(r["acts"]), "repair actions")]) + "</div>"]
+    if any(v for _, v in customer):
+        parts.append("<h2>Job</h2><table>" + "".join(f"<tr><th>{e(k)}</th><td>{e(v)}</td></tr>" for k, v in customer if v) + "</table>")
+    parts.append("<h2>Machine</h2><table>" + "".join(f"<tr><th>{e(k)}</th><td>{e(v)}</td></tr>" for k, v in rows if v) + "</table>")
+    if r["fixed"]:
+        parts.append("<h2>Fixed during this visit</h2>" + "".join(fhtml(f, "fixed") for f in r["fixed"]))
+    if r["remaining"] or r["new"]:
+        parts.append("<h2>Still needs attention</h2>" + "".join(fhtml(f) for f in r["remaining"] + r["new"]))
+    if not (r["fixed"] or r["remaining"] or r["new"]):
+        parts.append("<h2>Findings</h2><p>No problems were found.</p>")
+    parts.append("<h2>Work performed</h2>")
+    if r["acts"]:
+        parts.append("<ol>" + "".join(f"<li><span class=muted>{e(t)}</span> {e(a)}</li>" for t, a in r["acts"]) + "</ol>")
+    else:
+        parts.append("<p>Diagnosis only — nothing on the computer was changed.</p>")
+    ai = []
+    if r["consent"] is not None:
+        ai.append("Customer consented to cloud AI assistance." if r["consent"] else "Cloud AI was not used (no consent); diagnosis stayed on this machine.")
+    if r["ai_cmds"]:
+        ai.append(f"The AI assistant ran {r['ai_cmds']} diagnostic command(s), each approved or read-only.")
+    ai.append("The computer's disks were write-protected throughout, except where unlocked by the engineer as listed above.")
+    if r["refused"]:
+        ai.append(f"{r['refused']} unauthorised action(s) were blocked by SysMedic's safeguards.")
+    parts.append("<ul>" + "".join(f"<li>{e(x)}</li>" for x in ai) + "</ul>")
+    hw = (session.session_dir() / "hwtest.log")
+    if hw.exists() and hw.read_text().strip():
+        parts.append("<h2>Hardware tests</h2><ul>" + "".join(
+            f"<li><span class=muted>{e(l[11:16])}</span> {e(l[26:] if len(l) > 26 else l)}</li>" for l in hw.read_text().splitlines() if l.strip()) + "</ul>")
+    if r["backups"]:
+        parts.append("<h2>Backups taken</h2><table>" + "".join(
+            f"<tr><td>{e(b['path'])}</td><td>{human_size(b['bytes'])}</td></tr>" for b in r["backups"]) + "</table>"
+            "<p class=muted>Stored on the engineer's SysMedic USB stick.</p>")
+    if j.get("notes"):
+        parts.append("<h2>Engineer's notes</h2>" + "".join(
+            f"<div class=f><small>{e(n['time'][:16].replace('T', ' '))} · {e(n['author'])}</small>{e(n['text'])}</div>" for n in j["notes"]))
+    parts.append("<div class=sign><div>Engineer signature</div><div>Customer signature</div></div>")
+    parts.append(f"<details><summary>Full audit trail ({len(r['audit'])} entries)</summary><pre>{e(chr(10).join(r['audit']))}</pre></details>")
+    parts.append(f"<p class=muted style='margin-top:30px;font-size:12px'>Generated by SysMedic {e(r['system'].get('sysmedic_edition', 'dev'))} v{e(r['system'].get('sysmedic_version', 'dev'))} on {e(session.now()[:16].replace('T', ' '))}. Session {e(r['session'].split('/')[-1])}.</p></main></html>")
+    return "".join(parts)
+
+
+def render_text(r):
+    j, s = r["job"], r["system"]
+    out = ["SYSMEDIC JOB REPORT", "=" * 60, f"Job: {j.get('job_ref') or '-'}   Customer: {j.get('customer') or '-'}   Engineer: {j.get('engineer') or '-'}",
+           f"Machine: {s.get('manufacturer', '')} {s.get('model', '')}   Serial: {r['ids'].get('system_serial') or '-'}",
+           f"Visit: {r['started'][:16].replace('T', ' ')} – {r['finished'][11:16]}", "", r["summary"], ""]
+    for title, items in [("FIXED", r["fixed"]), ("STILL NEEDS ATTENTION", r["remaining"] + r["new"])]:
+        if items:
+            out.append(title)
+            out += [f"  - {f['title']}" + (f"\n      → {f['next_step']}" if title != "FIXED" and f.get("next_step") else "") for f in items]
+            out.append("")
+    out.append("WORK PERFORMED")
+    out += [f"  {t}  {a}" for t, a in r["acts"]] or ["  Diagnosis only — nothing was changed."]
+    if j.get("notes"):
+        out += ["", "NOTES"] + [f"  {n['time'][:16].replace('T', ' ')} ({n['author']}): {n['text']}" for n in j["notes"]]
+    return "\n".join(out) + "\n"
+
+
+def main():
+    if "--no-scan" not in sys.argv:
+        print("  Re-scanning to record the machine's state after the work…", flush=True)
+        subprocess.run(["/usr/local/bin/sysmedic-scan"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    r = build()
+    d = session.session_dir()
+    (d / "report.html").write_text(render_html(r))
+    (d / "report.txt").write_text(render_text(r))
+    session.audit("report", f"job report generated ({len(r['fixed'])} fixed, {len(r['remaining']) + len(r['new'])} remaining)")
+    subprocess.run(["/usr/local/bin/sysmedic-transcript", "--quiet"])
+    if "--print" in sys.argv:
+        print(render_text(r))
+    print(f"  {r['summary']}\n  Report: {d / 'report.html'}\n          {d / 'report.txt'}")
+
+
+if __name__ == "__main__":
+    main()

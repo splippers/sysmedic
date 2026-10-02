@@ -1,0 +1,2 @@
+# Services that must never start by themselves (they'd announce or serve on a customer's network)
+lldpd hostapd avahi-daemon rpcbind nfs-client.target clamav-freshclam sysstat

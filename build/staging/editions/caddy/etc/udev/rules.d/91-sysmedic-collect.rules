@@ -1,0 +1,2 @@
+# SysMedic caddy: when a SysMedic stick is plugged in, collect its sessions (read-only)
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="FOG_AMB_PERSIST", TAG+="systemd", ENV{SYSTEMD_WANTS}+="sysmedic-collect@%k.service"

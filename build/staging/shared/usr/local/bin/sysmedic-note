@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""sysmedic-note — add a note to this visit's job record (it appears in the job report).
+Usage: sysmedic-note "Replaced SATA cable; customer told about failing backup drive"
+       sysmedic-note --feedback "Qwen suggested fsck on a mounted volume"   (for improving SysMedic later)
+       sysmedic-note --job customer="Acme Ltd" job_ref=J-1042 engineer="Sam" contact=... complaint=...
+"""
+import os
+import sys
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+import session  # noqa: E402
+
+args = sys.argv[1:]
+if not args:
+    sys.exit(__doc__)
+who = ("ai:" + os.environ["SYSMEDIC_AI"]) if os.environ.get("SYSMEDIC_AI") else \
+      (os.environ.get("SYSMEDIC_TTY") or (os.ttyname(0) if os.isatty(0) else "/script")).replace("/dev/", "").lstrip("/")
+if args[0] == "--feedback":
+    job = session.load_job()
+    text = " ".join(args[1:]).strip()[:2000]
+    if text:
+        job.setdefault("feedback", []).append({"time": session.now(), "author": who, "text": text})
+        session.save_job(job)
+        session.audit(who, "FEEDBACK " + text[:200])
+        print("  Feedback saved — it goes into this visit's claude-review.md, not the customer report.")
+elif args[0] == "--job":
+    job = session.load_job()
+    for kv in args[1:]:
+        k, _, v = kv.partition("=")
+        if k in ("customer", "job_ref", "engineer", "contact", "complaint"):
+            job[k] = v.strip()[:300]
+    session.save_job(job)
+    session.audit(who, "JOB details updated: " + ", ".join(a.split("=")[0] for a in args[1:]))
+    print("  Job details saved.")
+else:
+    session.add_note(" ".join(args), who)
+    print("  Note added to the job record.")

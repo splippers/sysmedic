@@ -10,7 +10,7 @@ fi
 if [ -x /usr/local/sbin/mount-persist ]; then
   /usr/local/sbin/mount-persist
 fi
-export OPENCODE_API_KEY=sk-PzRrfeVSXlziEKwL1UDrJFuKvVc7YP8gYkaEoxG0UtWb2WLQY55pVLBruWXsaRwF
+# (removed: SysMedic uses the free tier, no key)
 export OPENCODE_DISABLE_TERMINAL_TITLE=1
 while true; do
   if command -v opencode >/dev/null 2>&1; then

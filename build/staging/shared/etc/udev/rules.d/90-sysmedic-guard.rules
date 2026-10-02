@@ -1,0 +1,3 @@
+# SysMedic guard: every disk except the SysMedic stick is write-protected as it appears.
+# "add" only: changing the read-only flag itself emits a "change" event.
+ACTION=="add", SUBSYSTEM=="block", RUN+="/usr/local/sbin/sysmedic-guard udev %k"

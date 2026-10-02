@@ -1,0 +1,15 @@
+#!/bin/sh
+# SysMedic: keep Wi-Fi drivers out of the initramfs.
+#
+# The initramfs only gets the firmware file names a driver *declares*, and newer
+# kernels declare firmware newer than the distro ships (e.g. kernel 7.0 iwlwifi
+# declares iwlwifi-QuZ-a0-hr-b0-100 while Ubuntu ships -77). The driver then probes
+# inside the initramfs, finds no firmware, and gives up for good: no Wi-Fi.
+# Nothing at early boot needs Wi-Fi, so let these drivers load from the real root,
+# where all of /lib/firmware is available and they pick the newest version present.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+for base in "${DESTDIR}/usr/lib/modules/${version}" "${DESTDIR}/lib/modules/${version}"; do
+    rm -rf "${base}/kernel/drivers/net/wireless"
+done

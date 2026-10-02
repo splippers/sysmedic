@@ -1,0 +1,7 @@
+[Unit]
+Description=SysMedic: collect sessions from the SysMedic stick on /dev/%i
+After=local-fs.target mnt-persist.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sysmedic-collect /dev/%i

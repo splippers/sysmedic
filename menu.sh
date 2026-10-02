@@ -190,31 +190,17 @@ PYEOF
 menu_networking() {
     while true; do
         show_header "  NETWORKING"
-        echo "  1)  WiFi Connect (WPS / Password)"
-        echo "  2)  CraicKen Telemetry (call home)"
+        echo "  1)  Wi-Fi connect (nmtui)"
         echo ""
         echo "  0)  Back to main menu"
         echo ""
-        read -p "  Choice [0-2]: " choice
+        read -p "  Choice [0-1]: " choice
         echo ""
 
         case "$choice" in
             1)
                 show_header "  WIFI CONNECT"
-                [ -x "$SCRIPTS/wifi-connect.sh" ] && bash "$SCRIPTS/wifi-connect.sh" || echo -e "  ${RED}WiFi script not found${NC}"
-                pause
-                ;;
-            2)
-                show_header "  CRAICKEN MESH"
-                echo "  1) Connect & telemetry (register + diagnostics to mesh)"
-                echo "  2) Sync knowledge (push session log + wiki to CraicKen)"
-                echo "  0) Back"
-                echo ""
-                read -p "  Choose: " ck_opt
-                case "$ck_opt" in
-                    1) [ -x "$SCRIPTS/craic-connect.sh" ] && bash "$SCRIPTS/craic-connect.sh" || echo -e "  ${RED}Script not found${NC}" ;;
-                    2) [ -x "$SCRIPTS/craicken-sync.sh" ] && bash "$SCRIPTS/craicken-sync.sh" || echo -e "  ${RED}Script not found${NC}" ;;
-                esac
+                /usr/local/bin/wifi
                 pause
                 ;;
             0)  break ;;
@@ -315,14 +301,12 @@ menu_windows() {
                 echo "  [C] CLI mode     — Type/paste the key directly in this terminal"
                 echo "                     (works even without network)"
                 echo ""
-                echo "  [W] Web portal   — Starts a web server on port 8080"
-                echo "                     Open http://<this-ip>:8080 from your phone/laptop"
-                echo "                     Paste the key there + get diagnostics"
+                echo "  (The old web portal was removed: it accepted keys from anyone on the network.)"
                 echo ""
                 read -p "  Choose [C/W]: " bl_method
                 case "$bl_method" in
                     c|C) bash "$SCRIPTS/bitlocker-unlock.sh" ;;
-                    w|W) bash "$SCRIPTS/bitlocker-web.sh" ;;
+                    w|W) echo "  The web portal was removed (it had no login). Use: sysmedic-win bitlocker /dev/X" ;;
                     *)   echo -e "  ${RED}Invalid choice${NC}" ;;
                 esac
                 pause
@@ -502,7 +486,7 @@ while true; do
     echo -e "${BOLD}  ║      AI Rescue · Quick diag · OS scan · Smart Repair ${BOLD}║${NC}"
     echo -e "${BOLD}  ║                                                    ${BOLD}║${NC}"
     echo -e "${BOLD}  ║  2)  Networking                              ${BOLD}║${NC}"
-    echo -e "${BOLD}  ║      WiFi · CraicKen Mesh                           ${BOLD}║${NC}"
+    echo -e "${BOLD}  ║      Networking                          ${BOLD}║${NC}"
     echo -e "${BOLD}  ║                                                    ${BOLD}║${NC}"
     echo -e "${BOLD}  ║  3)  Linux Repair                            ${BOLD}║${NC}"
     echo -e "${BOLD}  ║      GRUB · initramfs · fstab · /boot · chroot      ${BOLD}║${NC}"

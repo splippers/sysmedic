@@ -1,0 +1,23 @@
+#!/bin/bash
+# Start the offline Ollama server from the persistence partition, if present.
+
+OLLAMA_DIR="/mnt/persist/ollama"
+[ -x "$OLLAMA_DIR/bin/ollama" ] || exit 1
+curl -sf --max-time 1 http://127.0.0.1:11434/api/version >/dev/null && exit 0
+
+export OLLAMA_MODELS="$OLLAMA_DIR/models"
+export OLLAMA_HOST=127.0.0.1:11434
+export OLLAMA_KEEP_ALIVE=30m
+export OLLAMA_CONTEXT_LENGTH=16384   # OpenCode system prompt + SysMedic instructions need more than the default
+export OLLAMA_FLASH_ATTENTION=1
+export OLLAMA_KV_CACHE_TYPE=q8_0
+mkdir -p /mnt/persist/logs
+# Own session: Ctrl-C in the console (e.g. quitting OpenCode) must not reach Ollama
+setsid -f "$OLLAMA_DIR/bin/ollama" serve >>/mnt/persist/logs/ollama.log 2>&1 </dev/null
+
+for _ in $(seq 1 15); do
+    curl -sf --max-time 1 http://127.0.0.1:11434/api/version >/dev/null && exit 0
+    sleep 1
+done
+echo "  Ollama did not start — see /mnt/persist/logs/ollama.log"
+exit 1

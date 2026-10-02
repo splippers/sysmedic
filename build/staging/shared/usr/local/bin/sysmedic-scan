@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""sysmedic scan — read-only triage of the machine SysMedic has booted on.
+
+Collects disk health, filesystem state, installed operating systems, boot
+configuration, encryption and network status, then prints a plain-English
+summary and saves scan.json + summary.txt to the session directory.
+
+Nothing on the machine's own disks is ever written: filesystems are mounted
+read-only (ext4 with noload, so even the journal is not replayed), checks run
+in no-change mode, and RAID/LVM members are reported but never assembled.
+
+Usage: sysmedic-scan [--json] [--last] [--no-color]
+Exit status: 0 all clear, 1 warnings, 2 critical findings.
+"""
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+try:
+    import winlib
+except ImportError:
+    winlib = None
+
+SEVERITIES = ["critical", "warning", "info", "ok"]
+RUN_DIR = Path("/run/sysmedic")
+PERSIST_SESSIONS = Path("/mnt/persist/sessions")
+SECURE_BOOT_VAR = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+
+findings = []
+
+
+def is_mounted(path):
+    """True if path is a mount point. Unlike Path.is_mount(), this also sees bind mounts on the same filesystem."""
+    target = os.path.realpath(str(path))
+    try:
+        with open("/proc/self/mountinfo") as f:
+            return any(line.split()[4] == target for line in f)
+    except OSError:
+        return False
+
+
+def run(cmd, timeout=60):
+    """Run a command; return (returncode, stdout, stderr) and never raise."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, errors="replace")
+        return p.returncode, p.stdout, p.stderr
+    except FileNotFoundError:
+        return 127, "", f"{cmd[0]}: not installed"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timed out after {timeout}s"
+
+
+def find(severity, area, title, detail="", next_step=""):
+    findings.append({"severity": severity, "area": area, "title": title,
+                     "detail": detail, "next_step": next_step})
+
+
+def read(path, default=""):
+    try:
+        return Path(path).read_text(errors="replace")
+    except OSError:
+        return default
+
+
+def ci_path(root, rel):
+    """Resolve a relative path case-insensitively (NTFS/FAT paths vary in case)."""
+    cur = Path(root)
+    for part in Path(rel).parts:
+        try:
+            match = next((c for c in cur.iterdir() if c.name.lower() == part.lower()), None)
+        except OSError:
+            return None
+        if match is None:
+            return None
+        cur = match
+    return cur
+
+
+def human(nbytes):
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if abs(nbytes) < 1000 or unit == "TB":
+            return f"{nbytes:.0f} {unit}" if unit == "B" else f"{nbytes:.1f} {unit}"
+        nbytes /= 1000
+
+
+# ── System ──────────────────────────────────────────────────────────────────
+
+def collect_system():
+    info = {}
+    for key, field in [("manufacturer", "system-manufacturer"), ("model", "system-product-name"),
+                       ("serial", "system-serial-number"), ("bios_version", "bios-version"),
+                       ("bios_date", "bios-release-date")]:
+        rc, out, _ = run(["dmidecode", "-s", field])
+        info[key] = out.strip() if rc == 0 else ""
+    cpuinfo = read("/proc/cpuinfo")
+    m = re.search(r"^model name\s*:\s*(.+)$", cpuinfo, re.M)
+    info["cpu"] = m.group(1).strip() if m else "unknown"
+    info["cpu_threads"] = os.cpu_count()
+    flags = re.search(r"^flags\s*:\s*(.+)$", cpuinfo, re.M)
+    info["cpu_avx"] = bool(flags and " avx " in f" {flags.group(1)} ")
+    m = re.search(r"MemTotal:\s+(\d+)", read("/proc/meminfo"))
+    info["ram_bytes"] = int(m.group(1)) * 1024 if m else 0
+    info["firmware"] = "UEFI" if Path("/sys/firmware/efi").exists() else "BIOS"
+    info["sysmedic_edition"] = read("/etc/sysmedic/edition", "dev").strip()
+    info["sysmedic_version"] = read("/etc/sysmedic/version", "dev").strip()
+    sb = None
+    try:
+        sb = Path(SECURE_BOOT_VAR).read_bytes()[-1] == 1
+    except OSError:
+        pass
+    info["secure_boot"] = sb
+
+    if not info["cpu_avx"]:
+        find("warning", "system", "CPU has no AVX: the OpenCode AI assistant can't run on this machine",
+             info["cpu"], "Use the rescue menu and offline tools; or run the AI on another machine.")
+    ram_gb = round(info["ram_bytes"] / 2**30)          # same rounding as the boot script
+    if ram_gb < 4:
+        find("info", "system", f"Only {ram_gb} GB RAM: the AI assistant is disabled to keep things responsive")
+    elif ram_gb < 6:
+        find("info", "system", f"{ram_gb} GB RAM: enough for the cloud AI, not for the offline model")
+    return info
+
+
+# ── Disks & health ──────────────────────────────────────────────────────────
+
+def boot_disk():
+    """The disk SysMedic itself runs from (excluded from every check): the live USB, or an installed SysMedic's root disk."""
+    rc, src, _ = run(["findmnt", "-no", "SOURCE", "/cdrom"])
+    if rc != 0 or not src.strip():
+        rc, src, _ = run(["findmnt", "-no", "SOURCE", "/"])
+    if rc != 0 or not src.strip().startswith("/dev/"):
+        return None
+    rc, pk, _ = run(["lsblk", "-no", "PKNAME", src.strip()])
+    return pk.strip().splitlines()[0] if rc == 0 and pk.strip() else None
+
+
+def check_self():
+    """SysMedic's own drive: a USB 2.0 link makes everything (AI, scans, imaging) crawl."""
+    disk = boot_disk()
+    if not disk:
+        return
+    dev = Path(f"/sys/block/{disk}").resolve()
+    for d in [dev, *dev.parents]:
+        if (d / "speed").exists() and (d / "idVendor").exists():
+            try:
+                speed = int(read(d / "speed").strip() or 0)
+            except ValueError:
+                return
+            if 0 < speed < 5000:
+                find("warning", "sysmedic", f"SysMedic's own drive is connected at USB {'2.0' if speed == 480 else '1.x'} speed ({speed} Mbit/s)",
+                     "Everything (the AI, scans, disk imaging) runs many times slower than it should.",
+                     "Power off first (SysMedic runs from this drive), then use a USB 3 port (often blue or marked SS) and a USB 3 cable.")
+            elif speed:
+                find("ok", "sysmedic", f"SysMedic's drive is on a fast USB link ({speed // 1000} Gbit/s)")
+            return
+
+
+def collect_block_devices():
+    cols = "NAME,PATH,SIZE,TYPE,TRAN,MODEL,SERIAL,ROTA,RM,FSTYPE,FSVER,LABEL,UUID,PARTUUID,PARTTYPENAME,PARTLABEL,MOUNTPOINTS"
+    rc, out, err = run(["lsblk", "-J", "-b", "-o", cols])
+    if rc != 0:
+        find("critical", "disks", "Could not list disks", err.strip())
+        return []
+    skip = boot_disk()
+    disks = []
+    for dev in json.loads(out).get("blockdevices", []):
+        if dev["type"] != "disk" or dev["name"] == skip:
+            continue
+        if re.match(r"(loop|sr|zram|ram|fd)\d", dev["name"]):
+            continue
+        disks.append(dev)
+    return disks
+
+
+def smart(dev):
+    rc, out, _ = run(["smartctl", "-j", "-a", dev["path"]], timeout=60)
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return {"available": False}
+    h = {"available": "smart_status" in data,
+         "passed": data.get("smart_status", {}).get("passed"),
+         "temperature_c": data.get("temperature", {}).get("current"),
+         "power_on_hours": data.get("power_on_time", {}).get("hours")}
+    attrs = {a["id"]: a["raw"]["value"] for a in data.get("ata_smart_attributes", {}).get("table", [])}
+    for key, attr_id in [("reallocated", 5), ("reported_uncorrectable", 187),
+                         ("pending", 197), ("offline_uncorrectable", 198)]:
+        if attr_id in attrs:
+            h[key] = attrs[attr_id]
+    nv = data.get("nvme_smart_health_information_log")
+    if nv:
+        h.update({k: nv.get(k) for k in ["critical_warning", "percentage_used", "media_errors",
+                                         "available_spare", "available_spare_threshold", "unsafe_shutdowns"]})
+    return h
+
+
+def assess_health(dev, h):
+    name = f"{dev['path']} ({(dev.get('model') or 'unknown model').strip()}, {human(dev['size'])})"
+    if not h.get("available"):
+        find("info", "health", f"{name}: SMART health not available",
+             "Common for USB enclosures and virtual disks.")
+        return
+    image_first = f"Image the disk before any repair: ddrescue {dev['path']} <external-drive>/disk.img <external-drive>/disk.map"
+    if h.get("passed") is False:
+        find("critical", "health", f"{name}: the drive reports it is FAILING", "SMART overall-health: FAILED", image_first)
+    elif h.get("critical_warning"):
+        find("critical", "health", f"{name}: NVMe critical warning 0x{h['critical_warning']:02x}",
+             "The SSD is flagging a hardware problem (spare space, temperature, or read-only mode).", image_first)
+    problems = []
+    for key, label in [("pending", "sectors waiting to be remapped"), ("offline_uncorrectable", "unreadable sectors"),
+                       ("reallocated", "sectors already remapped"), ("reported_uncorrectable", "uncorrectable read errors"),
+                       ("media_errors", "media errors")]:
+        if h.get(key):
+            problems.append(f"{h[key]} {label}")
+    if problems:
+        sev = "critical" if h.get("pending") or h.get("offline_uncorrectable") else "warning"
+        find(sev, "health", f"{name}: surface damage — " + ", ".join(problems), "", image_first)
+    used = h.get("percentage_used")
+    if used is not None and used >= 90:
+        find("warning", "health", f"{name}: SSD is {used}% through its rated write endurance", "",
+             "Plan a replacement; back up now.")
+    if h.get("passed") and not problems and not h.get("critical_warning"):
+        extra = f", {h['power_on_hours']} h powered on" if h.get("power_on_hours") is not None else ""
+        find("ok", "health", f"{name}: healthy{extra}")
+
+
+# ── Filesystems, operating systems, boot files ─────────────────────────────
+
+def walk_partitions(disk):
+    stack = list(disk.get("children") or [])
+    if not stack and disk.get("fstype"):
+        stack = [disk]                       # filesystem directly on the disk
+    while stack:
+        p = stack.pop(0)
+        yield p
+        stack[0:0] = p.get("children") or []
+
+
+def check_filesystem(p):
+    """No-change consistency check. Returns a short status string."""
+    fs, dev = p.get("fstype"), p["path"]
+    if fs in ("ext2", "ext3", "ext4"):
+        rc, out, _ = run(["dumpe2fs", "-h", dev], timeout=30)
+        state = re.search(r"Filesystem state:\s+(.+)", out)
+        errors = re.search(r"FS Error count:\s+(\d+)", out)
+        state = state.group(1).strip() if state else "unknown"
+        if state != "clean" or errors:
+            rc, out, err = run(["e2fsck", "-n", dev], timeout=300)
+            if rc == 124:
+                return "warning", f"state '{state}'; read-only check timed out (large disk)"
+            if rc >= 4:
+                return "critical", f"state '{state}'; e2fsck -n found errors that need repair"
+            return "warning", f"state '{state}' (not cleanly unmounted)"
+        return "ok", "clean"
+    if fs == "vfat":
+        rc, out, _ = run(["fsck.vfat", "-n", dev], timeout=120)
+        return ("ok", "clean") if rc == 0 else ("warning", "fsck.vfat -n reports problems")
+    if fs == "exfat":
+        rc, out, _ = run(["fsck.exfat", "-n", dev], timeout=120)
+        return ("ok", "clean") if rc == 0 else ("warning", "fsck.exfat -n reports problems")
+    if fs == "ntfs":
+        rc, out, _ = run(["ntfsinfo", "-m", "-f", dev], timeout=60)
+        flags = re.search(r"Volume Flags:\s*(.+)", out)
+        if flags and "DIRTY" in flags.group(1).upper():
+            return "warning", "marked dirty: Windows wants to run chkdsk"
+        return ("ok", "clean") if rc == 0 else ("warning", "ntfsinfo could not read the volume")
+    return "info", "no read-only check available"
+
+
+def mount_ro(p):
+    fs = p.get("fstype")
+    opts = {"ext2": "ro", "ext3": "ro,noload", "ext4": "ro,noload", "xfs": "ro,norecovery",
+            "btrfs": "ro,rescue=nologreplay", "vfat": "ro", "exfat": "ro", "hfsplus": "ro"}
+    target = tempfile.mkdtemp(prefix=p["name"] + "-", dir=RUN_DIR / "ro")
+    if fs == "ntfs":
+        cmd = ["ntfs-3g", "-o", "ro", p["path"], target]
+    elif fs in opts:
+        cmd = ["mount", "-t", fs, "-o", opts[fs], p["path"], target]
+    else:
+        os.rmdir(target)
+        return None
+    rc, _, _ = run(cmd, timeout=60)
+    if rc != 0:
+        os.rmdir(target)
+        return None
+    return target
+
+
+def unmount(target):
+    run(["umount", target], timeout=60)
+    try:
+        os.rmdir(target)
+    except OSError:
+        pass
+
+
+def free_space(target, label):
+    st = os.statvfs(target)
+    total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+    if total and free / total < 0.05:
+        find("warning", "filesystem", f"{label}: almost full ({human(free)} free of {human(total)})",
+             "A full disk breaks updates, logins and sometimes boot.", "Free space by moving data off, or clean caches/logs.")
+    return {"total_bytes": total, "free_bytes": free}
+
+
+def inspect_linux(target, label, known_ids):
+    osr = read(Path(target, "etc/os-release"))
+    m = re.search(r'^PRETTY_NAME="?([^"\n]+)', osr, re.M)
+    name = m.group(1) if m else "Linux"
+    result = {"os": name, "kind": "linux"}
+    fstab = read(Path(target, "etc/fstab"))
+    for line in fstab.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or fields[0].startswith("#"):
+            continue
+        spec, mnt = fields[0], fields[1]
+        opts = fields[3] if len(fields) > 3 else ""
+        key, _, val = spec.partition("=")
+        if key in ("UUID", "PARTUUID", "LABEL") and val.strip('"') not in known_ids[key]:
+            sev = "info" if "nofail" in opts or "noauto" in opts else "critical"
+            find(sev, "boot", f"{name} ({label}): /etc/fstab mounts {spec} on {mnt}, but no such disk exists",
+                 "Boot will stop at an emergency shell waiting for it." if sev == "critical" else "Marked nofail/noauto, so it won't block boot.",
+                 "Menu 5 → Fix /etc/fstab, or correct the UUID (compare with 'lsblk -f').")
+    return result
+
+
+def inspect_linux_boot(boot, label):
+    """boot: a /boot directory, or the root of a separate /boot partition."""
+    kernels = sorted(boot.glob("vmlinuz-*"))
+    for k in kernels:
+        ver = k.name[len("vmlinuz-"):]
+        initrd = boot / f"initrd.img-{ver}"
+        if not initrd.exists() or initrd.stat().st_size == 0:
+            find("critical", "boot", f"{label}: kernel {ver} has no initramfs",
+                 "Booting this kernel ends in a kernel panic (\"unable to mount root fs\").",
+                 "Menu 5 → Fix corrupt initramfs (update-initramfs in a chroot).")
+    if kernels and not (boot / "grub/grub.cfg").exists():
+        find("warning", "boot", f"{label}: kernels present but no grub.cfg", "", "Menu 5 → Fix GRUB bootloader.")
+
+
+def windows_version(target):
+    hive = ci_path(target, "Windows/System32/config/SOFTWARE")
+    if not hive:
+        return "Windows"
+    vals = {}
+    for key in ["ProductName", "DisplayVersion", "CurrentBuild"]:
+        rc, out, _ = run(["hivexget", str(hive), r"Microsoft\Windows NT\CurrentVersion", key], timeout=30)
+        vals[key] = out.strip() if rc == 0 else ""
+    name = vals["ProductName"] or "Windows"
+    if vals["CurrentBuild"].isdigit() and int(vals["CurrentBuild"]) >= 22000:
+        name = name.replace("Windows 10", "Windows 11")    # Windows 11 still reports "Windows 10" here
+    return " ".join(x for x in [name, vals["DisplayVersion"], f"(build {vals['CurrentBuild']})" if vals["CurrentBuild"] else ""] if x)
+
+
+def inspect_windows(target, label):
+    name = windows_version(target)
+    hib = ci_path(target, "hiberfil.sys")
+    if hib:
+        try:
+            magic = hib.open("rb").read(4).lower()
+        except OSError:
+            magic = b""
+        if magic == b"hibr":
+            find("warning", "windows", f"{name} ({label}): Windows is hibernated / Fast Startup is holding the disk",
+                 "Writing to this partition now can corrupt files or lose the user's open work.",
+                 "If Windows boots: start it, then Shift+Shut down. Otherwise (discards unsaved work): sysmedic-win fix-hibernation " + label.split()[0])
+    if ci_path(target, "Windows/WinSxS/pending.xml"):
+        find("warning", "windows", f"{name} ({label}): an update was left half-installed (pending.xml)",
+             "A classic cause of 'Undoing changes' and update boot loops.",
+             "From WinRE: dism /image:C:\\ /cleanup-image /revertpendingactions  ·  or from here: sysmedic-win fix-update " + label.split()[0])
+    if winlib:
+        wi = winlib.info(target)
+        if wi.get("fast_startup") and not wi.get("hibernated"):
+            find("info", "windows", f"{name} ({label}): Fast Startup is enabled",
+                 "Windows will hibernate instead of shutting down, which locks the disk for repairs from outside.")
+        if wi.get("winre") == "disabled":
+            find("info", "windows", f"{name} ({label}): Windows Recovery (WinRE) is disabled",
+                 "", "For repairs that need Windows tools, bring Windows install media.")
+        cs = winlib.crashes(target)
+        if cs:
+            codes = {}
+            for c in cs:
+                codes.setdefault(c["code"], c)
+            top = max(codes.values(), key=lambda c: sum(1 for x in cs if x["code"] == c["code"]))
+            detail = "; ".join(f"{sum(1 for x in cs if x['code'] == k)}× {v['name']} ({k})" for k, v in codes.items())
+            sev = "warning" if len(cs) >= 2 else "info"
+            find(sev, "windows", f"{name} ({label}): {len(cs)} blue-screen crash(es), latest {max(c['time'] for c in cs)}",
+                 detail, f"Most common: {top['name']}, which is {top['hint']}. Details: sysmedic-win crashes {label.split()[0]}")
+        evs = winlib.events(target, since_days=60, timeout=60) or []
+        for cat, sev, text in [("disk", "critical", "disk errors"), ("hardware", "warning", "hardware errors"),
+                               ("power", "info", "unexpected shutdowns")]:
+            n = sum(e["count"] for e in evs if e["category"] == cat)
+            if n:
+                find(sev, "windows", f"{name} ({label}): {n} {text} in the event log (last 60 days)",
+                     "; ".join(f"{e['count']}× {e['meaning']}" for e in evs if e["category"] == cat)[:200],
+                     f"Details: sysmedic-win events {label.split()[0]}")
+        sus = [a for a in winlib.autoruns(target) if a["suspicious"]]
+        if sus:
+            find("warning", "security", f"{name} ({label}): {len(sus)} suspicious program(s) start automatically",
+                 "; ".join(f"{a['name']}: {a['suspicious']}" for a in sus[:3])[:240],
+                 f"Review: sysmedic-win autoruns {label.split()[0]}  ·  scan: sysmedic-win malware {label.split()[0]}")
+    return {"os": name, "kind": "windows"}
+
+
+def inspect_macos(target, label):
+    plist = read(Path(target, "System/Library/CoreServices/SystemVersion.plist"))
+    m = re.search(r"<key>ProductVersion</key>\s*<string>([^<]+)", plist)
+    return {"os": f"macOS {m.group(1)}" if m else "macOS", "kind": "macos"}
+
+
+def inspect_esp(target, label):
+    efi = ci_path(target, "EFI")
+    loaders = {}
+    if efi and efi.is_dir():
+        for d in efi.iterdir():
+            if d.is_dir():
+                loaders[d.name] = sorted(f.name for f in d.rglob("*.efi"))[:8]
+    has_bcd = bool(ci_path(target, "EFI/Microsoft/Boot/BCD"))
+    has_bootmgr = bool(ci_path(target, "EFI/Microsoft/Boot/bootmgfw.efi"))
+    return {"esp": True, "loaders": loaders, "windows_bootmgr": has_bootmgr, "windows_bcd": has_bcd}
+
+
+def collect_filesystems(disks):
+    known = {"UUID": set(), "PARTUUID": set(), "LABEL": set()}
+    for d in disks:
+        for p in walk_partitions(d):
+            for k in known:
+                if p.get(k.lower()):
+                    known[k].add(p[k.lower()])
+    (RUN_DIR / "ro").mkdir(parents=True, exist_ok=True)
+    results = []
+    for d in disks:
+        for p in walk_partitions(d):
+            fs = p.get("fstype")
+            label = p["path"] + (f" \"{p['label']}\"" if p.get("label") else "")
+            entry = {"device": p["path"], "fstype": fs, "size_bytes": p["size"], "label": p.get("label"),
+                     "parttype": p.get("parttypename")}
+            results.append(entry)
+            if not fs:
+                continue
+            if fs == "BitLocker":
+                find("warning", "encryption", f"{label}: BitLocker-encrypted ({human(p['size'])})",
+                     "The data can't be read or repaired without the 48-digit recovery key.",
+                     "Get the key from the owner (often at aka.ms/myrecoverykey), then on Alt+F2: sysmedic-win bitlocker " + p["path"])
+                continue
+            if fs == "crypto_LUKS":
+                find("info", "encryption", f"{label}: LUKS-encrypted Linux volume", "", "Unlock with: cryptsetup open " + p["path"] + " rescue")
+                continue
+            if fs in ("LVM2_member", "linux_raid_member", "zfs_member"):
+                find("info", "filesystem", f"{label}: {fs} — part of a volume group/array; not touched by the scan")
+                continue
+            if fs == "swap" or p.get("mountpoints") and any(p["mountpoints"]):
+                continue
+            sev, status = check_filesystem(p)
+            entry["check"] = status
+            if sev in ("warning", "critical"):
+                find(sev, "filesystem", f"{label} ({fs}): {status}", "",
+                     "Image the disk first if health is poor; then repair (fsck / chkdsk).")
+            target = mount_ro(p)
+            if not target:
+                if fs not in ("apfs",):
+                    entry["mount"] = "failed"
+                continue
+            try:
+                entry.update(free_space(target, label))
+                if Path(target, "etc/os-release").exists():
+                    entry.update(inspect_linux(target, label, known))
+                if Path(target, "etc/os-release").exists() and Path(target, "boot").is_dir():
+                    inspect_linux_boot(Path(target, "boot"), label)
+                elif list(Path(target).glob("vmlinuz-*")):          # a separate /boot partition
+                    inspect_linux_boot(Path(target), label)
+                if ci_path(target, "Windows/System32"):
+                    entry.update(inspect_windows(target, label))
+                if Path(target, "System/Library/CoreServices").is_dir():
+                    entry.update(inspect_macos(target, label))
+                if fs == "vfat" and (p.get("parttypename") or "").lower().startswith("efi"):
+                    entry.update(inspect_esp(target, label))
+            finally:
+                unmount(target)
+    return results
+
+
+def assess_boot(fsresults, system):
+    oses = [f for f in fsresults if f.get("kind")]
+    esps = [f for f in fsresults if f.get("esp")]
+    windows = [f for f in oses if f["kind"] == "windows"]
+    linux = [f for f in oses if f["kind"] == "linux"]
+    for f in oses:
+        find("ok", "os", f"Found {f['os']} on {f['device']}")
+    if not oses and not any(x["severity"] == "warning" and x["area"] == "encryption" for x in findings):
+        find("warning", "os", "No installed operating system found",
+             "Either the disk is blank/replaced, encrypted, or the system partition is damaged beyond mounting.",
+             "Check 'lsblk -f'; try testdisk to look for lost partitions.")
+    if windows and esps and not any(e.get("windows_bootmgr") for e in esps):
+        find("critical", "boot", "Windows is installed but its boot manager is missing from the EFI partition",
+             "The PC will show 'no bootable device' or boot straight into firmware setup.",
+             "From WinRE: bcdboot C:\\Windows /s S: /f UEFI  (S: = EFI partition)")
+    elif windows and any(e.get("windows_bootmgr") and not e.get("windows_bcd") for e in esps):
+        find("critical", "boot", "Windows boot manager present but its BCD store is missing",
+             "", "From WinRE: bootrec /rebuildbcd, or bcdboot C:\\Windows /s S: /f UEFI")
+    if linux and esps and system["firmware"] == "UEFI":
+        names = {n.lower() for e in esps for n in e.get("loaders", {})}
+        if not names - {"boot", "microsoft"}:
+            find("warning", "boot", "Linux is installed but no Linux bootloader (GRUB/shim) is on the EFI partition",
+                 "", "Menu 5 → Fix GRUB bootloader.")
+    if system["firmware"] == "UEFI":
+        rc, out, _ = run(["efibootmgr"])
+        entries = re.findall(r"^Boot([0-9A-F]{4})\*?\s+(.+)$", out, re.M)
+        system["uefi_boot_entries"] = [f"{n} {d.split(chr(9))[0].strip()}" for n, d in entries]
+        if rc == 0 and not entries:
+            find("warning", "boot", "The firmware has no UEFI boot entries", "", "efibootmgr / bcdboot can recreate them.")
+
+
+def assess_guard(disks):
+    nodes = list({n["name"]: n for d in disks for n in [d, *walk_partitions(d)]}.values())
+    writable = [n["path"] for n in nodes if read(f"/sys/class/block/{n['name']}/ro").strip() == "0"]
+    if not nodes:
+        return
+    if writable:
+        find("warning", "guard", "Unlocked for writing: " + ", ".join(writable),
+             "Writes to these devices are possible right now.", "When the repair is done: sysmedic-lock")
+    else:
+        find("ok", "guard", f"All customer disks are write-protected ({len(nodes)} devices)")
+
+
+# ── Network ────────────────────────────────────────────────────────────────
+
+def collect_network():
+    net = {"interfaces": [], "online": False}
+    for iface in sorted(Path("/sys/class/net").iterdir()):
+        if iface.name == "lo":
+            continue
+        driver = os.path.basename(os.readlink(iface / "device/driver")) if (iface / "device/driver").exists() else ""
+        net["interfaces"].append({"name": iface.name, "wifi": (iface / "wireless").exists() or (iface / "phy80211").exists(),
+                                  "driver": driver, "state": read(iface / "operstate").strip()})
+    rc, out, _ = run(["ip", "-j", "-4", "addr"])
+    try:
+        for a in json.loads(out):
+            for i in net["interfaces"]:
+                if i["name"] == a["ifname"]:
+                    i["ipv4"] = [x["local"] for x in a.get("addr_info", [])]
+    except (json.JSONDecodeError, KeyError):
+        pass
+    # Any HTTP answer from the cloud AI's host counts; links can be slow or still coming up at boot
+    for _ in range(2):
+        rc, code, _ = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10",
+                           "https://opencode.ai"], timeout=15)
+        net["online"] = code.strip() not in ("", "000")
+        if net["online"]:
+            break
+    # Drivers that couldn't load their firmware (the classic "Wi-Fi card detected but no Wi-Fi")
+    rc, klog, _ = run(["journalctl", "-k", "-b", "--no-pager", "-o", "cat"], timeout=20)
+    if rc != 0 or not klog:
+        rc, klog, _ = run(["dmesg"], timeout=10)
+    failed = {}
+    for m in re.finditer(r"^(\S+) (\S+): (?:Direct firmware load for (\S+) failed|(\S+) is required|no suitable firmware found)", klog, re.M):
+        drv, dev, fw = m.group(1), m.group(2), m.group(3) or m.group(4)
+        if fw or (drv, dev) not in failed:
+            failed[(drv, dev)] = fw or failed.get((drv, dev))
+    for (drv, dev), fw in list(failed.items())[:4]:
+        if "no suitable firmware" not in klog and drv != "iwlwifi" and not re.search(rf"{re.escape(drv)} {re.escape(dev)}: .*(failed to|error)", klog):
+            continue                     # optional firmware that the driver can live without
+        find("warning", "network" if drv in ("iwlwifi", "ath10k_pci", "ath11k_pci", "ath12k_pci", "rtw88_pci", "rtw89_pci", "mt7921e", "mt7925e", "brcmfmac") else "hardware",
+             f"The {drv} driver couldn't load its firmware" + (f" ({fw})" if fw else ""),
+             f"Device {dev} is detected but won't work until its firmware loads.",
+             "Use Ethernet or USB tethering for now, and record it: sysmedic-note --feedback 'missing firmware " + (fw or drv) + "'")
+    for dev in Path("/sys/bus/pci/devices").iterdir():
+        if read(dev / "class").strip().startswith("0x0280") and not (dev / "driver").exists():
+            ids = read(dev / "vendor").strip() + ":" + read(dev / "device").strip()
+            find("warning", "network", f"Wi-Fi adapter {ids.replace('0x', '')} has no driver",
+                 "This kernel or firmware doesn't support it.", "Use Ethernet or USB tethering from a phone.")
+    if not net["online"]:
+        # Distinguish "no internet" from "internet but DNS broken" — a common site fault worth reporting
+        rc, code, _ = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "6", "https://1.1.1.1"], timeout=10)
+        net["ip_reachable"] = code.strip() not in ("", "000")
+    if net["online"]:
+        find("ok", "network", "Internet reachable: cloud AI available")
+    elif net.get("ip_reachable"):
+        find("warning", "network", "Internet is reachable but DNS (name lookup) is failing",
+             "The network's DNS servers aren't answering. SysMedic also tries public resolvers (1.1.1.1, 9.9.9.9).",
+             "Report the site's DNS fault; check 'resolvectl status'. The AI assistant will use the offline model.")
+    else:
+        find("info", "network", "No internet: the AI assistant will use the offline model",
+             "", "Plug in Ethernet, tether a phone over USB, or run 'wifi'.")
+    return net
+
+
+# ── Output ─────────────────────────────────────────────────────────────────
+
+def session_dir(system):
+    """One session folder per boot (one visit); re-scans add to it."""
+    link = RUN_DIR / "session"
+    if link.is_symlink() and link.resolve().is_dir():
+        return link.resolve()
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", f"{system.get('manufacturer', '')} {system.get('model', '')}").strip("-")[:40] or "machine"
+    base = PERSIST_SESSIONS if is_mounted(PERSIST_SESSIONS.parent) else RUN_DIR / "sessions"
+    d = base / f"{stamp}-{slug}"
+    d.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(d)
+    return d
+
+
+def render(report, color=True):
+    c = {"critical": "\033[1;31m", "warning": "\033[1;33m", "info": "\033[0;36m", "ok": "\033[0;32m",
+         "bold": "\033[1m", "dim": "\033[2m", "end": "\033[0m"} if color else {k: "" for k in
+         ["critical", "warning", "info", "ok", "bold", "dim", "end"]}
+    icon = {"critical": "X", "warning": "!", "info": "i", "ok": "+"}     # the Linux console font has no ✖/▲/✔
+    s = report["system"]
+    lines = [f"{c['bold']}SysMedic scan — {s.get('manufacturer', '')} {s.get('model', '')}{c['end']}".rstrip(),
+             f"{c['dim']}{s['cpu']} · {s['ram_bytes'] / 2**30:.0f} GB RAM · {s['firmware']}"
+             + (f" · Secure Boot {'on' if s['secure_boot'] else 'off'}" if s['secure_boot'] is not None else "")
+             + f" · {report['time']}"
+             + f" · SysMedic {s.get('sysmedic_edition', 'dev')} v{s.get('sysmedic_version', 'dev')}{c['end']}", ""]
+    counts = {sev: sum(f["severity"] == sev for f in report["findings"]) for sev in SEVERITIES}
+    for sev in SEVERITIES:
+        for f in (x for x in report["findings"] if x["severity"] == sev):
+            lines.append(f"  {c[sev]}{icon[sev]} {f['title']}{c['end']}")
+            if f["detail"] and sev != "ok":
+                lines.append(f"      {f['detail']}")
+            if f["next_step"] and sev in ("critical", "warning"):
+                lines.append(f"      {c['bold']}→{c['end']} {f['next_step']}")
+    lines += ["", f"  {counts['critical']} critical · {counts['warning']} warnings · {counts['info']} notes · {counts['ok']} OK",
+              f"  {c['dim']}Saved: {report['session_dir']}{c['end']}"]
+    return "\n".join(lines)
+
+
+def main():
+    args = set(sys.argv[1:])
+    color = sys.stdout.isatty() and "--no-color" not in args
+    if "--last" in args:
+        latest = RUN_DIR / "latest"
+        report = json.loads(read(latest / "scan.json", "{}") or "{}")
+        if not report:
+            sys.exit("No scan yet this session — run: sysmedic-scan")
+        print(json.dumps(report, indent=2) if "--json" in args else render(report, color))
+        return
+    if os.geteuid() != 0:
+        sys.exit("sysmedic-scan must run as root")
+
+    if sys.stdout.isatty() and "--json" not in args:
+        print("  Scanning (read-only)… disks, health, filesystems, boot, network", flush=True)
+    system = collect_system()
+    check_self()
+    disks = collect_block_devices()
+    for d in disks:
+        d["health"] = smart(d)
+        assess_health(d, d["health"])
+    assess_guard(disks)
+    fsresults = collect_filesystems(disks)
+    assess_boot(fsresults, system)
+    network = collect_network()
+
+    sd = session_dir(system)
+    report = {"sysmedic_scan": 1, "time": datetime.datetime.now().isoformat(timespec="seconds"),
+              "session_dir": str(sd), "system": system,
+              "disks": [{k: d.get(k) for k in ["path", "model", "serial", "size", "tran", "rota", "health"]} for d in disks],
+              "filesystems": fsresults, "network": network,
+              "findings": sorted(findings, key=lambda f: SEVERITIES.index(f["severity"]))}
+    # Identifiers stay out of everything the AI reads (it may be a cloud model)
+    private = {"system_serial": system.pop("serial", ""),
+               "disk_serials": {d["path"]: d.pop("serial", "") for d in report["disks"]}}
+    pdir = Path("/mnt/persist/private") if is_mounted("/mnt/persist") else RUN_DIR / "private"
+    pdir.mkdir(parents=True, exist_ok=True)
+    os.chmod(pdir, 0o700)
+    (pdir / f"{sd.name}.json").write_text(json.dumps(private, indent=2))
+    (sd / "scan.json").write_text(json.dumps(report, indent=2))
+    (sd / "summary.txt").write_text(render(report, color=False) + "\n")
+    history = sd / "scans"
+    history.mkdir(exist_ok=True)
+    (history / f"scan-{datetime.datetime.now():%H%M%S}.json").write_text(json.dumps(report, indent=2))
+    latest = RUN_DIR / "latest"
+    if latest.is_symlink() or latest.exists():
+        latest.unlink()
+    latest.symlink_to(sd)
+
+    print(json.dumps(report, indent=2) if "--json" in args else render(report, color))
+    sevs = {f["severity"] for f in findings}
+    sys.exit(2 if "critical" in sevs else 1 if "warning" in sevs else 0)
+
+
+if __name__ == "__main__":
+    main()

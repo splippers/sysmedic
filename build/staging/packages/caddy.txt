@@ -1,0 +1,3 @@
+# Caddy-only extras (the workshop): deep data recovery, imaging, comfort
+safecopy fsarchiver partclone nwipe ext4magic foremost scalpel extundelete wimtools libfsapfs-utils apfsprogs dislocker
+yara chkrootkit rkhunter htop btop ncdu mc rclone sshfs pv jq p7zip-full lz4 tree lsof strace tmux

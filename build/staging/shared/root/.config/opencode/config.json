@@ -1,0 +1,176 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "username": "SysMedic-OSR",
+  "model": "opencode/big-pickle",
+  "provider": {
+    "opencode": {
+      "models": {
+        "big-pickle": {
+          "name": "Big Pickle (Go plan)",
+          "limit": {
+            "context": 200000,
+            "output": 32000
+          }
+        }
+      }
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local fallback)",
+      "options": {
+        "baseURL": "http://localhost:11434/v1"
+      },
+      "models": {
+        "qwen2.5:7b": {
+          "name": "Qwen 2.5 7B (offline agent)",
+          "limit": {
+            "context": 16384,
+            "output": 4096
+          }
+        },
+        "qwen2.5:3b": {
+          "name": "Qwen 2.5 3B (offline agent, low RAM)",
+          "limit": {
+            "context": 16384,
+            "output": 4096
+          }
+        },
+        "jonotron:v3": {
+          "name": "Jonotron v3 (offline chat, no tools)",
+          "tool_call": false,
+          "limit": {
+            "context": 16384,
+            "output": 4096
+          }
+        }
+      }
+    }
+  },
+  "instructions": [
+    "/opt/sysmedic/SYSMEDIC-AGENT.md"
+  ],
+  "permission": {
+    "bash": {
+      "*": "ask",
+      "lsblk*": "allow",
+      "blkid*": "allow",
+      "findmnt*": "allow",
+      "df*": "allow",
+      "free*": "allow",
+      "uname*": "allow",
+      "lspci*": "allow",
+      "lsusb*": "allow",
+      "ip *": "allow",
+      "ping *": "allow",
+      "dmesg*": "allow",
+      "smartctl*": "allow",
+      "nvme list*": "allow",
+      "nvme smart-log*": "allow",
+      "efibootmgr": "allow",
+      "efibootmgr -v": "allow",
+      "sfdisk -d *": "allow",
+      "sfdisk -l*": "allow",
+      "fdisk -l*": "allow",
+      "sgdisk -p *": "allow",
+      "dumpe2fs -h *": "allow",
+      "e2fsck -n *": "allow",
+      "fsck.vfat -n *": "allow",
+      "ntfsinfo *": "allow",
+      "hivexget *": "allow",
+      "journalctl*": "allow",
+      "sysmedic-scan*": "allow",
+      "sysmedic-guard status*": "allow",
+      "mount -o ro *": "allow",
+      "umount *": "allow",
+      "cryptsetup luksDump *": "allow",
+      "testdisk /list*": "allow",
+      "cat /run/sysmedic/latest/*": "allow",
+      "cat /proc/*": "allow",
+      "cat /sys/*": "allow",
+      "ls /run/sysmedic*": "allow",
+      "ls /dev*": "allow",
+      "ls /sys/*": "allow",
+      "echo *": "allow",
+      "sysmedic-win": "allow",
+      "sysmedic-win info*": "allow",
+      "sysmedic-win crashes*": "allow",
+      "sysmedic-win events*": "allow",
+      "sysmedic-win autoruns*": "allow",
+      "sysmedic-win malware*": "allow",
+      "sysmedic-win help": "allow",
+      "sysmedic-note *": "allow",
+      "sysmedic-report*": "allow",
+      "sysmedic-dash": "allow",
+      "ping6 *": "allow",
+      "tracepath *": "allow",
+      "traceroute *": "allow",
+      "mtr -r*": "allow",
+      "mtr --report*": "allow",
+      "dig *": "allow",
+      "nslookup *": "allow",
+      "host *": "allow",
+      "whois *": "allow",
+      "ss *": "allow",
+      "ss": "allow",
+      "ethtool *": "allow",
+      "iw dev*": "allow",
+      "iw list": "allow",
+      "nmcli dev*": "allow",
+      "nmcli general*": "allow",
+      "nmcli -t *": "allow",
+      "resolvectl status*": "allow",
+      "resolvectl query *": "allow",
+      "ip a*": "allow",
+      "ip -br *": "allow",
+      "ip r*": "allow",
+      "ip -4 *": "allow",
+      "ip -6 *": "allow",
+      "ip link show*": "allow",
+      "sensors*": "allow",
+      "inxi*": "allow",
+      "hwinfo --short*": "allow",
+      "lshw -short*": "allow",
+      "lsscsi*": "allow",
+      "sysmedic-hwtest report*": "allow",
+      "sysmedic-hwtest battery*": "allow",
+      "sysmedic-hwtest inventory*": "allow",
+      "upower *": "allow",
+      "acpi*": "allow",
+      "lscpu*": "allow",
+      "cpuid*": "allow",
+      "ras-mc-ctl --summary*": "allow",
+      "ras-mc-ctl --errors*": "allow",
+      "edac-util*": "allow",
+      "blockdev *--setrw*": "deny",
+      "blockdev --setrw*": "deny",
+      "hdparm *-r*": "deny",
+      "sysmedic-unlock*": "deny",
+      "sysmedic-guard unlock*": "deny",
+      "*TIOCSTI*": "deny",
+      "echo 0 > /sys/*/ro*": "deny",
+      "sysmedic-win bitlocker*": "deny",
+      "sysmedic-win fix-*": "deny",
+      "sysmedic-win reset-password*": "deny",
+      "cryptsetup open*": "deny",
+      "chntpw*": "deny",
+      "nwipe*": "deny",
+      "wipefs*": "deny",
+      "mkfs*": "deny",
+      "dd *of=/dev/*": "deny",
+      "shred*": "deny"
+    },
+    "edit": "ask",
+    "webfetch": "allow",
+    "external_directory": {
+      "*": "ask",
+      "/run/sysmedic/latest/*": "allow",
+      "/run/sysmedic/latest/**": "allow",
+      "/run/sysmedic/sessions/**": "allow",
+      "/mnt/persist/sessions/*": "allow",
+      "/mnt/persist/sessions/**": "allow",
+      "/mnt/persist/backups/**": "allow",
+      "/opt/sysmedic/*": "allow",
+      "/opt/sysmedic/**": "allow"
+    }
+  }
+}

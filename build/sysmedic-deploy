@@ -1,0 +1,223 @@
+#!/bin/bash
+# sysmedic-deploy — install the shared SysMedic core (+ edition files) onto a drive.
+#
+#   ./sysmedic-deploy --caddy [/dev/sdX]   update the plugged-in caddy SSD in place
+#   ./sysmedic-deploy --stick-image        rebuild the stick image only (sysmedic-v2.iso, stick-test.img)
+#   ./sysmedic-deploy --stick [/dev/sdX]   rebuild and write the stick; its sessions are backed up and restored
+#   ./sysmedic-deploy --version            print the version the shared core would get
+#
+# Source of truth: staging/shared/ (identical on both), staging/editions/<edition>/,
+# staging/agent/{core,caddy,stick}.md. Both drives get the same version stamp when
+# their shared core is the same, so /etc/sysmedic/version tells you if they're in step.
+set -euo pipefail
+cd "$(dirname "$0")"
+KIT=$PWD
+ST=$KIT/staging
+STICK_ROOT=$KIT/root
+WORK=$(mktemp -d /tmp/sysmedic-deploy.XXXX)
+trap 'cleanup' EXIT
+
+say()  { echo -e "\033[1m==>\033[0m $*"; }
+die()  { echo -e "\033[1;31mERROR:\033[0m $*" >&2; exit 1; }
+
+MOUNTS=()
+cleanup() {
+    for ((i=${#MOUNTS[@]}-1; i>=0; i--)); do sudo umount "${MOUNTS[i]}" 2>/dev/null || true; done
+    rm -rf "$WORK" 2>/dev/null || true
+}
+mnt() { sudo mount "$@"; MOUNTS+=("${@: -1}"); }
+
+version() {
+    local h
+    h=$(cd "$ST/shared" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-8)
+    echo "$(date +%Y.%m.%d)-$h"
+}
+
+host_disk() { lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -1; }
+
+# install_tree ROOT EDITION → sets HOOKS_CHANGED=1 if any initramfs hook changed
+install_tree() {
+    local root=$1 ed=$2 before after v
+    v=$(version)
+    before=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null" | md5sum)
+    sudo rsync -rlpt --chown=root:root "$ST/shared/" "$root/"
+    [ -d "$ST/editions/$ed" ] && sudo rsync -rlpt --chown=root:root "$ST/editions/$ed/" "$root/"
+    # AI instructions: shared core with this edition's toolkit section
+    python3 - "$ST/agent/core.md" "$ST/agent/$ed.md" > "$WORK/agent.md" <<'EOF'
+import sys
+core, ed = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+print(core.replace("<!-- SYSMEDIC EDITION SECTION -->", ed.strip() + "\n\n---"), end="")
+EOF
+    sudo install -D -o root -g root -m 644 "$WORK/agent.md" "$root/opt/sysmedic/SYSMEDIC-AGENT.md"
+    sudo ln -sf sysmedic-guard "$root/usr/local/sbin/sysmedic-lock"
+    sudo ln -sf sysmedic-guard "$root/usr/local/sbin/sysmedic-unlock"
+    sudo ln -sf ambulance "$root/usr/local/bin/menu"
+    sudo ln -sf sysmedic-scan "$root/usr/local/bin/scan"
+    sudo mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
+    sudo ln -sf /etc/systemd/system/sysmedic-transcript.service "$root/etc/systemd/system/multi-user.target.wants/sysmedic-transcript.service"
+    sudo grep -q 'sysmedic/audit.sh' "$root/root/.bashrc" 2>/dev/null || \
+        printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
+    echo "$ed" | sudo tee "$root/etc/sysmedic/edition" >/dev/null
+    echo "$v" | sudo tee "$root/etc/sysmedic/version" >/dev/null
+    after=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null" | md5sum)
+    HOOKS_CHANGED=0; [ "$before" = "$after" ] || HOOKS_CHANGED=1
+    DEPLOYED_VERSION=$v
+    say "Installed SysMedic $ed edition v$v into $root"
+}
+
+chroot_run() {   # chroot_run ROOT CMD...
+    local root=$1; shift
+    for d in dev proc sys; do mnt --bind "/$d" "$root/$d"; done
+    sudo chroot "$root" "$@"
+    mountpoint -q "$root/sys/firmware/efi/efivars" && sudo umount "$root/sys/firmware/efi/efivars"
+    for d in sys proc dev; do sudo umount "$root/$d"; MOUNTS=("${MOUNTS[@]/$root\/$d}"); done
+}
+
+# with_net_chroot ROOT CMD...: chroot with network, and services prevented from starting
+with_net_chroot() {
+    local root=$1; shift
+    for d in dev dev/pts proc sys; do mnt --bind "/$d" "$root/$d"; done
+    sudo mv "$root/etc/resolv.conf" "$root/etc/resolv.conf.sysmedic-deploy"
+    sudo cp /etc/resolv.conf "$root/etc/resolv.conf"
+    printf '#!/bin/sh\nexit 101\n' | sudo tee "$root/usr/sbin/policy-rc.d" >/dev/null; sudo chmod 755 "$root/usr/sbin/policy-rc.d"
+    local rc=0
+    sudo chroot "$root" "$@" || rc=$?
+    sudo rm -f "$root/usr/sbin/policy-rc.d" "$root/etc/resolv.conf"
+    sudo mv "$root/etc/resolv.conf.sysmedic-deploy" "$root/etc/resolv.conf"
+    mountpoint -q "$root/sys/firmware/efi/efivars" && sudo umount "$root/sys/firmware/efi/efivars"
+    for d in sys proc dev/pts dev; do sudo umount "$root/$d"; MOUNTS=("${MOUNTS[@]/$root\/$d}"); done
+    return $rc
+}
+
+# install_packages ROOT EDITION: install anything missing from packages/shared.txt + packages/EDITION.txt
+install_packages() {
+    local root=$1 ed=$2 want missing=() p
+    want=$( { cat "$ST/packages/shared.txt"; cat "$ST/packages/$ed.txt" 2>/dev/null || true; } | sed 's/#.*//' | tr -s ' \t' '\n' | grep -v '^$' | sort -u)
+    for p in $want; do
+        sudo chroot "$root" dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || missing+=("$p")
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        say "Installing ${#missing[@]} package(s) on the $ed edition: ${missing[*]}"
+        with_net_chroot "$root" bash -c "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -q --no-install-recommends ${missing[*]} 2>&1 | grep -E '^E:|newly installed'; apt-get clean"
+        [ "$ed" = stick ] && sudo find "$root/var/lib/apt/lists" -type f ! -name lock -delete
+    else
+        say "All $(echo "$want" | wc -w) listed packages already present on the $ed edition"
+    fi
+    for p in $(sed 's/#.*//' "$ST/packages/mask.txt" | tr -s ' \t' '\n' | grep -v '^$'); do
+        sudo ln -sf /dev/null "$root/etc/systemd/system/$( [[ $p == *.* ]] && echo "$p" || echo "$p.service")"
+    done
+}
+
+# ── Caddy ──────────────────────────────────────────────────────────────────
+
+find_caddy() {   # a USB disk (not this PC's) whose ext4 root carries SysMedic's caddy layout
+    local hd d p ed
+    hd=$(host_disk)
+    for d in $(lsblk -dno NAME,TRAN | awk '$2=="usb"{print $1}'); do
+        [ "$d" = "$hd" ] && continue
+        for p in $(lsblk -lno NAME,FSTYPE "/dev/$d" | awk '$2=="ext4"{print $1}'); do
+            sudo mount -o ro,noload "/dev/$p" "$WORK/probe" 2>/dev/null || continue
+            ed=$(cat "$WORK/probe/etc/sysmedic/edition" 2>/dev/null || true)
+            [ "$ed" = caddy ] || { [ -d "$WORK/probe/srv/sysmedic" ] && [ -f "$WORK/probe/opt/sysmedic/rescue-menu.sh" ] && ed=caddy; }
+            sudo umount "$WORK/probe"
+            [ "$ed" = caddy ] && { echo "/dev/$d"; return; }
+        done
+    done
+}
+
+deploy_caddy() {
+    local dev=${1:-} root=$WORK/caddy esp
+    mkdir -p "$WORK/probe" "$root"
+    [ -n "$dev" ] || dev=$(find_caddy)
+    [ -n "$dev" ] || die "No caddy found (plug it in, or give the device: --caddy /dev/sdX)"
+    [ "${dev#/dev/}" != "$(host_disk)" ] || die "$dev is this PC's own disk"
+    say "Caddy: $dev ($(lsblk -dno MODEL,SERIAL "$dev" | xargs))"
+    local rootp; rootp=$(lsblk -lpno NAME,FSTYPE "$dev" | awk '$2=="ext4"{print $1; exit}')
+    esp=$(lsblk -lpno NAME,FSTYPE "$dev" | awk '$2=="vfat"{print $1; exit}')
+    mnt "$rootp" "$root"
+    [ -n "$esp" ] && mnt "$esp" "$root/boot/efi"
+    install_tree "$root" caddy
+    install_packages "$root" caddy
+    if [ "$HOOKS_CHANGED" = 1 ]; then
+        say "An initramfs hook changed: rebuilding the caddy's initramfs"
+        chroot_run "$root" update-initramfs -u -k all
+    fi
+    sync
+    say "Caddy updated. Safe to unplug once this finishes."
+}
+
+# ── Stick ──────────────────────────────────────────────────────────────────
+
+build_stick_image() {
+    local kv
+    install_tree "$STICK_ROOT" stick
+    install_packages "$STICK_ROOT" stick
+    sudo rm -f "$STICK_ROOT/opt/sysmedic/menu.sh"      # the stick uses rescue-menu.sh like the caddy
+    if [ "$HOOKS_CHANGED" = 1 ]; then
+        kv=$(ls "$STICK_ROOT/usr/lib/modules" | sort -V | tail -1)
+        say "An initramfs hook changed: rebuilding the stick's initrd for $kv"
+        chroot_run "$STICK_ROOT" update-initramfs -c -k "$kv"
+        sudo cp "$STICK_ROOT/boot/initrd.img-$kv" "$KIT/kernel/initrd"
+        sudo rm -f "$STICK_ROOT"/boot/initrd.img*
+    fi
+    say "Building the stick ISO"
+    ./build-iso.sh | tail -2
+    rm -f stick-test.img; truncate -s "$(sudo blockdev --getsize64 "${STICK_DEV:-/dev/null}" 2>/dev/null || echo 15376318464)" stick-test.img
+    ./make-stick.sh stick-test.img | tail -1
+    say "Stick image ready: sysmedic-v2.iso, stick-test.img (test with QEMU before writing)"
+}
+
+find_stick() {   # a USB disk with the SysMedic ISO and a persistence partition
+    local hd d
+    hd=$(host_disk)
+    for d in $(lsblk -dno NAME,TRAN | awk '$2=="usb"{print $1}'); do
+        [ "$d" = "$hd" ] && continue
+        lsblk -nro LABEL "/dev/$d" | grep -qx SYSMEDIC_2404 && lsblk -nro LABEL "/dev/$d" | grep -qx FOG_AMB_PERSIST && { echo "/dev/$d"; return; }
+    done
+}
+
+deploy_stick() {
+    local dev=${1:-} persist tarball n
+    [ -n "$dev" ] || dev=$(find_stick)
+    [ -n "$dev" ] || die "No SysMedic stick found (give the device: --stick /dev/sdX)"
+    [ "${dev#/dev/}" != "$(host_disk)" ] || die "$dev is this PC's own disk"
+    STICK_DEV=$dev
+    say "Stick: $dev ($(lsblk -dno MODEL,SERIAL,SIZE "$dev" | xargs))"
+    build_stick_image
+    for p in $(lsblk -lpno NAME "$dev" | tail -n +2); do findmnt -rno TARGET -S "$p" >/dev/null && sudo umount "$p"; done
+    persist=$(lsblk -lpno NAME,LABEL "$dev" | awk '$2=="FOG_AMB_PERSIST"{print $1; exit}')
+    mkdir -p "$KIT/stick-sessions-backup" "$WORK/persist"
+    tarball=$KIT/stick-sessions-backup/stick-persist-$(date +%Y%m%d-%H%M%S).tar
+    if [ -n "$persist" ]; then
+        mnt -o ro "$persist" "$WORK/persist"
+        sudo tar -C "$WORK/persist" -cpf "$tarball" $(cd "$WORK/persist" && sudo ls -d sessions logs backups private transcripts claude-review 2>/dev/null) 2>/dev/null || true
+        sudo umount "$WORK/persist"; MOUNTS=("${MOUNTS[@]/$WORK\/persist}")
+        sudo chmod 600 "$tarball"
+        n=$(sudo tar -tf "$tarball" | grep -c '^sessions/[^/]*/$' || true)
+        say "Backed up the stick's data ($n session(s)) → $tarball"
+    fi
+    say "Writing the stick (about 15–20 minutes on a USB 2.0 stick)"
+    ./make-stick.sh "$dev" | tail -1
+    say "Verifying the written image against the tested one"
+    local size; size=$(stat -c %s sysmedic-v2.iso)
+    # sectors 0-2 hold the partition tables, which get a fresh GUID for the persistence partition
+    if ! sudo cmp -s -n $((size - 1536)) -i 1536 "$dev" stick-test.img; then die "Verification failed: the stick doesn't match the tested image"; fi
+    say "Verified."
+    if [ -n "$persist" ] && [ -s "$tarball" ]; then
+        persist=$(lsblk -lpno NAME,LABEL "$dev" | awk '$2=="FOG_AMB_PERSIST"{print $1; exit}')
+        mnt "$persist" "$WORK/persist"
+        sudo tar -C "$WORK/persist" -xpf "$tarball"
+        sudo chmod 700 "$WORK/persist/private" 2>/dev/null || true
+        sync; sudo umount "$WORK/persist"; MOUNTS=("${MOUNTS[@]/$WORK\/persist}")
+        say "Restored the stick's sessions."
+    fi
+    say "Stick updated: SysMedic stick edition v$DEPLOYED_VERSION. Safe to unplug."
+}
+
+case "${1:-}" in
+    --caddy)       deploy_caddy "${2:-}" ;;
+    --stick-image) build_stick_image ;;
+    --stick)       deploy_stick "${2:-}" ;;
+    --version)     version ;;
+    *)             sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

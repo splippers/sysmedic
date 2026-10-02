@@ -1,325 +1,95 @@
-# 🩺 SysMedic — AI-Powered System Recovery Agent
+# SysMedic
 
-**SysMedic** is a bootable Ubuntu 24.04 USB rescue environment powered by [OpenCode](https://opencode.chat/) AI. It provides a complete multi-OS repair toolkit for diagnosing and fixing Windows, Linux, and macOS systems — all from a single bootable USB stick, operable entirely from the framebuffer console.
+**An AI-assisted rescue system for field engineers.** Boot a broken PC from SysMedic. In about a minute it tells you, in plain English, what's wrong with the machine. An AI assistant then helps you fix it, while the customer's disks stay protected against any write you haven't explicitly allowed.
 
----
-
-## Quick Start
-
-1. Boot from the USB
-2. At the shell prompt, type:
-   ```
-   sysmedic-menu
-   ```
-3. Choose from 28 tools covering diagnostics, WiFi, BitLocker unlock, Windows/macOS/Linux repair
+SysMedic runs on Ubuntu 24.04 with the 7.0 HWE kernel. It boots on UEFI (with Secure Boot on) and legacy BIOS machines.
 
 ---
 
-## What It Can Do
+## Two editions, one core
 
-### BitLocker
-- **CLI unlock** — paste a 48-digit recovery key, user password, or BEK file
-- **Web unlock portal** — spins up a LAN webserver (port 8080). Open the page on your phone, paste the recovery key from AD/AAD, and the drive unlocks automatically. After unlock, it runs deep diagnostics.
+| | **Caddy edition**: the workshop | **Stick edition**: the grab-bag |
+|---|---|---|
+| Medium | NVMe SSD in a USB 3 enclosure, installed Ubuntu (writable) | USB stick, live image (read-only squashfs, clean every boot) |
+| Toolkit | Everything, plus deep recovery, imaging, burn-in suite, macOS repair | Triage, network, Windows/BitLocker, hardware tests, basic recovery |
+| Offline AI | qwen2.5 7B on machines with 12 GB+ RAM, otherwise 3B | same |
+| Storage | ~200 GB free for disk images and sessions | persistence partition for sessions, backups and models |
+| Best for | Bench jobs, long repairs, data recovery | Quick diagnosis, the bag, machines you'd rather not plug the caddy into |
 
-### Windows Repair (12-20)
-| Option | What it fixes |
-|--------|--------------|
-| 12 | Diagnose Windows — reads EVTX logs, minidumps, CBS/DISM logs, identifies BSOD BugCheck codes with explanations |
-| 13 | Fix Windows Update — reset cache, clear SoftwareDistribution, DISM/SFC offline analysis, re-register WU DLLs |
-| 14 | NTFS check & repair (ntfsfix) |
-| 15 | Fix BCD bootloader |
-| 16 | Fix NTFS boot sector |
-| 17 | Reset Windows password (chntpw) |
-| 18 | Restore Windows EFI boot manager |
-| 19 | Mount Windows partition (read/write) |
-| 20 | Recover data from Windows |
-
-### macOS Repair (21-24)
-- **Scan** — detect HFS+ and APFS volumes
-- **Mount** — HFS+ read-write, APFS read-only via fsapfsmount
-- **Repair** — fsck.hfsplus (HFS+), apfsck (APFS)
-- **Recover** — copy user data to external drive
-
-### Linux Repair (6-10)
-- Fix GRUB bootloader
-- Fix corrupt initramfs (kernel panic)
-- Fix /etc/fstab (wrong UUIDs)
-- Fix oversized /boot (clean old kernels)
-- Chroot into Linux installation
-
-### Utilities
-- Full system diagnostic report
-- Drive clone/rescue (ddrescue with retry passes)
-- WiFi/WPS connection
-- OpenCode AI assistant
+Both editions share the same core: scan, safety layer, assistants, Windows toolkit, hardware tests, reports, dashboard and transcripts. They're built from this repo by `build/sysmedic-deploy`, which stamps both with the same version (e.g. `2026.10.02-42668268`) when their core matches. The version shows in the boot banner and the menu.
 
 ---
 
-## How to Build This System From Scratch
+## What it does
 
-### Prerequisites
-- Ubuntu 24.04 LTS Live USB (booted into "Try Ubuntu" mode)
-- Internet connection (WiFi or Ethernet)
-- About 15 minutes
+- **Triage scan at boot** (read-only): disk health (SMART/NVMe), filesystems, installed OSes, boot setup (EFI/BCD/GRUB/fstab/initramfs), BitLocker/LUKS, Windows crashes, event-log errors and suspicious autostarts, network and DNS, missing firmware, and SysMedic's own USB link speed. Every finding comes with a next step.
+- **Kernel write protection.** Every disk except SysMedic's own is read-only from the moment it appears. Writes need `sysmedic-unlock` on a console, which asks for a reason, takes backups first and is audited. The AI can't unlock.
+- **AI assistants:**
+  - **Cloud** (OpenCode with the free Big Pickle model, no login). Used only after the customer consents.
+  - **Offline** (`sysmedic-ask`, local qwen2.5 via Ollama). Read-only checks run straight away with full output on screen; anything else is shown to you first.
+- **Windows toolkit** (`sysmedic-win`): version and state, blue-screen stop codes decoded, event-log analysis, autoruns with suspicious entries flagged, a ClamAV malware scan, and **BitLocker unlock with the recovery key**. It can also roll back a stuck update, clear Fast Startup hibernation, and reset a local password.
+- **Hardware testing** (`sysmedic-hwtest`): health report, CPU/cooling stress, RAM (memtester, and MemTest86+ from the boot menu), disk self-tests and read-only speed/surface scans, GPU, keyboard/touchpad, audio, battery wear and inventory.
+- **Network toolkit:** ~60 tools, from ping/dig/mtr to tcpdump/tshark, iperf3, SMB/NFS, SNMP and Wi-Fi survey. Wi-Fi is joined with `nmtui`.
+- **Job reports:** a plain-English report per visit (found → fixed → still to do, work performed, backups, notes, sign-off), printable to PDF.
+- **Phone dashboard:** live findings, write-protection state, job notes and the report, on your phone via QR code. View and notes only; no repairs from the phone.
+- **Session transcripts:** every console and AI conversation is recorded and bundled into `claude-review.md` for improving SysMedic later.
 
-### Step 1: Install Base Dependencies
-
-```bash
-# System updates
-sudo apt-get update && sudo apt-get upgrade -y
-
-# Essential tools
-sudo apt-get install -y \
-    git curl wget smartmontools lshw \
-    ntfs-3g chntpw testdisk photorec \
-    extundelete ddrescue \
-    hfsplus hfsutils hfsprogs \
-    apfsprogs libfsapfs-utils \
-    dislocker \
-    python3 python3-pip
-
-# Windows EVTX log parser
-sudo apt-get install -y python3-evtx libevtx-utils
-
-# Kernel modules for HFS+
-sudo modprobe hfsplus
-echo "hfsplus" | sudo tee -a /etc/modules
-
-# Networking tools
-sudo apt-get install -y wpasupplicant wireless-tools nmap netcat-openbsd
-
-# tmux + utilities
-sudo apt-get install -y tmux rsync
-```
-
-### Step 2: Install OpenCode AI Agent
-
-```bash
-# Download OpenCode (check https://opencode.chat for latest version)
-curl -sSf https://opencode.chat/install.sh | sh
-
-# Or manually: download the binary for Linux amd64
-# and place it in /usr/local/bin/opencode
-
-# Configure OpenCode for SysMedic
-mkdir -p ~/.config/opencode
-```
-
-Create `~/.config/opencode/config.json`:
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "opencode/big-pickle",
-  "provider": {
-    "opencode": {
-      "models": {
-        "big-pickle": {
-          "name": "Big Pickle",
-          "limit": {
-            "context": 128000,
-            "output": 16000
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-Create `~/.config/opencode/tui.json`:
-```json
-{
-  "mouse": false,
-  "dynamic_details_max_lines": 999999
-}
-```
-
-### Step 3: Set Up API Key
-
-```bash
-# Create auth.json (replace with your key)
-mkdir -p ~/.local/share/opencode
-cat > ~/.local/share/opencode/auth.json << 'EOF'
-{
-  "opencode-go": {
-    "type": "api",
-    "key": "sk-your-api-key-here"
-  }
-}
-EOF
-
-cat > ~/.local/share/opencode/account.json << 'EOF'
-{"user": {}, "accounts": {}}
-EOF
-```
-
-### Step 4: Get the SysMedic Scripts
-
-```bash
-git clone https://github.com/splippers/sysmedic.git /opt/sysmedic
-
-# Or if you're building from this repo:
-cd /opt/sysmedic
-```
-
-### Step 5: Install Dotfiles and Symlinks
-
-```bash
-# Copy dotfiles
-cp /opt/sysmedic/dotfiles/.bashrc ~/
-cp /opt/sysmedic/dotfiles/.profile ~/
-cp /opt/sysmedic/dotfiles/.tmux.conf ~/
-cp /opt/sysmedic/dotfiles/config.json ~/.config/opencode/
-cp /opt/sysmedic/dotfiles/tui.json ~/.config/opencode/
-
-# Create launcher symlinks
-ln -sf /opt/sysmedic/menu.sh /usr/local/bin/sysmedic-menu
-ln -sf /opt/sysmedic/menu.sh /usr/local/bin/sysmedic
-ln -sf /opt/sysmedic/scripts/wifi-connect.sh /usr/local/bin/wifi
-
-# Make scripts executable
-chmod +x /opt/sysmedic/menu.sh
-chmod +x /opt/sysmedic/scripts/*.sh
-chmod +x /opt/sysmedic/scripts/*.py
-chmod +x /opt/sysmedic/scripts/linux-repair/*.sh
-chmod +x /opt/sysmedic/scripts/macos-repair/*.sh
-chmod +x /opt/sysmedic/scripts/windows-repair/*.sh
-chmod +x /opt/sysmedic/sysmedic-diagnose
-```
-
-### Step 6: Environment Setup
-
-Add to `~/.bashrc` or `~/.profile`:
-
-```bash
-# Prevent OpenCode from overriding the terminal title
-export OPENCODE_DISABLE_TERMINAL_TITLE=1
-
-# Set keyboard to UK layout
-export KEYBOARD=gb
-
-# Terminal title
-export PS1='\[\e]0;SysMedic\a\]\u@\h:\w\$ '
-```
-
-### Step 7: Tmux Configuration
-
-`~/.tmux.conf`:
-```
-set -g mouse on
-set -g status-bg colour235
-set -g status-fg white
-set -g status-left '#[fg=green]#S #[fg=blue]SysMedic'
-set -g status-right '#[fg=yellow]%H:%M'
-set -g default-terminal 'screen-256color'
-```
-
-### Step 8: Persistence (Optional but Recommended)
-
-If you created a persistence partition when making the USB:
-
-```bash
-# Mount persistence
-mkdir -p /mnt/persist
-mount /dev/sdX2 /mnt/persist   # adjust device
-
-# Create reports directory
-mkdir -p /mnt/persist/reports
-ln -sf /mnt/persist/reports /root/reports
-```
+Full list: **[docs/CAPABILITIES.md](docs/CAPABILITIES.md)**
 
 ---
 
-## Project Structure
+## Quick start (field)
 
-```
-/opt/sysmedic/
-├── menu.sh                       # Main recovery menu (28 options)
-├── sysmedic-diagnose             # Quick diagnostic script
-├── sysmedic-netcheck             # Network check script
-├── .gitignore
-├── scripts/
-│   ├── bitlocker-unlock.sh       # CLI BitLocker unlock
-│   ├── bitlocker-web-unlock.py   # Web portal BitLocker unlock + diagnostics
-│   ├── bitlocker-web.sh          # Wrapper for web portal
-│   ├── wifi-connect.sh           # WiFi/WPS setup
-│   ├── craic-connect.sh          # Telemetry callback
-│   ├── install-ollama.sh         # Local LLM installer
-│   ├── sync-back.sh              # Backup sync script
-│   ├── linux-repair/
-│   │   ├── fix-grub.sh
-│   │   ├── fix-kernel-panic.sh
-│   │   ├── fix-fstab.sh
-│   │   └── fix-boot.sh
-│   ├── macos-repair/
-│   │   ├── scan-macos.sh
-│   │   ├── mount-macos.sh
-│   │   ├── repair-macos.sh
-│   │   └── recover-macos.sh
-│   └── windows-repair/
-│       ├── diagnose-windows.sh   # EVTX/minidump/CBS log collector
-│       ├── repair-windows.sh     # NTFS/BCD/boot/chntpw/EFI toolkit
-│       ├── repair-updates.sh     # Windows Update repair
-│       └── recover-windows.sh    # Data recovery from Windows
-├── dotfiles/
-│   ├── .bashrc
-│   ├── .profile
-│   ├── .tmux.conf
-│   ├── config.json               # OpenCode config
-│   └── tui.json                  # OpenCode TUI config
-├── usr-local-bin/
-│   ├── sysmedic                   # Main launcher → menu.sh
-│   ├── sysmedic-menu              # Alias → menu.sh
-│   ├── sysmedic-legacy            # Legacy stub (hints new name)
-│   └── wifi                       # Launcher → wifi-connect.sh
-└── auth/
-    ├── auth.sh                    # Auth setup script
-    └── auth.token.example         # Template (not actual keys)
-```
+1. **Power off** the machine. Plug in SysMedic (the caddy into a **USB 3 / SS port**). Boot from it (F12 / Esc / Option).
+2. Read the **triage scan**. Answer the cloud-AI consent question. Press Enter to start the assistant.
+3. **Console 2** (`Alt+F2`) is your engineer console. Unlock partitions, BitLocker and repairs happen here. Its banner lists the BitLocker volumes found, with the exact command to type.
+4. `menu` opens the rescue menu: Wi-Fi (2), triage (4), Windows tools (6), unlock/lock (11/12), job report (13), phone dashboard (14), hardware tests (16).
+5. Finish with `sysmedic-lock`, the **job report** (menu 13), and a clean shutdown.
+
+Step by step: **[docs/FIELD-GUIDE.md](docs/FIELD-GUIDE.md)**. On the drive itself: `sysmedic-help`.
 
 ---
 
-## Architecture: How the Web BitLocker Portal Works
+## Documentation
 
-```
-┌──────────────────┐       ┌──────────────────────┐
-│   Client Machine  │       │   Tech's Phone/Laptop │
-│   (SysMedic USB)  │       │   (Browser)           │
-│                   │       │                       │
-│  python3 http.    │◄─────►│  http://192.168.x.x:  │
-│  server :8080     │ HTTP  │       8080            │
-│                   │       │                       │
-│  dislocker -V     │       │  Paste recovery key   │
-│  /dev/sdX -pKEY   │       │  → POST /unlock       │
-│                   │       │                       │
-│  evtxexport →     │       │  See diagnostics:     │
-│  parse .evtx      │       │  • BSOD codes decoded │
-│  strings →        │       │  • WU error codes     │
-│  extract BugCheck │       │  • Driver issues      │
-│  grep CBS.log     │       │  • Crash timeline     │
-└──────────────────┘       └──────────────────────┘
-```
+| | |
+|---|---|
+| [CAPABILITIES](docs/CAPABILITIES.md) | Everything SysMedic can do, by area, with commands |
+| [FIELD-GUIDE](docs/FIELD-GUIDE.md) | A visit from boot to sign-off; consoles, menu, troubleshooting |
+| [SAFETY-AND-PRIVACY](docs/SAFETY-AND-PRIVACY.md) | Write protection, unlock, audit trail, AI permissions, consent, what's stored where |
+| [WINDOWS-AND-BITLOCKER](docs/WINDOWS-AND-BITLOCKER.md) | `sysmedic-win`: diagnosis, BitLocker, repairs |
+| [HARDWARE-TESTING](docs/HARDWARE-TESTING.md) | `sysmedic-hwtest` and the tools behind it; reading results |
+| [NETWORK](docs/NETWORK.md) | Network toolkit, Wi-Fi, DNS fallback |
+| [AI-ASSISTANTS](docs/AI-ASSISTANTS.md) | Cloud and offline AI, approvals, models, limits |
+| [EDITIONS-AND-DEPLOY](docs/EDITIONS-AND-DEPLOY.md) | Caddy vs stick, the build kit, `sysmedic-deploy`, versions, testing |
+| [IMPROVING-SYSMEDIC](docs/IMPROVING-SYSMEDIC.md) | Transcripts, `claude-review.md`, feedback, collecting sessions |
+| [CHANGELOG](docs/CHANGELOG.md) · [ROADMAP](ROADMAP.md) | History and what's next |
 
 ---
 
-## Error Code Decoders (Built In)
+## Repository layout
 
-The diagnostics page automatically decodes these Windows error codes:
+```
+build/                      the build kit: the source of truth for both editions
+  sysmedic-deploy           install onto the caddy, or build and write the stick
+  build-iso.sh, make-stick.sh, vm.py
+  staging/shared/           files installed identically on both editions (root-relative paths)
+  staging/editions/         per-edition files (caddy: stick-session collector)
+  staging/agent/            AI instructions: core + per-edition toolkit section
+  staging/packages/         package lists (shared, caddy, stick) and services kept off
+  staging/iso/              the stick's boot menu (GRUB)
+  tests/                    fixture generators for the QEMU tests
+docs/                       documentation (also installed on both drives)
+menu.sh, scripts/, ...      the caddy's advanced toolkit (option 15): stress/burn-in, imaging, macOS, extra Windows repairs
+```
 
-| Code | Meaning |
-|------|---------|
-| `0x80073701` | Component store corrupt — run DISM |
-| `0xc1900101` | Feature update rollback — driver issue |
-| `0x800f081f` | CBS corrupt — run SFC + DISM |
-| `0x000000d1` | DRIVER_IRQL — network/storage driver |
-| `0x00000133` | DPC_WATCHDOG — NVMe/SATA driver |
-| `0x00000116` | VIDEO_TDR — graphics driver timeout |
-| `0x00000124` | MACHINE_CHECK — CPU/cache/memory hardware |
+## Status and known limits
 
-Full decoder tables in `bitlocker-web-unlock.py` and `repair-updates.sh`.
-
----
+- Tested extensively in QEMU, including Secure Boot, BIOS, simulated faults and real BitLocker/registry/event-log fixtures. **Early real-hardware testing so far** (Dell Latitude 3410, Dell Pro 13 Plus).
+- The offline 3B model makes factual slips. Tool output is always on screen; trust it over the summary. The cloud model and the 7B model are better.
+- APFS is read-only (the read-write driver doesn't build on kernel 7.0). WPS isn't supported (use `nmtui`). Building a BCD from Linux isn't attempted (use WinRE).
+- The persistence partition and the caddy aren't encrypted. A lost drive exposes customer reports and backups.
 
 ## License
 
-MIT — use freely, fork wildly, save machines.
+MIT. Use freely, fork wildly, save machines.

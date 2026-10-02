@@ -1,0 +1,16 @@
+# Installed on BOTH editions (sysmedic-deploy installs anything missing). One package per line.
+# --- network ---
+iputils-ping iputils-arping iputils-tracepath traceroute mtr-tiny dnsutils whois nmap ncat tcpdump tshark termshark
+iperf3 iperf netcat-openbsd socat ethtool net-tools arp-scan nload iftop bmon nethogs iptraf-ng speedtest-cli fping
+hping3 ngrep curl wget openssh-client telnet tnftp lftp smbclient samba-common-bin cifs-utils nfs-common avahi-utils
+wireless-tools iw wavemon wpasupplicant hostapd dnsmasq-base bridge-utils vlan ipcalc sipcalc nbtscan snmp lldpd ndisc6
+tftp-hpa minicom picocom ipmitool network-manager
+# --- rescue ---
+gddrescue testdisk hfsprogs smartmontools efibootmgr nvme-cli exfatprogs ntfs-3g chntpw clamav libevtx-utils
+python3-hivex qrencode cryptsetup zstd rsync
+# --- hardware testing ---
+stress-ng s-tui stress sysbench memtester memtest86+ edac-utils rasdaemon lm-sensors i2c-tools cpuid msr-tools
+linux-tools-generic-hwe-24.04 fio e2fsprogs f3 hdparm sdparm sg3-utils lsscsi bonnie++ ioping
+glmark2-es2-drm mesa-utils vulkan-tools intel-gpu-tools radeontop nvtop
+upower acpi evtest libinput-tools alsa-utils v4l-utils bluez usbutils pciutils dmidecode lshw hwinfo inxi
+edid-decode read-edid fwupd powertop sysstat iotop-c

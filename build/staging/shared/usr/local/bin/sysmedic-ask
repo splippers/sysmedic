@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""sysmedic-ask — fast offline rescue assistant (local Ollama model).
+
+A deliberately small prompt (rules + the triage scan) so a CPU-only model can
+answer in about a minute, where a general coding agent's prompt takes ~9.
+The model proposes commands; the engineer approves each one. Approved
+commands run with the audit hook, and the kernel write-protection from
+sysmedic-guard still applies.
+
+Usage: sysmedic-ask [--explain] [--model NAME] [--warm]
+  --explain  start by asking for a plain-English summary and plan
+  --warm     pre-load the model and prompt into Ollama's cache, then exit
+"""
+import json
+import os
+import re
+import readline  # noqa: F401  (line editing for input())
+import select
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+OLLAMA = "http://127.0.0.1:11434"
+SUMMARY = "/run/sysmedic/latest/summary.txt"
+MAX_TOOL_ROUNDS = 8
+OUTPUT_TO_MODEL = 6000      # characters of command output the model sees (the engineer sees all of it)
+COMMAND_TIMEOUT = 180       # seconds; Ctrl-C stops a command early
+
+# Read-only diagnostics run without asking (they're still shown and audited, and the kernel
+# write-protection still applies). Anything else asks, with Enter meaning yes.
+READ_ONLY = re.compile(r"""^\s*(lsblk|blkid|findmnt|df|du|free|uname|uptime|lscpu|lspci|lsusb|lsmod|dmidecode|hostname(\s+-[IfisdA])?\s*$
+    |ip\s+(-\w+\s+)*(a|addr|address|l|link|r|route|n|neigh|neighbour|-br|-s)\b(?!.*\b(add|del|set|flush|change|replace)\b)
+    |ping|ping6|arping|traceroute|tracepath|mtr\s+.*(-\w*r\w*|--report)|dig|nslookup|host|whois|resolvectl\s+(status|query|dns)
+    |nmcli\s+(-\w+\s+)*(dev|device|con|connection|general|radio)\s*(status|show|list|wifi\s+list)?\s*$|iw\s+(dev|list|phy)|iwconfig|ethtool(?!\s+-[sKAGLE])
+    |ss|netstat|arp|arp-scan|nmap|curl\s+(-\w+\s+)*-[sIL]*I|speedtest-cli|iperf3\s+-c
+    |smartctl\s+(-[aHiAxlc]|--(all|health|info|xall))|nvme\s+(list|smart-log|id-ctrl)|hdparm\s+-I|sensors|journalctl|dmesg
+    |sysmedic-hwtest\s+(report|battery|inventory)\s*$|upower\s+(-e|-i\s+\S+|--dump)|acpi(\s+-\w+)*\s*$|sensors(\s+-\w+)*\s*$|inxi(\s+-[\w]+)*\s*$
+    |cat\s+/(proc|sys|run/sysmedic|etc)/|ls|stat|file|head|tail|wc|grep|sysmedic-(scan|win\s+(info|crashes|events|autoruns)|guard\s+status|net)
+    |efibootmgr\s*(-v)?\s*$|sfdisk\s+(-d|-l)|fdisk\s+-l|dumpe2fs\s+-h|ntfsinfo|mount\s+-o\s+ro\b|systemctl\s+(status|is-active|list-units))\b""", re.X)
+SHELL_META_WRITE = re.compile(r"(>|\btee\b|;\s*(rm|dd|mkfs)|\|\s*(sh|bash)\b|`|\$\()")
+
+SYSTEM = """You are SysMedic, an offline computer-repair assistant helping a field engineer at a customer's machine. You run as root on a live USB rescue system.
+
+Rules:
+- Start from the triage scan below and from command output you have actually seen. Never invent devices, sizes or results. If unsure, run a command to check.
+- Every customer disk is write-protected by the kernel: writes fail with "Permission denied" or "read-only". Only the engineer can lift this, by running `sysmedic-unlock /dev/X` on console 2 (Alt+F2). You cannot unlock disks; when a repair needs writing, say exactly which device and why, and ask the engineer.
+- Before changing anything, back it up. If a disk's health is failing, recommend imaging it with ddrescue before any repair.
+- Mount customer filesystems read-only to inspect them (mount -o ro).
+- To run a command, call the run_command tool. Never write "run_command" or a command call inside your text, and never list commands for the engineer to type.
+- Only use commands that exist on this Linux rescue system. Windows commands (shutdown -s, chkdsk, bootrec, dism) only work from Windows/WinRE: describe them as steps for the engineer instead.
+- Never shut down, reboot or power off this rescue computer.
+- Commands run without a keyboard: use non-interactive forms (ping -c 4, mtr -rwc 5, top -bn1, iftop -t -s 5, tcpdump -c 50, timeout 20 ...). Never start editors, pagers or full-screen tools.
+- Read-only diagnostics run straight away; anything else is shown to the engineer first.
+- Only discuss problems that appear in the scan or in output you have seen. Do not invent partitions, swap, files or problems.
+- Be brief and practical, in plain English. Plans: at most 6 numbered steps, most urgent first, each naming the exact device. After a repair, suggest re-running sysmedic-scan to confirm it worked.
+
+Triage scan of this machine:
+{scan}"""
+
+TOOLS = [{
+    "type": "function",
+    "function": {
+        "name": "run_command",
+        "description": "Run a bash command on the SysMedic rescue system as root and return its output. The engineer approves each command first.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The bash command to run"},
+                "why": {"type": "string", "description": "One short sentence explaining why"},
+            },
+            "required": ["command"],
+        },
+    },
+}]
+
+BOLD, DIM, CYAN, YELLOW, END = ("\033[1m", "\033[2m", "\033[36m", "\033[33m", "\033[0m") if sys.stdout.isatty() else ("",) * 5
+
+
+def pick_model():
+    with open("/proc/meminfo") as f:
+        kb = int(next(l for l in f if l.startswith("MemTotal")).split()[1])
+    return "qwen2.5:7b" if (kb + 524288) // 1048576 >= 12 else "qwen2.5:3b"
+
+
+def edition_note():
+    ed = open("/etc/sysmedic/edition").read().strip() if os.path.exists("/etc/sysmedic/edition") else "dev"
+    if ed == "stick":
+        return ("\nThis is the SysMedic stick edition: a lean live USB. If the job needs disk imaging, stress/burn-in tests, "
+                "macOS repair or file carving, say it needs the SysMedic caddy edition instead of improvising.")
+    if ed == "caddy":
+        return "\nThis is the SysMedic caddy edition: the full toolkit is installed (see /opt/sysmedic/SYSMEDIC-AGENT.md)."
+    return ""
+
+
+def system_message():
+    try:
+        scan = open(SUMMARY).read()
+    except OSError:
+        scan = "(No scan available yet. Suggest running sysmedic-scan.)"
+    return {"role": "system", "content": SYSTEM.format(scan=scan) + edition_note()}
+
+
+def ollama_chat(model, messages, stream=True, num_predict=None):
+    """Yield streamed message chunks from Ollama's /api/chat."""
+    options = {"temperature": 0.2, "num_ctx": 16384}
+    if num_predict is not None:
+        options["num_predict"] = num_predict
+    body = json.dumps({"model": model, "messages": messages, "tools": TOOLS, "stream": stream,
+                       "keep_alive": "30m", "options": options}).encode()
+    req = urllib.request.Request(f"{OLLAMA}/api/chat", body, {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=1800) as resp:
+        for line in resp:
+            if line.strip():
+                yield json.loads(line)
+
+
+def is_read_only(cmd):
+    """Auto-run only if every part of a chain or pipe (&&, ||, ;, |) is itself a read-only command."""
+    if SHELL_META_WRITE.search(cmd) or re.search(r"[\n&]\s*$|(^|[^&])&([^&]|$)", cmd):
+        return False                       # redirects, substitutions, backgrounding
+    parts = [p.strip() for p in re.split(r"\|\||&&|;|\|", cmd)]
+    return all(p and READ_ONLY.match(p) for p in parts)
+
+
+def stream_command(cmd):
+    """Run cmd, showing every line of output live on this console. Ctrl-C stops just this command."""
+    env = dict(os.environ, SYSMEDIC_AI="ask", BASH_ENV="/etc/sysmedic/audit.sh", TERM="dumb",
+               PAGER="cat", SYSTEMD_PAGER="", GIT_PAGER="cat")
+    p = subprocess.Popen(["bash", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+    fd, buf, out, start, status = p.stdout.fileno(), b"", [], time.time(), None
+
+    def emit(raw):
+        text = raw.decode(errors="replace").replace("\r", "")
+        out.append(text)
+        print("  │ " + text, flush=True)
+
+    print(f"  {DIM}┌─ output{END}", flush=True)
+    try:
+        while True:
+            ready, _, _ = select.select([fd], [], [], 0.5)
+            if ready:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                buf += chunk
+                *lines, buf = buf.split(b"\n")
+                for line in lines:
+                    emit(line)
+            elif p.poll() is not None:
+                break
+            if time.time() - start > COMMAND_TIMEOUT:
+                status = f"[stopped after {COMMAND_TIMEOUT}s — use a shorter, non-interactive form]"
+                break
+    except KeyboardInterrupt:
+        status = "[stopped by the engineer]"
+    if p.poll() is None:
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+            p.wait(timeout=5)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+    if buf:
+        emit(buf)
+    status = status or f"[exit status {p.returncode}]"
+    if p.returncode == 127 or any("command not found" in l for l in out[-3:]):
+        status += " — tool not installed"
+    print(f"  {DIM}└─ {status}{END}", flush=True)
+    return "\n".join(out), status
+
+
+def run_approved(call):
+    args = call.get("function", {}).get("arguments") or {}
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            args = {"command": args}
+    cmd = (args.get("command") or "").strip()
+    why = (args.get("why") or "").strip()
+    if not cmd:
+        return "Error: no command given."
+    if is_read_only(cmd):
+        print(f"\n  {CYAN}▶ running (read-only):{END} {BOLD}{cmd}{END}" + (f"  {DIM}— {why}{END}" if why else ""))
+    else:
+        print(f"\n  {YELLOW}AI wants to run:{END} {BOLD}{cmd}{END}")
+        if why:
+            print(f"  why: {why}")
+        while True:
+            try:
+                ans = input("  Run it? [Y]es / [n]o / [e]dit: ").strip().lower()
+            except EOFError:
+                ans = "n"
+            if ans in ("/quit", "/exit", "q"):
+                raise KeyboardInterrupt
+            if ans in ("n", "no"):
+                note = input("  (optional) tell the AI why not: ").strip()
+                return "The engineer declined to run this command." + (f" Reason: {note}" if note else "")
+            if ans in ("e", "edit"):
+                readline.set_startup_hook(lambda: readline.insert_text(cmd))
+                try:
+                    cmd = input("  edit> ").strip()
+                finally:
+                    readline.set_startup_hook()
+                if not cmd:
+                    continue
+                break
+            if ans in ("", "y", "yes"):
+                break
+    out, status = stream_command(cmd)
+    if len(out) > OUTPUT_TO_MODEL:
+        out = out[:4500] + "\n…[output truncated]…\n" + out[-1500:]
+    return f"Command: {cmd}\n{out}\n{status}"
+
+
+TEXT_CALL = re.compile(r'"command"\s*:\s*"((?:[^"\\]|\\.)+)"')
+CODE_BLOCK = re.compile(r"```(?:bash|sh|shell|console)?\n(.*?)```", re.S)
+
+
+def calls_from_text(content):
+    """Small models sometimes write a command in their text instead of calling the tool.
+    Offer each one, but never run it on Enter: prose is not an instruction, so it needs an explicit 'y'."""
+    cmds = [json.loads(f'"{m}"') for m in TEXT_CALL.findall(content)]
+    if not cmds:
+        cmds = [l.strip().lstrip("$# ").strip() for b in CODE_BLOCK.findall(content) for l in b.splitlines()]
+    cmds = [c for c in dict.fromkeys(cmds) if c and not c.startswith("#")][:4]
+    picked = []
+    for c in cmds:
+        try:
+            ans = input(f"\n  {YELLOW}The AI wrote this command in its text:{END} {BOLD}{c}{END}\n  Run it? [y/N] ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans in ("y", "yes"):
+            picked.append({"function": {"name": "run_command", "arguments": {"command": c}}})
+    return picked
+
+
+def safe_turn(model, messages):
+    """One assistant turn; Ctrl-C or /quit at an approval prompt returns to the question prompt."""
+    try:
+        assistant_turn(model, messages)
+    except KeyboardInterrupt:
+        print(f"\n  {DIM}(stopped){END}")
+        if messages[-1].get("role") == "assistant" and messages[-1].get("tool_calls"):
+            for c in messages[-1]["tool_calls"]:
+                messages.append({"role": "tool", "tool_name": "run_command", "content": "The engineer stopped this."})
+
+
+def assistant_turn(model, messages):
+    """Stream the model's reply, executing approved tool calls, until it answers in text."""
+    for _ in range(MAX_TOOL_ROUNDS):
+        print(f"\n{CYAN}SysMedic:{END} ", end="", flush=True)
+        t0 = time.time()
+        content, calls = "", []
+        try:
+            for chunk in ollama_chat(model, messages):
+                msg = chunk.get("message", {})
+                piece = msg.get("content", "")
+                if piece:
+                    print(piece, end="", flush=True)
+                    content += piece
+                calls += msg.get("tool_calls") or []
+        except KeyboardInterrupt:
+            print(f"\n  {DIM}(interrupted){END}")
+            messages.append({"role": "assistant", "content": content + " [interrupted by engineer]"})
+            return
+        print(f"  {DIM}({time.time() - t0:.0f}s){END}")
+        if not calls:
+            calls = calls_from_text(content)
+        messages.append({"role": "assistant", "content": content, **({"tool_calls": calls} if calls else {})})
+        if not calls:
+            return
+        for call in calls:
+            messages.append({"role": "tool", "tool_name": "run_command", "content": run_approved(call)})
+    print(f"\n  {DIM}(stopping after {MAX_TOOL_ROUNDS} command rounds — ask a follow-up to continue){END}")
+
+
+def save_conversation(messages, path):
+    """Keep the whole conversation (minus the system prompt) with this visit, for later review."""
+    if not path:
+        return
+    try:
+        with open(path, "w") as f:
+            for m in messages[1:]:
+                f.write(json.dumps(m) + "\n")
+    except OSError:
+        pass
+
+
+def conversation_path(model):
+    d = os.path.realpath("/run/sysmedic/latest")
+    if not os.path.isdir(d):
+        return None
+    os.makedirs(f"{d}/ai", exist_ok=True)
+    return f"{d}/ai/ask-{time.strftime('%H%M%S')}-{model.replace(':', '-')}.jsonl"
+
+
+def warm(model):
+    """Process the system prompt now so the engineer's first question starts fast."""
+    try:
+        for _ in ollama_chat(model, [system_message(), {"role": "user", "content": "Ready?"}], stream=False, num_predict=1):
+            pass
+    except (urllib.error.URLError, OSError):
+        sys.exit(1)
+
+
+def main():
+    args = sys.argv[1:]
+    model = args[args.index("--model") + 1] if "--model" in args else pick_model()
+    if "--warm" in args:
+        warm(model)
+        return
+    try:
+        urllib.request.urlopen(f"{OLLAMA}/api/version", timeout=3)
+    except (urllib.error.URLError, OSError):
+        sys.exit("Ollama isn't running. Start it with: start-ollama")
+
+    print(f"\n  {BOLD}SysMedic offline assistant{END} — {model} on this machine's CPU")
+    print(f"  {DIM}Read-only checks run straight away; anything else asks you first (Enter = yes). Ctrl-C stops a command.")
+    print(f"  Customer disks stay write-protected until you run sysmedic-unlock on Alt+F2.")
+    print(f"  Commands: /scan (re-run triage)  /new (fresh conversation)  /quit{END}")
+    messages = [system_message()]
+    log = conversation_path(model)
+    if "--explain" in args:
+        messages.append({"role": "user", "content": "Explain in plain English which findings in the scan matter most and why, then give a short repair plan (at most 6 steps, exact devices) in words. Don't run or list commands yet; we'll do the steps one at a time."})
+        safe_turn(model, messages)
+        save_conversation(messages, log)
+    while True:
+        try:
+            q = input(f"\n{BOLD}You:{END} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not q:
+            continue
+        if q in ("/quit", "/exit", "quit", "exit"):
+            return
+        if q == "/new":
+            messages = [system_message()]
+            log = conversation_path(model)
+            print(f"  {DIM}(fresh conversation){END}")
+            continue
+        if q == "/scan":
+            subprocess.run(["/usr/local/bin/sysmedic-scan"])
+            messages = [system_message()]
+            print(f"  {DIM}(conversation restarted with the new scan){END}")
+            continue
+        messages.append({"role": "user", "content": q})
+        safe_turn(model, messages)
+        save_conversation(messages, log)
+
+
+if __name__ == "__main__":
+    main()
