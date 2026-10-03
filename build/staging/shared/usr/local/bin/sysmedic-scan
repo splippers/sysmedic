@@ -158,7 +158,15 @@ def check_self():
                      "Power off first (SysMedic runs from this drive), then use a USB 3 port (often blue or marked SS) and a USB 3 cable.")
             elif speed:
                 find("ok", "sysmedic", f"SysMedic's drive is on a fast USB link ({speed // 1000} Gbit/s)")
-            return
+            break
+    # SysMedic's own EFI partition: if it fills up, bootloader and kernel updates fail
+    for esp in ("/boot/efi",):
+        if is_mounted(esp):
+            st = os.statvfs(esp)
+            if st.f_blocks and st.f_bavail / st.f_blocks < 0.10:
+                find("warning", "sysmedic", f"SysMedic's own EFI partition ({esp}) is {100 - st.f_bavail * 100 // st.f_blocks}% full",
+                     "Bootloader and kernel updates on SysMedic will fail when it's full.",
+                     "Move large files off it, e.g. to /srv/sysmedic (look with: du -ah /boot/efi | sort -h | tail)")
 
 
 def collect_block_devices():

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.10.03: lessons from a Windows 11 audit
+
+- The AI never reproduces credentials (passwords, security answers, keys, tokens) it finds; it reports them as found and redacted. It saves its reports in the session folder (so they're in the job record and review bundle) and flags company-managed devices.
+- The self-check warns when SysMedic's own EFI partition is nearly full. The caddy's was 100% full (a 505 MB macOS recovery image), now moved to `/srv/sysmedic/macos-recovery/`.
+- The version stamp covers the AI instructions and package lists as well as the shared files, dated by the last commit that changed them.
+
 ## 2026.10.02: two editions, one core
 
 **Editions and build**

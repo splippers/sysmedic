@@ -31,6 +31,8 @@ SysMedic works as root on other people's computers, with an AI assistant. This i
 | Unlock / blockdev / hdparm / BitLocker / repairs / chntpw / nwipe / mkfs | Refused by the tools themselves | Denied in config, and refused by the tools |
 | Reading customer files | Allowed (stays on the machine) | Asks outside SysMedic's folders |
 
+The AI is also instructed **never to reproduce credentials** it finds (passwords, hashes, security-question answers, keys, tokens, including remnants in deleted/slack space). It reports them as "found, redacted". It saves its written reports in the session folder, keeps customer identifiers to what a report needs, and flags company-managed machines (Entra ID/Intune/domain), where you need the organisation's authorisation.
+
 The AI is instructed not to shut down or reboot the rescue machine, never to suggest moving SysMedic's drive while running, not to call a machine virtual without `systemd-detect-virt`, and to record its own mistakes with `sysmedic-note --feedback`.
 
 ## Customer consent and the cloud

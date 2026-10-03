@@ -173,6 +173,9 @@ def bundle(quiet=False):
     missing = sorted(set(re.findall(r"([A-Za-z0-9_.+-]+): command not found", ask_text.replace("\\n", "\n"))))
     if missing:
         out.append("## Tools the AI wanted but weren't installed\n" + ", ".join(f"`{m}`" for m in missing if m) + "\n")
+    extra = sorted(p.name for p in sd.glob("*.md") if p.name != "claude-review.md")
+    if extra:
+        out.append("## Reports written during the visit\n" + "\n".join(f"- `{n}` (in the session folder)" for n in extra) + "\n")
     out.append("## Audit trail\n```\n" + "\n".join(session.audit_lines()) + "\n```\n")
     convs = []
     ai = sd / "ai"

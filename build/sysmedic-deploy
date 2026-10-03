@@ -29,8 +29,15 @@ mnt() { sudo mount "$@"; MOUNTS+=("${@: -1}"); }
 
 version() {
     local h
-    h=$(cd "$ST/shared" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-8)
-    echo "$(date +%Y.%m.%d)-$h"
+    # covers everything that ends up on the drives: shared files, AI instructions, package lists
+    h=$(cd "$ST" && find shared agent packages -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-8)
+    # date of the last commit that touched the shared core (so identical cores get identical versions);
+    # today's date only if there are uncommitted changes
+    local d repo; repo=$(cd "$(realpath "$ST")/../.." && pwd)
+    if git -C "$repo" diff --quiet HEAD -- build/staging/shared build/staging/agent build/staging/packages 2>/dev/null; then
+        d=$(git -C "$repo" log -1 --format=%cd --date=format:%Y.%m.%d -- build/staging/shared build/staging/agent build/staging/packages 2>/dev/null)
+    fi
+    echo "${d:-$(date +%Y.%m.%d)}-$h"
 }
 
 host_disk() { lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -1; }
