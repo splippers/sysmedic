@@ -8,12 +8,14 @@ At boot, with internet **and** customer consent (`y`), and 4 GB RAM plus an AVX 
 
 ## Cloud: OpenCode with Big Pickle
 
-- OpenCode (v2.0.22 on the caddy) with `opencode/big-pickle`, on the **free OpenCode Zen tier: no account, no key**. It starts by reading the scan, explaining the findings and proposing a plan, without changing anything.
+- OpenCode 1.18 with `opencode/big-pickle`, on the **free OpenCode Zen tier: no account, no key**. It starts by reading the scan, explaining the findings and proposing a plan, without changing anything.
+- **It is SysMedic.** OpenCode runs a dedicated **SysMedic** agent (the default; OpenCode's coding agents are switched off) whose system prompt is SysMedic's own instructions (`/opt/sysmedic/SYSMEDIC-AGENT.md`). That *replaces* OpenCode's "you are a coding assistant" prompt, so it knows what it is and what it's for, and the shorter prompt makes offline use faster.
+- **SysMedic look:** the SysMedic logo, a SysMedic theme in the 16 console colours (renders properly on the Linux console), rescue examples in the prompt, rescue tips instead of coding tips. The deploy applies this to OpenCode's binary (`build/opencode-brand.py`; logo and text only, same size, re-applied after any OpenCode update). Auto-update and sharing are off.
 - **Permissions:**
   - Read-only diagnostics run without asking (lsblk, smartctl, dmesg, ping, dig, `sysmedic-scan`, `sysmedic-win info/crashes/events/autoruns/malware`, `sysmedic-hwtest report`, …).
   - Everything else asks. File edits ask, and reads outside SysMedic's folders ask.
   - Unlock, blockdev, hdparm, BitLocker, repairs, chntpw, nwipe, mkfs and `dd of=/dev/…` are **denied**.
-- Full tool output is shown (not collapsed). Its history is wiped at each boot, and the visit's conversation is copied into the session for review.
+- **Full tool output is shown.** OpenCode normally cuts command output to a few lines behind "Click to expand", which needs a mouse; SysMedic starts every output expanded, so long results are read with **Page Up/Down**. Its history is wiped at each boot, and the visit's conversation is copied into the session for review.
 - If it says "Reconnect OpenCode Console": that was caused by a stale paid-plan login, now removed. Free use needs no login.
 
 ## Offline: `sysmedic-ask`

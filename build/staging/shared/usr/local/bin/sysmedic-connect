@@ -1,0 +1,70 @@
+#!/bin/bash
+# SysMedic's first screen: get online before the scan, so the cloud AI, malware signature updates and
+# the phone dashboard/BitLocker web unlock are available. Wired networks connect by themselves; this
+# offers Wi-Fi when there's no internet yet. Skipping (or waiting) carries on offline.
+#   sysmedic-connect           the boot screen (TTY1)
+#   sysmedic-connect --status  one line: how SysMedic is connected
+
+BOLD=$'\033[1m'; DIM=$'\033[2m'; GRN=$'\033[0;32m'; YEL=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
+
+online() { curl -s -o /dev/null --max-time 4 http://connectivity-check.ubuntu.com/; }
+wait_online() { local i; for i in $(seq 1 "$1"); do online && return 0; sleep 1; done; return 1; }
+via() {
+    local dev; dev=$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1)}')
+    local ssid; ssid=$(nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '$1 == "yes" {print $2; exit}')
+    echo "${dev:-?}${ssid:+ (Wi-Fi \"$ssid\")}"
+}
+wifi_dev() { nmcli -t -f DEVICE,TYPE device 2>/dev/null | awk -F: '$2 == "wifi" {print $1; exit}'; }
+
+if [ "${1:-}" = --status ]; then
+    if online; then echo "online via $(via)"; else echo "offline"; fi
+    exit 0
+fi
+
+clear
+echo ""
+echo "  ${BOLD}SysMedic · network${NC}"
+echo ""
+echo "  ${DIM}Checking for an internet connection…${NC}"
+if wait_online 8; then
+    echo "  ${GRN}✓ Online via $(via)${NC}"
+    sleep 2
+    exit 0
+fi
+
+dev=$(wifi_dev)
+if [ -z "$dev" ]; then
+    echo "  ${YEL}No internet, and no Wi-Fi adapter on this machine.${NC}"
+    echo "  Plug in an Ethernet cable, or connect a phone by USB and turn on USB tethering."
+    echo "  SysMedic works fully offline meanwhile (offline assistant, all the tools)."
+    read -r -t 20 -p "  Press Enter to continue… " _ || true
+    exit 0
+fi
+
+nmcli radio wifi on >/dev/null 2>&1
+echo "  No internet yet. Connecting gives you the ${BOLD}cloud AI${NC}, current malware signatures,"
+echo "  and the phone dashboard. Everything else works offline."
+echo ""
+echo "  ${BOLD}Wi-Fi networks nearby${NC}"
+list=$(nmcli -f SSID,SIGNAL,SECURITY device wifi list --rescan yes 2>/dev/null | head -9)
+if [ "$(echo "$list" | wc -l)" -gt 1 ]; then
+    echo "$list" | sed 's/^/    /'
+else
+    echo "    ${DIM}(none found yet — the Wi-Fi screen rescans)${NC}"
+fi
+echo ""
+echo "  ${DIM}Passwords are kept in memory only and forgotten at shutdown.${NC}"
+read -r -t 60 -p "  Press ${BOLD}Enter${NC} to choose a Wi-Fi network, or ${BOLD}s${NC} to skip (continues offline in 60 s): " a || a=s
+[ "$a" = s ] || [ "$a" = S ] && { echo ""; echo "  Continuing offline. Connect later with: wifi (or menu 2)"; sleep 2; exit 0; }
+
+/usr/local/bin/wifi
+clear
+echo ""
+echo "  ${DIM}Checking the connection…${NC}"
+if wait_online 20; then
+    echo "  ${GRN}✓ Online via $(via)${NC}"
+else
+    echo "  ${YEL}Still no internet.${NC} If the network has a sign-in page (hotel, guest Wi-Fi), it can't be"
+    echo "  completed from here: use a phone hotspot instead. Try again later with: wifi (or menu 2)"
+fi
+sleep 3

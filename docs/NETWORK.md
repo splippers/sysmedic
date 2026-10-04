@@ -3,7 +3,9 @@
 ## Getting connected
 
 - **Ethernet** and **USB tethering** (Android: Settings → Hotspot → USB tethering; iPhone: Personal Hotspot) work automatically via DHCP.
-- **Wi-Fi:** `wifi` (menu 2) opens NetworkManager's `nmtui` picker. Choose the network, enter the password, Esc to leave. The connection status is shown afterwards. Nothing is saved on the drive. WPS isn't supported.
+- **Wi-Fi:** offered on the **first screen at boot** (`sysmedic-connect`) when there's no internet yet. Later: `wifi` (menu 2) opens NetworkManager's `nmtui` picker. Choose the network, enter the password, Esc to leave. WPS isn't supported.
+- **Passwords stay in RAM.** NetworkManager keeps networks in `/run/NetworkManager/system-connections` (`conf.d/90-sysmedic-networks-in-ram.conf`), so they're forgotten at shutdown on both editions, the writable caddy included. The deploy also removes any Wi-Fi passwords saved on a drive before this.
+- `sysmedic-connect --status` prints how SysMedic is connected.
 - Check: `nmcli device`, `nmcli dev wifi list`, `ip -br addr`.
 
 ### When Wi-Fi doesn't appear

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.10.04: Wi-Fi first, BitLocker from a phone, OpenCode as SysMedic
+
+- **Network first:** the first screen at boot gets SysMedic online (`sysmedic-connect`): wired passes by itself, otherwise nearby Wi-Fi networks are listed and `nmtui` opens on Enter; skipping (or 60 s) carries on offline. The banner then shows how SysMedic is connected.
+- **Wi-Fi passwords in RAM only** on both editions (NetworkManager keyfile path in `/run`); the deploy removes any saved on a drive before.
+- **BitLocker web unlock** is back, rebuilt safely: `sysmedic-win bitlocker-web` (menu 6 → w). HTTPS with a per-run certificate, a secret QR link, read-only, Key ID shown, 5 wrong keys / 15 minutes and it stops, nothing logged. The old portal was removed in 2026.10.02 because it had no authentication. Tested against cryptsetup's BitLocker test volume: wrong link 404, wrong key refused, right key unlocked, link closed, key in no log.
+- **OpenCode is SysMedic:** a default SysMedic agent whose prompt is SysMedic's instructions (replacing OpenCode's coding-assistant prompt; it answers "I'm SysMedic…"); Build/Plan agents off; auto-update and sharing off.
+- **OpenCode looks like SysMedic:** SysMedic logo, a 16-colour console theme, rescue examples and tips (`build/opencode-brand.py`, applied by the deploy).
+- **No more "Click to expand":** tool output starts fully expanded (it needed a mouse); read long output with Page Up/Down. Verified: all 40 lines of a 40-line output drawn.
+- Correction: the OpenCode version is 1.18.34 (earlier notes said 2.0.22).
+
 ## 2026.10.04: deep Windows troubleshooting
 
 - `sysmedic-win evtx`: ingests **every** event log (not only System) with curated rules for the logs that explain problems, an error sweep of all others, Windows' boot-time measurements and a Security summary. Takes exported `.evtx` files too.
@@ -62,7 +72,7 @@
 **The merged caddy**
 - Kernel 7.0 and the full toolkit.
 - Credentials, old AI history, the always-on SSH and a bypassable auth gate removed.
-- OpenCode updated to v2.0.22: the stale Go-plan login caused "Reconnect OpenCode Console". The free tier needs no login.
+- OpenCode's stale Go-plan login removed: it caused "Reconnect OpenCode Console". The free tier needs no login.
 
 **Docs**
 - Full documentation in `docs/`, installed on both drives (`sysmedic-help`).

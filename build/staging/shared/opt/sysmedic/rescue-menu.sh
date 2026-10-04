@@ -100,6 +100,7 @@ while true; do
                 echo "  s) Updates & servicing (CBS, DISM, Windows Update, upgrade logs)"
                 echo ""
                 echo "  6) Unlock a BitLocker volume (recovery key)"
+                echo "  w) Unlock BitLocker from a phone/laptop (key typed there; secure link + QR)"
                 echo "  7) Roll back a half-installed update"
                 echo "  8) Clear hibernation / Fast Startup lock"
                 echo "  9) Reset a local account password"
@@ -112,6 +113,7 @@ while true; do
                     3) /usr/local/bin/sysmedic-win events | less -R ;;
                     4) /usr/local/bin/sysmedic-win autoruns | less -R ;;
                     5) /usr/local/bin/sysmedic-win malware ;;
+                    w|W) /usr/local/bin/sysmedic-win bitlocker-web ;;
                     c|C) /usr/local/bin/sysmedic-win checkup 2>&1 | less -R ;;
                     e|E) /usr/local/bin/sysmedic-win evtx | less -R ;;
                     r|R) /usr/local/bin/sysmedic-win registry | less -R ;;

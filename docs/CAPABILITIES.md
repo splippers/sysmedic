@@ -46,7 +46,7 @@ Details: [SAFETY-AND-PRIVACY](SAFETY-AND-PRIVACY.md)
 
 Details: [AI-ASSISTANTS](AI-ASSISTANTS.md)
 
-- **Cloud: OpenCode with Big Pickle** (OpenCode Zen free tier, no login). It starts by explaining the scan and proposing a plan. Read-only diagnostics run without prompts, file reads outside SysMedic's folders ask first, and unlock/bypass commands are blocked. Full tool output is shown, not collapsed.
+- **Cloud: OpenCode with Big Pickle** (OpenCode Zen free tier, no login), running as the **SysMedic** agent with SysMedic's logo, console theme, rescue tips and fully expanded tool output (Page Up/Down; no "click to expand"). It starts by explaining the scan and proposing a plan. Read-only diagnostics run without prompts, file reads outside SysMedic's folders ask first, and unlock/bypass commands are blocked. Full tool output is shown, not collapsed.
 - **Offline: `sysmedic-ask`** (Ollama, `qwen2.5:7b` on 12 GB+ RAM, otherwise `qwen2.5:3b`). The short prompt is pre-loaded at boot, so the first answer takes about a minute on CPU. Read-only commands run straight away with **full output streamed live on the console**; others ask (Enter = yes). Commands the model writes in its text need an explicit `y`. There's a time limit per command, and Ctrl-C stops just the current command.
 - Both know which edition they're on, the field lessons, and the tool list. They record limitations with `sysmedic-note --feedback`.
 
@@ -56,7 +56,7 @@ Details: [WINDOWS-AND-BITLOCKER](WINDOWS-AND-BITLOCKER.md)
 
 - Read-only: `info`, `crashes`, `events`, `autoruns`, `malware` (ClamAV; signatures on the drive, updated when online).
 - Deep troubleshooting (read-only): `evtx` (**every** event log: curated rules plus an error sweep, boot times, Security summary), `registry` (missing service/driver files, broken device filters, hijacks, protection/update policies, recent installs), `cbs` (CBS/CbsPersist, DISM, Windows Update and upgrade logs: failing updates, decoded HRESULTs, corruption, SFC, a verdict). `checkup` runs everything and saves `windows-checkup-*.md` in the session. `evtx`/`cbs` also take exported files.
-- Engineer only: `bitlocker` (48-digit recovery key or password; read-only unless `--rw`), `fix-update`, `fix-hibernation`, `reset-password` (local accounts, `chntpw`).
+- Engineer only: `bitlocker` (48-digit recovery key or password; read-only unless `--rw`), `bitlocker-web` (the key typed on a phone/laptop on the same network: HTTPS, secret QR link, read-only, self-stopping), `fix-update`, `fix-hibernation`, `reset-password` (local accounts, `chntpw`).
 - Also: chntpw, hivex tools, evtxexport, cabextract, ntfs-3g/ntfsfix, wimlib **(caddy)**, dislocker.
 
 ## 6. Hardware testing (`sysmedic-hwtest`, menu 16)
@@ -73,7 +73,7 @@ Tools: stress-ng, s-tui, stress, sysbench, memtester, MemTest86+, rasdaemon, eda
 
 Details: [NETWORK](NETWORK.md)
 
-- **Wi-Fi:** `wifi` / menu 2 runs NetworkManager's `nmtui` picker. Connections aren't saved on the drive.
+- **Wi-Fi:** offered on the first screen at boot (`sysmedic-connect`); later `wifi` / menu 2 runs NetworkManager's `nmtui` picker. Networks and passwords are kept in RAM only (forgotten at shutdown, caddy included).
 - **Diagnosis:** ping, arping, tracepath, traceroute, mtr, dig, nslookup, whois, ip, ss, ethtool, iw, nmcli, wavemon, iperf3/iperf, speedtest-cli, curl, fping, hping3.
 - **Capture:** tcpdump, tshark, termshark, ngrep, iftop, nload, bmon, nethogs, iptraf-ng.
 - **LAN and services:** nmap, ncat, arp-scan, nbtscan, avahi-utils, smbclient, cifs-utils, nfs-common, snmp, lldpd, ndisc6, ipcalc, sipcalc, lftp, tnftp, telnet, tftp-hpa, socat, netcat, bridge-utils, vlan, hostapd, dnsmasq-base.

@@ -12,7 +12,7 @@ SysMedic runs on Ubuntu 24.04 with the 7.0 HWE kernel. It boots on UEFI (with Se
 |---|---|---|
 | Medium | NVMe SSD in a USB 3 enclosure, installed Ubuntu (writable) | USB stick, live image (read-only squashfs, clean every boot) |
 | Toolkit | Everything, plus deep recovery, imaging, burn-in suite, macOS repair | Triage, network, Windows/BitLocker, hardware tests, basic recovery |
-| Offline AI | qwen2.5 7B on machines with 12 GB+ RAM, otherwise 3B | same |
+| Offline AI | qwen2.5 7B on machines with 12 GB+ RAM, otherwise 3B | 3B (loads fast over USB 2.0; 7B on request) |
 | Storage | ~200 GB free for disk images and sessions | persistence partition for sessions, backups and models |
 | Best for | Bench jobs, long repairs, data recovery | Quick diagnosis, the bag, machines you'd rather not plug the caddy into |
 
@@ -25,11 +25,11 @@ Both editions share the same core: scan, safety layer, assistants, Windows toolk
 - **Triage scan at boot** (read-only): disk health (SMART/NVMe), filesystems, installed OSes, boot setup (EFI/BCD/GRUB/fstab/initramfs), BitLocker/LUKS, Windows crashes, event-log errors and suspicious autostarts, network and DNS, missing firmware, and SysMedic's own USB link speed. Every finding comes with a next step.
 - **Kernel write protection.** Every disk except SysMedic's own is read-only from the moment it appears. Writes need `sysmedic-unlock` on a console, which asks for a reason, takes backups first and is audited. The AI can't unlock.
 - **AI assistants:**
-  - **Cloud** (OpenCode with the free Big Pickle model, no login). Used only after the customer consents.
+  - **Cloud** (OpenCode with the free Big Pickle model, no login), running as SysMedic: its own agent, logo and console theme, with full command output (no mouse needed). Used only after the customer consents.
   - **Offline** (`sysmedic-ask`, local qwen2.5 via Ollama). Read-only checks run straight away with full output on screen; anything else is shown to you first.
-- **Windows toolkit** (`sysmedic-win`): version and state, blue-screen stop codes decoded, event-log analysis, autoruns with suspicious entries flagged, a ClamAV malware scan, and **BitLocker unlock with the recovery key**. It can also roll back a stuck update, clear Fast Startup hibernation, and reset a local password.
+- **Windows toolkit** (`sysmedic-win`): version and state, blue-screen stop codes decoded, event-log analysis, autoruns with suspicious entries flagged, a ClamAV malware scan, **deep troubleshooting** (every event log, registry evidence, CBS/DISM/Windows Update logs, one-command check-up report), and **BitLocker unlock with the recovery key**, on the console or typed on a phone/laptop over a secure link. It can also roll back a stuck update, clear Fast Startup hibernation, and reset a local password.
 - **Hardware testing** (`sysmedic-hwtest`): health report, CPU/cooling stress, RAM (memtester, and MemTest86+ from the boot menu), disk self-tests and read-only speed/surface scans, GPU, keyboard/touchpad, audio, battery wear and inventory.
-- **Network toolkit:** ~60 tools, from ping/dig/mtr to tcpdump/tshark, iperf3, SMB/NFS, SNMP and Wi-Fi survey. Wi-Fi is joined with `nmtui`.
+- **Network toolkit:** ~60 tools, from ping/dig/mtr to tcpdump/tshark, iperf3, SMB/NFS, SNMP and Wi-Fi survey. Wi-Fi is offered on the first screen at boot (`nmtui`); passwords stay in RAM.
 - **Job reports:** a plain-English report per visit (found → fixed → still to do, work performed, backups, notes, sign-off), printable to PDF.
 - **Phone dashboard:** live findings, write-protection state, job notes and the report, on your phone via QR code. View and notes only; no repairs from the phone.
 - **Session transcripts:** every console and AI conversation is recorded and bundled into `claude-review.md` for improving SysMedic later.

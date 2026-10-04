@@ -1,12 +1,29 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "username": "SysMedic-OSR",
+  "username": "SysMedic",
   "model": "opencode/big-pickle",
+  "default_agent": "SysMedic",
+  "autoupdate": false,
+  "share": "disabled",
+  "agent": {
+    "SysMedic": {
+      "description": "SysMedic rescue operator: diagnoses and repairs Windows, Linux and macOS machines",
+      "mode": "primary",
+      "prompt": "{file:/opt/sysmedic/SYSMEDIC-AGENT.md}",
+      "color": "primary"
+    },
+    "build": {
+      "disable": true
+    },
+    "plan": {
+      "disable": true
+    }
+  },
   "provider": {
     "opencode": {
       "models": {
         "big-pickle": {
-          "name": "Big Pickle (Go plan)",
+          "name": "Big Pickle (free)",
           "limit": {
             "context": 200000,
             "output": 32000
@@ -46,9 +63,6 @@
       }
     }
   },
-  "instructions": [
-    "/opt/sysmedic/SYSMEDIC-AGENT.md"
-  ],
   "permission": {
     "bash": {
       "*": "ask",

@@ -66,6 +66,21 @@ EOF
     sudo rm -rf "$root/usr/local/share/doc/sysmedic"
     sudo install -D -o root -g root -m 644 "$repo/README.md" "$root/usr/local/share/doc/sysmedic/README.md"
     sudo rsync -rlpt --chown=root:root "$repo/docs/" "$root/usr/local/share/doc/sysmedic/docs/"
+    # No customer Wi-Fi passwords on the drive: networks now live in RAM (NetworkManager conf.d), and any
+    # saved before that are removed
+    local wifi_saved
+    wifi_saved=$(sudo grep -lsE '^(psk|password|wep-key[0-9])=' "$root"/etc/NetworkManager/system-connections/* 2>/dev/null || true)
+    if [ -n "$wifi_saved" ]; then
+        echo "$wifi_saved" | while read -r f; do sudo rm -f "$f"; done
+        say "Removed $(echo "$wifi_saved" | wc -l) saved Wi-Fi network(s) with passwords from the drive"
+    fi
+    sudo grep -lsE '^\s*password:' "$root"/etc/netplan/*.yaml >/dev/null 2>&1 && \
+        say "WARNING: a Wi-Fi password is stored in $root/etc/netplan — check and remove it"
+    # OpenCode as SysMedic: logo, examples, tips, and tool output fully expanded (no mouse on the console)
+    local oc
+    for oc in "$root/usr/local/bin/opencode" "$root/root/.opencode/bin/opencode"; do
+        [ -f "$oc" ] && [ ! -L "$oc" ] && { sudo python3 "$repo/build/opencode-brand.py" "$oc" | sed 's|^|    |' || say "WARNING: couldn't brand $oc (OpenCode changed?); it still works, unbranded"; }
+    done
     sudo ln -sf sysmedic-guard "$root/usr/local/sbin/sysmedic-lock"
     sudo ln -sf sysmedic-guard "$root/usr/local/sbin/sysmedic-unlock"
     sudo ln -sf ambulance "$root/usr/local/bin/menu"

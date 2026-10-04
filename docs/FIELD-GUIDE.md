@@ -6,7 +6,7 @@ From boot to sign-off. On the drive: `sysmedic-help field`.
 
 - **Power the machine off first.** Then plug SysMedic in. The caddy goes in a **USB 3 port** (often blue or marked SS) with a USB 3 cable. On a USB 2.0 port everything runs about 10× slower, and the boot scan will warn you.
 - **Never unplug or move SysMedic while it's running.** On the caddy, the whole system runs from that drive.
-- For network access, plug in Ethernet or turn on **USB tethering** on your phone. Wi-Fi can be joined after boot.
+- For network access, plug in Ethernet or turn on **USB tethering** on your phone, or join Wi-Fi on the first screen.
 - Boot from USB: the boot-menu key is usually F12 (Dell, Lenovo), F9 (HP), Esc or F8 (ASUS), or hold Option (Mac).
 
 ## 2. The boot menu
@@ -24,11 +24,12 @@ From boot to sign-off. On the drive: `sysmedic-help field`.
 ## 3. What happens at boot (console 1)
 
 1. Console 1 (tty1) and console 2 (tty2) log in automatically. **Both are recorded** for later review (output only, never keystrokes).
-2. The banner shows the **edition and version**, e.g. `caddy edition · v2026.10.02-42668268`.
-3. The **triage scan** runs (read-only, under a minute). Findings are ordered critical → warning → note → OK, each with a next step.
-4. The **phone dashboard** address appears (QR code on console 2).
-5. **Cloud AI consent:** if there's internet, you're asked whether the customer consents. Only **y** enables the cloud AI; anything else, or no answer within 60 s, means offline.
-6. Press **Enter** to start the assistant, or **m** for the rescue menu.
+2. **Network first.** If Ethernet or tethering is already online, this passes by itself. Otherwise it lists the Wi-Fi networks nearby: press **Enter** to pick one (password asked there; kept in memory only, forgotten at shutdown) or **s** to carry on offline. It continues offline by itself after 60 s.
+3. The banner shows the **edition and version** and how SysMedic is connected, e.g. `caddy edition · v2026.10.04-…` · `Network: online via wlp0s20f3 (Wi-Fi "Office")`.
+4. The **triage scan** runs (read-only, under a minute). Findings are ordered critical → warning → note → OK, each with a next step.
+5. The **phone dashboard** address appears (QR code on console 2).
+6. **Cloud AI consent:** if there's internet, you're asked whether the customer consents. Only **y** enables the cloud AI; anything else, or no answer within 60 s, means offline.
+7. Press **Enter** to start the assistant, or **m** for the rescue menu.
 
 Low RAM: the cloud AI needs 4 GB and an AVX-capable CPU, and the offline AI needs 6 GB. Below that you get the rescue menu instead.
 
@@ -87,9 +88,11 @@ sysmedic-win bitlocker /dev/nvme0n1p3      (237G, Basic data partition)
 ```
 Type that line, then the **48-digit recovery key** (8 groups of 6 digits; dashes and spaces optional) at the hidden prompt. It's never shown, stored, logged or recorded. The owner finds it at **aka.ms/myrecoverykey** or from their IT admin. The volume opens **read-only**; for repairs, run `sysmedic-unlock` on the partition first and add `--rw`. More: [WINDOWS-AND-BITLOCKER](WINDOWS-AND-BITLOCKER.md).
 
+**Key with someone else?** Run `sysmedic-win bitlocker-web` (menu 6 → w). The customer or their IT admin scans the QR code with a phone or laptop on the same network and types the key there. It's HTTPS with a secret link, unlocks read-only, and stops by itself after unlocking, 5 wrong keys or 15 minutes.
+
 ## 8. Wi-Fi
 
-`wifi` (menu 2) opens NetworkManager's picker. Choose the network, type the password, press Esc to leave. Nothing is saved on the drive. WPS isn't supported. If no Wi-Fi adapter appears, the scan says why (usually a missing driver or firmware); use Ethernet or phone tethering.
+The first screen at boot offers Wi-Fi. Later, `wifi` (menu 2) opens NetworkManager's picker: choose the network, type the password, press Esc to leave. Networks and passwords are kept in memory only and forgotten at shutdown; nothing is saved on the drive. WPS isn't supported. If no Wi-Fi adapter appears, the scan says why (usually a missing driver or firmware); use Ethernet or phone tethering.
 
 ## 9. Phone dashboard
 

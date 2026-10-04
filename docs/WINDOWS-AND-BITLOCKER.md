@@ -44,6 +44,18 @@ For "what's wrong with this Windows", start with **`sysmedic-win checkup`** (men
 
 All repairs need the partition unlocked first (`sysmedic-unlock`), and they say so if you forget. A hibernated volume silently mounts read-only under ntfs-3g; SysMedic detects this and tells you to run `fix-hibernation` first.
 
+## BitLocker from a phone or laptop (`sysmedic-win bitlocker-web`, menu 6 → w)
+
+For when the recovery key is with someone else (the customer, their IT admin) or on your phone. You start it on the console; it shows a QR code and a link. Whoever has the key opens it on a phone or laptop **on the same network**, picks the drive (its **Key ID** is shown, to match the right key at aka.ms/myrecoverykey) and types the key.
+
+- **HTTPS** with a certificate made for this run, so the key never crosses the network in clear text. The browser warns that it's self-signed; the console shows the certificate's fingerprint to compare.
+- A **secret link** (in the QR code); any other address gets "not found".
+- **Read-only** unlock only. For repairs, use the console route below.
+- Stops by itself after unlocking, after **5 wrong keys**, after 30 bad requests, or after **15 minutes**; Ctrl-C stops it.
+- The key goes straight to cryptsetup. It's never stored, logged or shown, and requests aren't logged. The audit trail records start, each attempt's result and the requesting address.
+- Engineer-only, like every unlock: the AI can't start it.
+- Same network only. It doesn't open anything to the internet.
+
 ## BitLocker step by step
 
 1. Console 2 (`Alt+F2`). The banner lists the BitLocker volumes and the exact line, e.g.

@@ -48,6 +48,8 @@ if [ -t 0 ] && [ "$console" = /dev/tty2 ]; then
     echo '  (dashes and spaces optional). It goes into a hidden prompt: never shown, stored, logged or recorded.'
     echo '  The owner finds it at aka.ms/myrecoverykey (Microsoft account) or from their IT admin. Opens read-only;'
     echo '  for repairs: sysmedic-unlock the partition first, then add --rw.'
+    echo '  Key with someone else (customer, IT admin)? sysmedic-win bitlocker-web lets them type it on their'
+    echo '  phone or laptop on the same network (secure link + QR code; read-only; stops by itself).'
     /usr/local/bin/sysmedic-dash
     echo ''
 elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; then
@@ -55,12 +57,16 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     # Every boot is a new job: no AI history from the previous customer carries over
     rm -rf /root/.local/share/opencode/storage /root/.local/share/opencode/snapshot /root/.local/share/opencode/log \
            /root/.local/share/opencode/opencode.db* /root/.local/share/opencode/tool-output 2>/dev/null
-    echo ''
-    echo "  === SysMedic Recovery System · $(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev) ==="
-    echo ''
 
     # Quick network attempt — don't block
     command -v netplan &>/dev/null && { netplan apply 2>/dev/null || true; }
+    # First screen: get online (wired is automatic; offers Wi-Fi), so the scan and cloud AI see the internet
+    /usr/local/bin/sysmedic-connect
+    clear
+    echo ''
+    echo "  === SysMedic Recovery System · $(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev) ==="
+    echo "  Network: $(/usr/local/bin/sysmedic-connect --status)"
+    echo ''
 
     /usr/local/sbin/mount-persist || true
     /usr/local/sbin/start-ollama && echo '  Offline AI (Ollama) ready'

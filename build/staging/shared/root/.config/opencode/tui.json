@@ -2,5 +2,6 @@
   "$schema": "https://opencode.ai/tui.json",
   "mouse": false,
   "dynamic_details_max_lines": 999999,
-  "dynamic_details_show_arrows": false
+  "dynamic_details_show_arrows": false,
+  "theme": "sysmedic"
 }

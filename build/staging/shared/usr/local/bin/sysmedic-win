@@ -25,6 +25,8 @@ Deep troubleshooting (read-only; PART can also be files or a folder handed over,
 
 Engineer only (run on a console):
   sysmedic-win bitlocker DEV        unlock a BitLocker volume with its recovery key (read-only)
+  sysmedic-win bitlocker-web        let someone enter the key from a phone/laptop on the same network
+                                    (HTTPS, secret QR link, read-only, stops by itself)
   sysmedic-win fix-update PART      roll back a half-installed update (renames WinSxS\\pending.xml)
   sysmedic-win fix-hibernation PART discard Windows' hibernation/Fast Startup state so the disk can be repaired
   sysmedic-win reset-password PART  blank a local account's password (chntpw)
@@ -321,6 +323,40 @@ def cmd_malware(args):
 
 # ── Engineer-only commands ─────────────────────────────────────────────────
 
+def bitlocker_open(dev, key, rw=False, via="console"):
+    """Unlock one BitLocker volume with a recovery key or password. Returns (ok, message, mapped device or None).
+    Shared by the console and the web unlock; the key goes to cryptsetup on stdin and is never stored or logged."""
+    name = f"bitlocker-{os.path.basename(dev)}"
+    if Path(f"/dev/mapper/{name}").exists():
+        return True, f"Already unlocked: /dev/mapper/{name}", f"/dev/mapper/{name}"
+    if re.fullmatch(r"[\d\s-]{48,60}", key):
+        digits = re.sub(r"\D", "", key)
+        if len(digits) == 48:
+            key = "-".join(digits[i:i + 6] for i in range(0, 48, 6))
+    cmd = ["cryptsetup", "open", "--type", "bitlk", "--key-file=-", dev, name] + ([] if rw else ["--readonly"])
+    p = subprocess.run(cmd, input=key, capture_output=True, text=True)
+    key = None
+    if p.returncode != 0:
+        audit(f"BitLocker unlock of {dev} via {via} FAILED (wrong key?)")
+        return False, "Unlock failed — check the key (Microsoft account: aka.ms/myrecoverykey).", None
+    audit(f"BitLocker volume {dev} unlocked {'read-write' if rw else 'read-only'} via {via} → /dev/mapper/{name} (key not recorded)")
+    return True, f"Unlocked {'read-write' if rw else 'read-only'} as /dev/mapper/{name}", f"/dev/mapper/{name}"
+
+
+def mount_unlocked(name):
+    """Mount a freshly unlocked BitLocker volume read-only. Returns (mountpoint or None, error text)."""
+    if run(["blkid", "-o", "value", "-s", "TYPE", f"/dev/mapper/{name}"]).stdout.strip() != "ntfs":
+        return None, "not NTFS"
+    mp = RUN / "win" / name
+    mp.mkdir(parents=True, exist_ok=True)
+    if run(["findmnt", "-rno", "TARGET", str(mp)]).stdout.strip():
+        return mp, ""
+    m = run(["ntfs-3g", "-o", "ro", f"/dev/mapper/{name}", str(mp)])
+    if m.returncode == 0:
+        return mp, ""
+    return None, next((l for l in (m.stderr + m.stdout).splitlines() if "Failed" in l or "error" in l.lower()), "unknown error")
+
+
 def cmd_bitlocker(args):
     human_only("bitlocker unlock")
     if not args:
@@ -338,31 +374,32 @@ def cmd_bitlocker(args):
     print("  Enter the 48-digit BitLocker recovery key (or the user's BitLocker password).")
     print(f"  {C['dim']}It is used once and never stored or logged.{C['end']}")
     import getpass
-    key = getpass.getpass("  Key: ").strip()
-    if re.fullmatch(r"[\d\s-]{48,60}", key):
-        digits = re.sub(r"\D", "", key)
-        if len(digits) == 48:
-            key = "-".join(digits[i:i + 6] for i in range(0, 48, 6))
-    cmd = ["cryptsetup", "open", "--type", "bitlk", "--key-file=-", dev, name] + ([] if rw else ["--readonly"])
-    p = subprocess.run(cmd, input=key, capture_output=True, text=True)
-    key = None
-    if p.returncode != 0:
-        audit(f"BitLocker unlock of {dev} FAILED (wrong key?)")
-        sys.exit("  Unlock failed — check the key (Microsoft account: aka.ms/myrecoverykey).")
-    audit(f"BitLocker volume {dev} unlocked {'read-write' if rw else 'read-only'} → /dev/mapper/{name} (key not recorded)")
-    print(f"  {C['grn']}Unlocked{C['end']} {'read-write' if rw else 'read-only'} as /dev/mapper/{name}")
+    ok, msg, _mapped = bitlocker_open(dev, getpass.getpass("  Key: ").strip(), rw)
+    if not ok:
+        sys.exit(f"  {msg}")
+    print(f"  {C['grn']}{msg}{C['end']}")
     if run(["blkid", "-o", "value", "-s", "TYPE", f"/dev/mapper/{name}"]).stdout.strip() == "ntfs":
-        mp = RUN / "win" / name
-        mp.mkdir(parents=True, exist_ok=True)
-        m = run(["ntfs-3g", "-o", "ro", f"/dev/mapper/{name}", str(mp)])
-        if m.returncode == 0:
+        mp, why = mount_unlocked(name) if not rw else (None, "")
+        if mp:
             print(f"  Files are readable at {mp}")
-        else:
-            why = next((l for l in (m.stderr + m.stdout).splitlines() if "Failed" in l or "error" in l.lower()), "unknown error")
+        elif not rw:
             print(f"  {C['yel']}Decrypted, but the NTFS filesystem inside won't mount:{C['end']} {why}")
             print(f"  The data may be damaged. Image it first: ddrescue /dev/mapper/{name} <external>/bitlocker.img <external>/bitlocker.map")
         print(f"  Next: sysmedic-win info /dev/mapper/{name}   ·   copy data to /mnt/persist/backups or an external drive")
     print(f"  Lock it again with: cryptsetup close {name}")
+
+
+def cmd_bitlocker_web(_args):
+    human_only("bitlocker web unlock")
+    import blweb
+
+    def volumes():
+        return [(d, run(["lsblk", "-dno", "SIZE", d]).stdout.strip(), run(["lsblk", "-dno", "PARTLABEL", d]).stdout.strip())
+                for d in bitlocker_volumes()]
+
+    machine = run(["cat", "/sys/class/dmi/id/sys_vendor", "/sys/class/dmi/id/product_name"]).stdout.split("\n")
+    machine = " ".join(x.strip() for x in machine if x.strip())
+    sys.exit(blweb.serve(volumes, lambda dev, key: bitlocker_open(dev, key, via="web"), mount_unlocked, audit, machine, C))
 
 
 def confirm(prompt):
@@ -616,7 +653,7 @@ def cmd_checkup(args):
 
 COMMANDS = {"info": cmd_info, "crashes": cmd_crashes, "events": cmd_events, "autoruns": cmd_autoruns,
             "malware": cmd_malware, "evtx": cmd_evtx, "registry": cmd_registry, "cbs": cmd_cbs,
-            "checkup": cmd_checkup, "bitlocker": cmd_bitlocker, "fix-update": cmd_fix_update,
+            "checkup": cmd_checkup, "bitlocker": cmd_bitlocker, "bitlocker-web": cmd_bitlocker_web, "fix-update": cmd_fix_update,
             "fix-hibernation": cmd_fix_hibernation, "reset-password": cmd_reset_password}
 
 

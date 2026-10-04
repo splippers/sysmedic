@@ -71,4 +71,6 @@ Each visit's `audit.log` records, with timestamps:
 - No SSH server at boot.
 - Services that would announce on a customer network (lldpd, hostapd, avahi, rpcbind) are masked.
 - No telemetry and no "call home". Hardware-probe uploaders are deliberately not installed.
+- The BitLocker web unlock (`sysmedic-win bitlocker-web`) runs only when the engineer starts it on a console: HTTPS, a secret link, read-only, and it stops by itself (unlock, 5 wrong keys, 15 minutes). The key is never stored or logged.
+- Wi-Fi networks joined during a visit (and their passwords) live in RAM only and are forgotten at shutdown.
 - The phone dashboard is view + notes only, token-protected, and plain HTTP on the local network (don't use it on untrusted networks).
