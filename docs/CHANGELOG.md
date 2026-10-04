@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.10.04: stick Wi-Fi and the offline assistant
+
+**Stick Wi-Fi ("unavailable" on the Latitude 3410).** Root cause: the stick's live system stacked the stock Ubuntu `ubuntu-server` squashfs layer *on top of* SysMedic's own, so 4,890 stale stock files hid SysMedic's. That included `/etc/group` without the `netdev` group, so `wpa_supplicant` could never start ("Failed to determine group credentials") and NetworkManager had no supplicant for the Wi-Fi card.
+- The stock layer's 19,580 files SysMedic lacked (Python libraries, git, vim, …) and its 129 package records are merged into the stick's system, without overwriting anything of SysMedic's. The stick now ships that layer empty (`build-iso.sh`).
+- Missing system accounts restored (`syslog`, `crontab`, `landscape`), which also fixes rsyslog. The console font config is corrected (`staging/shared/etc/default/console-setup`).
+- A stale `wpa_supplicant` override is removed. `staging/obsolete.txt` lists leftovers that `sysmedic-deploy` deletes.
+- Verified in QEMU with a simulated Wi-Fi card: supplicant active, card ready to connect, no failed services.
+
+**Offline assistant.** On the stick it uses `qwen2.5:3b`: the 7B took minutes to load over USB 2.0 and showed nothing meanwhile. A `thinking… m:ss` timer now shows until the first word (both editions).
+
 ## 2026.10.03: lessons from a Windows 11 audit
 
 - The AI never reproduces credentials (passwords, security answers, keys, tokens) it finds; it reports them as found and redacted. It saves its reports in the session folder (so they're in the job record and review bundle) and flags company-managed devices.

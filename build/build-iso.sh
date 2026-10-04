@@ -5,9 +5,15 @@ cd "$(dirname "$0")"
 I=$PWD/iso
 EXCL="boot.catalog md5sum.txt pool dists casper/initrd.new casper/ubuntu-server-minimal.squashfs.bak
       casper/ubuntu-server-minimal.squashfs.gpg casper/ubuntu-server-minimal.squashfs boot/grub/grub.cfg.orig
-      casper/vmlinuz casper/initrd boot/grub/grub.cfg boot/memtest86+x64.bin"
+      casper/vmlinuz casper/initrd boot/grub/grub.cfg boot/memtest86+x64.bin
+      casper/ubuntu-server-minimal.ubuntu-server.squashfs casper/ubuntu-server-minimal.ubuntu-server.squashfs.gpg"
 
 sudo mksquashfs root newiso-ubuntu-server-minimal.squashfs -comp zstd -b 1M -noappend -quiet
+# casper stacks the stock ubuntu-server layer ON TOP of ./root. Our root already contains everything in it,
+# and its stale copies hid ours (e.g. /etc/group without netdev, so wpa_supplicant never started), so it
+# ships empty.
+mkdir -p empty-layer && rm -f empty-layer.squashfs
+mksquashfs empty-layer empty-layer.squashfs -noappend -quiet >/dev/null
 
 build() {
     xorriso -as mkisofs -r -V SYSMEDIC_2404 -o sysmedic-v2.iso \
@@ -19,6 +25,7 @@ build() {
       $(for e in $EXCL; do printf -- '-m %s/%s ' "$I" "$e"; done) \
       -graft-points /="$I" /md5sum.txt="$PWD/md5sum.txt" \
       /casper/ubuntu-server-minimal.squashfs="$PWD/newiso-ubuntu-server-minimal.squashfs" \
+      /casper/ubuntu-server-minimal.ubuntu-server.squashfs="$PWD/empty-layer.squashfs" \
       /casper/vmlinuz="$PWD/kernel/vmlinuz" /casper/initrd="$PWD/kernel/initrd" \
       /boot/grub/grub.cfg="$PWD/staging/iso/boot/grub/grub.cfg" \
       /boot/memtest86+x64.bin="$PWD/root/boot/memtest86+x64.bin" /boot/memtest86+x64.efi="$PWD/root/boot/memtest86+x64.efi" 2>&1 | grep -E 'produced|FAIL' || true
