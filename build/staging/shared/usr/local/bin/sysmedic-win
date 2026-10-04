@@ -604,7 +604,7 @@ def cmd_checkup(args):
                     C.update(saved)
             text = out.getvalue()
             print(text.rstrip())
-            buf.write(f"\n## {title}\n\n```\n{text.strip()}\n```\n")
+            buf.write(f"\n## {title}\n\n```\n{text.strip(chr(10))}\n```\n")
         latest = RUN / "latest"
         d = latest.resolve() if latest.exists() else Path("/root")
         f = d / f"windows-checkup-{os.path.basename(dev)}.md"

@@ -115,7 +115,11 @@ install_packages() {
     done
     if [ ${#missing[@]} -gt 0 ]; then
         say "Installing ${#missing[@]} package(s) on the $ed edition: ${missing[*]}"
-        with_net_chroot "$root" bash -c "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -q --no-install-recommends ${missing[*]} 2>&1 | grep -E '^E:|newly installed'; apt-get clean"
+        # Fail the deploy on apt errors instead of shipping without the packages
+        with_net_chroot "$root" bash -c "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq || exit 1
+            out=\$(apt-get install -y -q --no-install-recommends ${missing[*]} 2>&1); rc=\$?
+            echo \"\$out\" | grep -E '^E:|newly installed'; apt-get clean; exit \$rc" \
+            || die "Package install failed on the $ed edition (see the apt error above; apt-get check in the chroot)"
         [ "$ed" = stick ] && sudo find "$root/var/lib/apt/lists" -type f ! -name lock -delete
     else
         say "All $(echo "$want" | wc -w) listed packages already present on the $ed edition"
