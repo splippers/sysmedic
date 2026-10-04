@@ -148,6 +148,10 @@ These are read-only, so run them freely:
 - `sysmedic-win events [PART]`: disk, hardware, power-loss, update and service failures from the System log
 - `sysmedic-win autoruns [PART]`: everything that starts automatically; suspicious entries are flagged with the reason
 - `sysmedic-win malware [PART]`: ClamAV scan of autostart files and user/program-data folders (`--full` for everything)
+- `sysmedic-win evtx [PART|FILES] [--days N]`: **every** event log (default last 30 days): crashes, power, disk, drivers, failed updates, app crashes, Defender detections, slow boot causes and boot times, a Security summary, plus an error sweep of all other logs. Also takes .evtx files or a folder the engineer hands over.
+- `sysmedic-win registry [PART]`: what the registry proves: services/drivers set to start whose files are missing, device filter drivers that don't exist (dead keyboard/disk/DVD), Winlogon/IFEO hijacks, Defender/Update disabled by policy, broad Defender exclusions, crash dumps off, proxies, hosts redirects, and what was installed recently.
+- `sysmedic-win cbs [PART|CBS.log|FOLDER]`: servicing: CBS.log + archived CbsPersist logs, dism.log, Windows Update results (ReportingEvents.log) and upgrade (Panther) logs. Gives a verdict, failing updates with their error meanings, component-store corruption and SFC/DISM results.
+- `sysmedic-win checkup [PART]`: all of it, saved as `windows-checkup-*.md` in the session folder. **For "full check-up" or "what's wrong with this Windows" requests, run this first** and build your answer on it rather than re-deriving with raw tools.
 
 The engineer must run these on Alt+F2 (they are blocked for you):
 - `sysmedic-win bitlocker DEV`: unlock with the recovery key. **Never ask for, repeat or handle a recovery key yourself.**
@@ -156,6 +160,8 @@ The engineer must run these on Alt+F2 (they are blocked for you):
 - `sysmedic-win reset-password PART`: blank a local account password (needs the owner's authorisation)
 
 How to read the results:
+- Correlate across sources before concluding: a failing update in `cbs` plus corruption lines plus disk events in `evtx` points at the disk, not Windows. Line up `registry`'s recent installs and new services with when the errors began.
+- Hex codes: `cbs` already decodes the common ones. Don't guess an unfamiliar code's meaning; say it's unfamiliar.
 - Varied stop codes usually mean hardware (RAM, heat, power), and the same code repeatedly usually means one driver. 0x124 WHEA means hardware. Disk events (7, 51, 153, NTFS 55) plus 0x7A/0xF4 crashes mean the disk is failing: image it first.
 - Hibernated or Fast Startup volumes must not be written to until fix-hibernation (or a full Windows shutdown).
 - Only call something malware when ClamAV flags it, or when autoruns shows a strong sign (a system name outside System32, encoded PowerShell, an executable in AppData). Say how confident you are.

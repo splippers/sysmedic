@@ -6,7 +6,13 @@ the keys sysmedic-win reads, with planted problems:
   SOFTWARE  Windows 11 Pro 24H2; a Run-key autostart of "svchost.exe" from AppData
             (classic malware masquerade); two user profiles
   SYSTEM    Fast Startup on; a pending file rename; a service whose binary
-            lives in ProgramData; computer name; last shutdown time
+            lives in ProgramData; computer name; last shutdown time;
+            for sysmedic-win registry: a service whose program is missing (KDService),
+            Windows Update disabled, a keyboard filter driver that isn't installed,
+            crash dumps off
+  SOFTWARE  (also) sethc.exe hijacked, Defender off by policy with an AppData
+            exclusion, an app installed recently
+  NTUSER    (alice) a web proxy
 Usage (inside the image chroot, which has python3-hivex):
   make-windows-fixture.py MINIMAL_HIVE OUTDIR
 """
@@ -63,6 +69,16 @@ def software(h):
     setv(h, pl + r"\S-1-5-18", "ProfileImagePath", REG_EXPAND_SZ, sz(r"%systemroot%\system32\config\systemprofile"))
     setv(h, pl + r"\S-1-5-21-1111111111-2222222222-3333333333-1001", "ProfileImagePath", REG_EXPAND_SZ, sz(r"C:\Users\alice"))
     setv(h, pl + r"\S-1-5-21-1111111111-2222222222-3333333333-1002", "ProfileImagePath", REG_EXPAND_SZ, sz(r"C:\Users\bob"))
+    ifeo = r"Microsoft\Windows NT\CurrentVersion\Image File Execution Options"
+    setv(h, ifeo + r"\sethc.exe", "Debugger", REG_SZ, sz(r"C:\Windows\System32\cmd.exe"))
+    setv(h, r"Policies\Microsoft\Windows Defender", "DisableAntiSpyware", REG_DWORD, struct.pack("<I", 1))
+    setv(h, r"Policies\Microsoft\Windows Defender\Exclusions\Paths", "C:\\Users\\alice\\AppData\\", REG_DWORD, struct.pack("<I", 0))
+    import datetime
+    recent = (datetime.date.today() - datetime.timedelta(days=3)).strftime("%Y%m%d")
+    un = r"Microsoft\Windows\CurrentVersion\Uninstall\{6F1C0A2E-5B7D-4E3A-9C1F-2D8B7A6E5F40}"
+    setv(h, un, "DisplayName", REG_SZ, sz("PDF Converter Pro"))
+    setv(h, un, "Publisher", REG_SZ, sz("FreeTools Ltd"))
+    setv(h, un, "InstallDate", REG_SZ, sz(recent))
 
 
 def system(h):
@@ -81,10 +97,29 @@ def system(h):
     setv(h, svc + r"\WinSysHelper", "ImagePath", REG_EXPAND_SZ, sz(r"C:\ProgramData\SysHelper\helper.exe"))
     setv(h, svc + r"\WinSysHelper", "Start", REG_DWORD, struct.pack("<I", 2))
     setv(h, svc + r"\WinSysHelper", "DisplayName", REG_SZ, sz("Windows System Helper"))
+    setv(h, svc + r"\KDService", "ImagePath", REG_EXPAND_SZ, sz('"C:\\Program Files\\KD\\KDService.exe"'))
+    setv(h, svc + r"\KDService", "Start", REG_DWORD, struct.pack("<I", 2))
+    setv(h, svc + r"\KDService", "Type", REG_DWORD, struct.pack("<I", 16))
+    setv(h, svc + r"\wuauserv", "ImagePath", REG_EXPAND_SZ, sz(r"%systemroot%\system32\svchost.exe -k netsvcs -p"))
+    setv(h, svc + r"\wuauserv", "Start", REG_DWORD, struct.pack("<I", 4))
+    setv(h, svc + r"\kbdclass", "Start", REG_DWORD, struct.pack("<I", 1))
+    setv(h, svc + r"\kbdclass", "Type", REG_DWORD, struct.pack("<I", 1))
+    kbd = cs + r"\Control\Class\{4d36e96b-e325-11ce-bfc1-08002be10318}"
+    setv(h, kbd, "Class", REG_SZ, sz("Keyboard"))
+    setv(h, kbd, "UpperFilters", REG_MULTI_SZ, multi("kbdclass", "kbfiltr"))
+    setv(h, cs + r"\Control\CrashControl", "CrashDumpEnabled", REG_DWORD, struct.pack("<I", 0))
+    setv(h, cs + r"\Control\Session Manager", "BootExecute", REG_MULTI_SZ, multi("autocheck autochk *"))
+
+
+def ntuser(h):
+    inet = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+    setv(h, inet, "ProxyEnable", REG_DWORD, struct.pack("<I", 1))
+    setv(h, inet, "ProxyServer", REG_SZ, sz("127.0.0.1:8888"))
 
 
 if __name__ == "__main__":
     minimal, outdir = sys.argv[1], sys.argv[2]
     build(minimal, f"{outdir}/SOFTWARE", software)
     build(minimal, f"{outdir}/SYSTEM", system)
-    print("built SOFTWARE and SYSTEM in", outdir)
+    build(minimal, f"{outdir}/NTUSER.DAT", ntuser)
+    print("built SOFTWARE, SYSTEM and NTUSER.DAT in", outdir)

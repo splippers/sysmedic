@@ -216,7 +216,11 @@ deploy_stick() {
     say "Writing the stick (about 15–20 minutes on a USB 2.0 stick)"
     ./make-stick.sh "$dev" | tail -1
     say "Verifying the written image against the tested one"
-    local size; size=$(stat -c %s sysmedic-v2.iso)
+    local size pstart; size=$(stat -c %s sysmedic-v2.iso)
+    # Stop where the persistence partition starts: it can overlap the ISO's last sectors (xorriso's spare
+    # partition table, dead once make-stick moves the GPT to the end of the disk), and it's freshly made each time.
+    pstart=$(( $(cat "/sys/class/block/$(lsblk -lno NAME,PARTN "$dev" | awk '$2==4{print $1}')/start" 2>/dev/null || echo 0) * 512 ))
+    [ "$pstart" -gt 1536 ] && [ "$pstart" -lt "$size" ] && size=$pstart
     # sectors 0-2 hold the partition tables, which get a fresh GUID for the persistence partition
     if ! sudo cmp -s -n $((size - 1536)) -i 1536 "$dev" stick-test.img; then die "Verification failed: the stick doesn't match the tested image"; fi
     say "Verified."

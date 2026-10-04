@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.10.04: deep Windows troubleshooting
+
+- `sysmedic-win evtx`: ingests **every** event log (not only System) with curated rules for the logs that explain problems, an error sweep of all others, Windows' boot-time measurements and a Security summary. Takes exported `.evtx` files too.
+- `sysmedic-win registry`: registry evidence: missing service/driver files, device filter drivers that don't exist, hijacks, Defender/Update policies and exclusions, crash-dump and paging settings, proxies, hosts redirects, recent installs.
+- `sysmedic-win cbs`: CBS.log and archived CbsPersist logs (cabextract), dism.log, ReportingEvents.log and Panther: failing updates, decoded HRESULTs, component-store corruption, SFC/DISM results and a verdict with next steps.
+- `sysmedic-win checkup`: all of it plus info/crashes/autoruns, saved as `windows-checkup-*.md` in the session folder. Menu 6 → c/e/r/s.
+- The AI may run all four. Its instructions say to start "full check-up" requests with `checkup` and to correlate across sources.
+- Test fixtures extended with planted registry and servicing problems.
+
 ## 2026.10.04: stick Wi-Fi and the offline assistant
 
 **Stick Wi-Fi ("unavailable" on the Latitude 3410).** Root cause: the stick's live system stacked the stock Ubuntu `ubuntu-server` squashfs layer *on top of* SysMedic's own, so 4,890 stale stock files hid SysMedic's. That included `/etc/group` without the `netdev` group, so `wpa_supplicant` could never start ("Failed to determine group credentials") and NetworkManager had no supplicant for the Wi-Fi card.

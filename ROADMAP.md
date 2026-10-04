@@ -16,14 +16,15 @@
 
 ## Next
 
-1. **Real-hardware validation** on more machines (Wi-Fi on kernel 7.0, Secure Boot, AI speed on real CPUs). The review bundles will show what breaks.
-2. **Encryption:** LUKS for the stick's persistence partition and the caddy's data, unlocked by passphrase at boot. Both drives hold customer data unencrypted today.
-3. **Opt-in, key-only SSH** for a remote colleague: session-scoped, shown on screen, audited.
-4. **Offline accuracy:** give the offline model the findings as a numbered list it must cite, and prefer 7B where RAM allows.
-5. **Leaner OpenCode prompt** for offline use, or a SysMedic agent profile with fewer tools.
-6. **A passive network diagnosis** command (link → IP → gateway → DNS → internet, with a verdict).
-7. **APFS read-write**, once a driver builds on current kernels.
-8. **Reproducible stick builds** from the stock Ubuntu ISO (today the build starts from the maintained `root/`).
+1. **Real-hardware validation** of `sysmedic-win checkup` on real Windows 10/11 installs (event-log volume and timing, CBS archive sizes).
+2. **Real-hardware validation** on more machines (Wi-Fi on kernel 7.0, Secure Boot, AI speed on real CPUs). The review bundles will show what breaks.
+3. **Encryption:** LUKS for the stick's persistence partition and the caddy's data, unlocked by passphrase at boot. Both drives hold customer data unencrypted today.
+4. **Opt-in, key-only SSH** for a remote colleague: session-scoped, shown on screen, audited.
+5. **Offline accuracy:** give the offline model the findings as a numbered list it must cite, and prefer 7B where RAM allows.
+6. **Leaner OpenCode prompt** for offline use, or a SysMedic agent profile with fewer tools.
+7. **A passive network diagnosis** command (link → IP → gateway → DNS → internet, with a verdict).
+8. **APFS read-write**, once a driver builds on current kernels.
+9. **Reproducible stick builds** from the stock Ubuntu ISO (today the build starts from the maintained `root/`).
 
 ## Not planned
 

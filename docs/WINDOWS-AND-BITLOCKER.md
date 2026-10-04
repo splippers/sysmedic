@@ -15,6 +15,24 @@ Works on an offline Windows installation from SysMedic. Without a partition argu
 
 The boot scan includes the important parts of all of these automatically.
 
+## Deep troubleshooting: event logs, registry, servicing
+
+For "what's wrong with this Windows", start with **`sysmedic-win checkup`** (menu 6 → c). It runs everything below plus `info`, `crashes` and `autoruns`, prints it, and saves it as `windows-checkup-<partition>.md` in the session folder. From there it goes into the job report and the review bundle. All of it is read-only.
+
+| Command | Reads | Finds |
+|---|---|---|
+| `sysmedic-win evtx [PART\|FILES] [--days N] [--curated]` | **Every** `.evtx` in `winevt\Logs` (default: last 30 days) | Curated rules for System, Application, Security, Setup and the operational logs that explain problems: Windows Update, device/driver install (Kernel-PnP), boot/shutdown performance, Defender, Code Integrity, Task Scheduler, Wi-Fi, Remote Desktop, PowerShell. Then an **error sweep of every other log**. Output is grouped by meaning with counts, first/last time and example details, plus Windows' own boot-time measurements. `--curated` skips the sweep (faster) |
+| `sysmedic-win registry [PART] [--days N]` | SYSTEM, SOFTWARE, each user's NTUSER.DAT, the hosts file | Services and drivers set to start whose file is **missing** (a missing boot driver means INACCESSIBLE_BOOT_DEVICE), **device-class filter drivers that aren't installed** (no keyboard, disk or DVD after uninstalling software), core services disabled (Windows Update, BITS, Defender, firewall…), Winlogon Shell/Userinit and IFEO hijacks (including the `sethc`/`utilman` logon backdoor), AppInit DLLs, non-standard LSA packages, WDigest clear-text logons, Defender off by policy and broad exclusions, updates off or pointed at WSUS, UAC off, servicing reboots/exclusive sessions pending, crash dumps off, no paging file, Intel RST boot mode, per-user proxies and lockdown policies, hosts redirects. Also **what changed recently** (software installed, third-party services/drivers, Run keys) to line up with when the trouble started |
+| `sysmedic-win cbs [PART\|CBS.log\|FOLDER] [--days N]` | `Logs\CBS\CBS.log` + the newest archived `CbsPersist_*.log/.cab`, `Logs\DISM\dism.log`, `SoftwareDistribution\ReportingEvents.log`, Panther `setuperr.log` (feature upgrades) | A **verdict with next steps**, failing updates (KB, how many times, error code), servicing errors grouped by HRESULT **with their meaning** (0x800f081f, 0x800f0831, 0x80073712, 0x800f0922, 0x80070643, 0xC1900101 …), component-store corruption lines, SFC results (repaired / couldn't repair) and DISM's detected/repaired counts, failed servicing sessions |
+
+`evtx` and `cbs` also take files: `.evtx` files or a folder of them, or a `CBS.log`/`dism.log`. That covers logs exported from a machine that's still running, or from a backup.
+
+**Privacy:** event fields and registry values whose names suggest secrets are dropped. SAM and SECURITY are never read. For the Security log, only who/where/what is shown (account names, logon type, source address), never anything credential-like.
+
+**Reading the results together:** a failing update (`cbs`), corruption lines (`cbs`) and disk errors (`evtx`) together point at the disk, not Windows: check SMART before repairing Windows. Line the registry's recent changes up with the date the event errors began.
+
+**What SysMedic can't do from Linux:** run DISM/SFC itself. The `cbs` verdict gives the commands for Windows or WinRE: `DISM /Online /Cleanup-Image /RestoreHealth` with a source (`/Source:wim:X:\sources\install.wim:1 /LimitAccess`) when 0x800f081f appears; `sfc /scannow /offbootdir=C:\ /offwindir=C:\Windows` from WinRE; and an in-place repair upgrade as the last step before a reinstall.
+
 ## Engineer only (console; refused for the AI)
 
 | Command | Does |

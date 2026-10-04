@@ -9,6 +9,20 @@ Read-only (safe for the AI to run):
   sysmedic-win autoruns [PART]      everything that starts automatically, with suspicious entries flagged
   sysmedic-win malware  [PART] [--full]   ClamAV scan of autostart files and user/program-data folders
 
+Deep troubleshooting (read-only; PART can also be files or a folder handed over, e.g. exported logs):
+  sysmedic-win evtx     [PART|FILES] [--days N] [--curated]
+                                    every event log: crashes, power, disk, drivers, updates, apps, Defender,
+                                    boot times, security summary, plus an error sweep of all other logs
+  sysmedic-win registry [PART] [--days N]
+                                    registry evidence: services/drivers with missing files, broken device
+                                    filters, hijacks, protection/update policies, recent installs
+  sysmedic-win cbs      [PART|CBS.log|FOLDER] [--days N]
+                                    servicing: CBS/CbsPersist, dism.log, Windows Update results, upgrade
+                                    (Panther) logs: failing updates, error meanings, corruption, SFC
+  sysmedic-win checkup  [PART] [--days N]
+                                    all of the above plus info/crashes/autoruns, saved as a report in the
+                                    session folder (windows-checkup-*.md)
+
 Engineer only (run on a console):
   sysmedic-win bitlocker DEV        unlock a BitLocker volume with its recovery key (read-only)
   sysmedic-win fix-update PART      roll back a half-installed update (renames WinSxS\\pending.xml)
@@ -31,6 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 import winlib  # noqa: E402
+import winevidence  # noqa: E402
 
 RUN = Path("/run/sysmedic")
 CLAMDB = Path("/mnt/persist/clamav")
@@ -431,8 +446,177 @@ def cmd_reset_password(args):
         mounted.__exit__()
 
 
+# ── Deep troubleshooting: event logs, registry, servicing ──────────────────
+
+SEV = {"critical": "red", "warning": "yel", "info": "dim", "ok": "grn"}
+
+
+def opt(args, name, default):
+    if name in args:
+        i = args.index(name)
+        try:
+            return int(args[i + 1])
+        except (IndexError, ValueError):
+            sys.exit(f"{name} needs a number")
+    return default
+
+
+def targets(args):
+    """Yield (label, path): files/folders given on the command line, else each Windows installation."""
+    plain = [a for i, a in enumerate(args) if not a.startswith("--") and not (i and args[i - 1] == "--days")]
+    paths = [Path(a) for a in plain if Path(a).exists() and not Path(a).is_block_device()]
+    if paths:
+        for p in paths:
+            yield str(p), p
+        return
+    for dev, mp in windows_installs(plain[0] if plain else None):
+        header(dev, mp)
+        yield dev, Path(mp)
+
+
+def print_evtx(r, days):
+    print(f"  Read {r['logs']} of {r['files']} event logs" + (f" (last {days} days)" if days else "") + ".")
+    for e in r["errors"]:
+        print(f"  {C['yel']}{e}{C['end']}")
+    main_f = [f for f in r["findings"] if f["category"] != "error"]
+    other = [f for f in r["findings"] if f["category"] == "error"]
+    if not r["findings"]:
+        print(f"  {C['grn']}No notable events.{C['end']}")
+    for f in main_f[:40]:
+        span = f["last"] if f["first"] == f["last"] else f"{f['first'][:10]} → {f['last']}"
+        print(f"  {C[SEV[f['severity']]]}{f['count']:5}× {f['meaning']}{C['end']}  {C['dim']}[{f['log']}: {f['provider']} {f['id']}] {span}{C['end']}")
+        if f["severity"] != "info" or f["category"] in ("persistence", "change"):
+            for x in f["examples"][:2]:
+                detail = ", ".join(f"{k}={v}" for k, v in x.items() if k != "time")[:160]
+                if detail:
+                    print(f"         {C['dim']}{x['time']}  {detail}{C['end']}")
+    if len(main_f) > 40:
+        print(f"  … {len(main_f) - 40} more groups")
+    if r["boot"]:
+        times = ", ".join(f"{t[:10]} {s:.0f}s" for t, s in r["boot"][-6:])
+        print(f"\n  {C['bold']}Boot times{C['end']} (Windows' own measurement): {times}")
+    if other:
+        print(f"\n  {C['bold']}Other errors across all logs{C['end']} ({len(other)} kinds):")
+        for f in other[:15]:
+            print(f"  {C['dim']}{f['count']:5}× {f['log'][:60]}: {f['provider']} {f['id']}  (last {f['last']}){C['end']}")
+
+
+def cmd_evtx(args):
+    days = opt(args, "--days", 30)
+    for label, path in targets(args):
+        prog = (lambda n: print(f"\r\033[K  {C['dim']}reading {n[:90]}{C['end']}", end="", flush=True)) if COLOR else None
+        r = winevidence.scan_evtx(path, days=days, sweep="--curated" not in args, progress=prog)
+        if COLOR:
+            print("\r\033[K", end="")
+        print_evtx(r, days)
+
+
+def print_registry(r, days):
+    if not r["findings"]:
+        print(f"  {C['grn']}No problems found in the registry.{C['end']}")
+    for f in r["findings"]:
+        print(f"  {C[SEV[f['severity']]]}{f['severity'].upper():8}{C['end']} {f['title']}")
+        if f["detail"]:
+            print(f"           {C['dim']}{f['detail'][:200]}{C['end']}")
+        if f["fix"]:
+            print(f"           {C['cyan']}↳ {f['fix'][:200]}{C['end']}")
+    if r["recent"]:
+        print(f"\n  {C['bold']}Changed in the last {days} days{C['end']} (line these up with when the problem started):")
+        for x in r["recent"][:25]:
+            print(f"  {x['when_days']:3}d ago  {x['what'][:70]}  {C['dim']}{x['detail'][:70]}{C['end']}")
+
+
+def cmd_registry(args):
+    days = opt(args, "--days", 30)
+    for label, path in targets(args):
+        print_registry(winevidence.scan_registry(path, days=days), days)
+
+
+def print_servicing(s):
+    print(f"  Read {len(s['read'])} log(s)." + (" " + "; ".join(s["notes"]) if s["notes"] else ""))
+    if not s["read"] and not s["wu"]["failed"] and not s["panther"]:
+        print("  No servicing logs found (Windows/Logs/CBS, Windows/Logs/DISM).")
+    print(f"\n  {C['bold']}Verdict{C['end']}")
+    for sev, title, fix in winevidence.servicing_verdict(s):
+        print(f"  {C[SEV.get(sev, 'dim')]}{title}{C['end']}")
+        if fix:
+            print(f"    {C['cyan']}↳ {fix}{C['end']}")
+    if s["wu"]["failed"]:
+        print(f"\n  {C['bold']}Windows Update failures{C['end']} (ReportingEvents.log)")
+        for t, g in sorted(s["wu"]["failed"].items(), key=lambda kv: kv[1]["last"], reverse=True)[:12]:
+            print(f"  {g['count']:3}× {t[:100]}  {C['dim']}{', '.join(g['codes'])} last {g['last']}{C['end']}")
+    if s["wu"]["installed"]:
+        w, t = s["wu"]["installed"][-1]
+        print(f"  Last successful update: {w}  {C['dim']}{t[:100]}{C['end']}")
+    if s["errors"]:
+        print(f"\n  {C['bold']}Servicing errors{C['end']} (CBS/DISM, grouped)")
+        for g in s["errors"][:15]:
+            meaning = f"  {C['cyan']}{g['meaning']}{C['end']}" if g["meaning"] else ""
+            pk = f"  {C['dim']}{', '.join(g['packages'])}{C['end']}" if g["packages"] else ""
+            print(f"  {g['count']:5}× {C['yel']}{g['code'] or '—'}{C['end']} {g['tool']}: {g['message'][:110]}{pk}{meaning}")
+    if s["corruption_count"]:
+        print(f"\n  {C['red']}Corruption evidence: {s['corruption_count']} line(s){C['end']} (latest):")
+        for w, m in s["corruption"][-6:]:
+            print(f"  {C['dim']}{w}  {m[:150]}{C['end']}")
+    sfc = s["sfc"]
+    if sfc:
+        parts = [f"last run {sfc['last_run']}" if sfc.get("last_run") else "",
+                 f"{sfc['repaired']} repaired" if sfc.get("repaired") else "",
+                 f"{C['red']}{sfc['unrepaired']} couldn't be repaired{C['end']}" if sfc.get("unrepaired") else "",
+                 f"DISM found {sfc['dism_detected']}, repaired {sfc.get('dism_repaired', 0)}" if "dism_detected" in sfc else ""]
+        print(f"\n  SFC/DISM: {', '.join(p for p in parts if p)}")
+    for p in s["panther"]:
+        print(f"\n  {C['yel']}Upgrade log {p['file']}{C['end']}: {p['errors']} error line(s), codes {', '.join(p['codes']) or 'none known'}")
+        print(f"  {C['dim']}last: {p['last']}{C['end']}")
+    bad = [x for x in s["sessions"] if x[2] and x[2] not in ("0x00000000", "0x00000bc2")]
+    if bad:
+        print(f"\n  Failed servicing sessions: " + ", ".join(f"{w[:10]} {pk or '?'} {hr}" for w, pk, hr in bad[-6:]))
+
+
+def cmd_cbs(args):
+    days = opt(args, "--days", 90)
+    for label, path in targets(args):
+        print_servicing(winevidence.scan_servicing(path, days=days))
+
+
+def cmd_checkup(args):
+    """Everything, on screen and as a markdown report in the session folder."""
+    import contextlib
+    import io
+    days = opt(args, "--days", 30)
+    plain = [a for i, a in enumerate(args) if not a.startswith("--") and not (i and args[i - 1] == "--days")]
+    for dev, mp in windows_installs(plain[0] if plain else None):
+        buf = io.StringIO()
+        sections = [("Overview", lambda: cmd_info([dev])), ("Crashes", lambda: cmd_crashes([dev])),
+                    ("Event logs", lambda: print_evtx(winevidence.scan_evtx(mp, days=days), days)),
+                    ("Registry evidence", lambda: print_registry(winevidence.scan_registry(mp, days=days), days)),
+                    ("Servicing (CBS, DISM, Windows Update)", lambda: print_servicing(winevidence.scan_servicing(mp, days=max(days, 90)))),
+                    ("Autostart", lambda: cmd_autoruns([dev]))]
+        for title, fn in sections:
+            print(f"\n{C['bold']}━━ {title} ━━{C['end']}", flush=True)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                saved = dict(C)
+                C.update({k: "" for k in C})          # plain text for the report
+                try:
+                    fn()
+                finally:
+                    C.update(saved)
+            text = out.getvalue()
+            print(text.rstrip())
+            buf.write(f"\n## {title}\n\n```\n{text.strip()}\n```\n")
+        latest = RUN / "latest"
+        d = latest.resolve() if latest.exists() else Path("/root")
+        f = d / f"windows-checkup-{os.path.basename(dev)}.md"
+        f.write_text(f"# Windows check-up: {dev}\n\n{datetime.datetime.now():%Y-%m-%d %H:%M}, read-only, last {days} days "
+                     f"(servicing: {max(days, 90)}). Generated by sysmedic-win checkup.\n" + buf.getvalue())
+        print(f"\n  {C['grn']}Report saved: {f}{C['end']}  (included in the job report and review bundle)")
+        audit(f"windows checkup {dev} -> {f.name}")
+
+
 COMMANDS = {"info": cmd_info, "crashes": cmd_crashes, "events": cmd_events, "autoruns": cmd_autoruns,
-            "malware": cmd_malware, "bitlocker": cmd_bitlocker, "fix-update": cmd_fix_update,
+            "malware": cmd_malware, "evtx": cmd_evtx, "registry": cmd_registry, "cbs": cmd_cbs,
+            "checkup": cmd_checkup, "bitlocker": cmd_bitlocker, "fix-update": cmd_fix_update,
             "fix-hibernation": cmd_fix_hibernation, "reset-password": cmd_reset_password}
 
 

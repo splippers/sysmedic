@@ -93,6 +93,12 @@ while true; do
                 echo "  3) Event log: disk, hardware, power and service problems"
                 echo "  4) Autostart programs (suspicious ones flagged)"
                 echo "  5) Malware scan (ClamAV)"
+                echo ""
+                echo "  c) Full check-up: everything below + the above, saved as a report"
+                echo "  e) All event logs (apps, updates, drivers, Defender, boot times…)"
+                echo "  r) Registry evidence (missing drivers/services, hijacks, policies)"
+                echo "  s) Updates & servicing (CBS, DISM, Windows Update, upgrade logs)"
+                echo ""
                 echo "  6) Unlock a BitLocker volume (recovery key)"
                 echo "  7) Roll back a half-installed update"
                 echo "  8) Clear hibernation / Fast Startup lock"
@@ -106,6 +112,10 @@ while true; do
                     3) /usr/local/bin/sysmedic-win events | less -R ;;
                     4) /usr/local/bin/sysmedic-win autoruns | less -R ;;
                     5) /usr/local/bin/sysmedic-win malware ;;
+                    c|C) /usr/local/bin/sysmedic-win checkup 2>&1 | less -R ;;
+                    e|E) /usr/local/bin/sysmedic-win evtx | less -R ;;
+                    r|R) /usr/local/bin/sysmedic-win registry | less -R ;;
+                    s|S) /usr/local/bin/sysmedic-win cbs | less -R ;;
                     6|7|8|9)
                         read -p "  Partition (e.g. /dev/nvme0n1p3): " part
                         case "$w" in

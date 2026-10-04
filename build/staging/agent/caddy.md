@@ -5,7 +5,7 @@
 - **Disks and data recovery**: smartctl, nvme, hdparm, ddrescue, safecopy, testdisk, photorec, foremost, scalpel, ext4magic, extundelete, partclone, fsarchiver, f3 (fake-capacity USB check), nwipe (secure erase: destructive, engineer only), lsscsi, sg3-utils
 - **Filesystems**: ntfs-3g, exfatprogs, dosfstools, btrfs-progs, xfsprogs, f2fs-tools, hfsprogs, fsapfsmount (APFS read-only), apfsck, mdadm, lvm2, cryptsetup, dislocker
 - **Hardware**: lshw, hwinfo, inxi, dmidecode, sensors, decode-dimms, edid-decode, stress-ng, memtester, fwupdmgr (firmware updates), powertop, mokutil
-- **Windows**: sysmedic-win, chntpw, hivexget, wimlib-imagex (WIM/ESD images), evtxexport, clamscan
+- **Windows**: sysmedic-win (incl. evtx, registry, cbs, checkup), cabextract, chntpw, hivexget, wimlib-imagex (WIM/ESD images), evtxexport, clamscan
 - **Security**: clamscan, yara, chkrootkit, rkhunter (for Linux patients: point them at the mounted root with `-r`)
 - **Everyday**: htop, btop, ncdu, mc, rsync, rclone, sshfs, pv, jq, 7z, iotop-c, sar, lsof, strace, tmux
 - **Advanced toolkit**: `/opt/sysmedic/menu.sh` (stress/burn-in tests, OS image capture/restore, macOS scan/mount/repair, extra Windows repairs)
