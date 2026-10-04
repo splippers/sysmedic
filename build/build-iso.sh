@@ -3,6 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 I=$PWD/iso
+# ./iso is the original v1 image, loop-mounted read-only; mount it if it isn't (e.g. after a reboot)
+if [ ! -f "$I/boot/grub/i386-pc/eltorito.img" ]; then
+    [ -f sysmedic-v1-hybrid.iso ] || { echo "ERROR: ./iso isn't mounted and sysmedic-v1-hybrid.iso is missing" >&2; exit 1; }
+    mkdir -p "$I" && sudo mount -o loop,ro sysmedic-v1-hybrid.iso "$I"
+fi
 EXCL="boot.catalog md5sum.txt pool dists casper/initrd.new casper/ubuntu-server-minimal.squashfs.bak
       casper/ubuntu-server-minimal.squashfs.gpg casper/ubuntu-server-minimal.squashfs boot/grub/grub.cfg.orig
       casper/vmlinuz casper/initrd boot/grub/grub.cfg boot/memtest86+x64.bin
@@ -28,7 +33,10 @@ build() {
       /casper/ubuntu-server-minimal.ubuntu-server.squashfs="$PWD/empty-layer.squashfs" \
       /casper/vmlinuz="$PWD/kernel/vmlinuz" /casper/initrd="$PWD/kernel/initrd" \
       /boot/grub/grub.cfg="$PWD/staging/iso/boot/grub/grub.cfg" \
-      /boot/memtest86+x64.bin="$PWD/root/boot/memtest86+x64.bin" /boot/memtest86+x64.efi="$PWD/root/boot/memtest86+x64.efi" 2>&1 | grep -E 'produced|FAIL' || true
+      /boot/memtest86+x64.bin="$PWD/root/boot/memtest86+x64.bin" /boot/memtest86+x64.efi="$PWD/root/boot/memtest86+x64.efi" > xorriso.log 2>&1 || true
+    # Fail loudly: a failed xorriso used to leave the previous ISO in place, unnoticed
+    grep -q 'produced' xorriso.log || { grep -E 'FAILURE|SORRY|aborting' xorriso.log >&2; echo "ERROR: ISO build failed (xorriso.log)" >&2; exit 1; }
+    grep -E 'produced' xorriso.log
 }
 
 # Two passes: build, checksum the result's own contents, rebuild with that md5sum.txt

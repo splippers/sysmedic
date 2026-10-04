@@ -8,6 +8,8 @@
 - **OpenCode is SysMedic:** a default SysMedic agent whose prompt is SysMedic's instructions (replacing OpenCode's coding-assistant prompt; it answers "I'm SysMedic…"); Build/Plan agents off; auto-update and sharing off.
 - **OpenCode looks like SysMedic:** SysMedic logo, a 16-colour console theme, rescue examples and tips (`build/opencode-brand.py`, applied by the deploy).
 - **No more "Click to expand":** tool output starts fully expanded (it needed a mouse); read long output with Page Up/Down. Verified: all 40 lines of a 40-line output drawn.
+- Console font: Terminus 11×22 in the **Vietnamese** set (full Latin plus the block and line-drawing characters; the Lat15 set chosen earlier lacked ▀ ▄ and garbled OpenCode's logo on the Linux console).
+- The ISO build now mounts its base image if needed and **fails loudly** if xorriso fails (a failure had silently left the previous ISO in place during testing; the drives weren't affected).
 - Correction: the OpenCode version is 1.18.34 (earlier notes said 2.0.22).
 
 ## 2026.10.04: deep Windows troubleshooting

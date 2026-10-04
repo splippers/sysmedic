@@ -174,7 +174,7 @@ def serve(volumes, unlock, mount, audit, machine="", color=None):
                 if ok:
                     state["done"].add(dev)
                     mp, err = mount(os.path.basename(mapped)) if mapped else (None, "")
-                    print(f"\n  {C['grn']}✓ {dev} unlocked from {self.client_address[0]}{C['end']} → {mapped}" +
+                    print(f"\n  {C['grn']}Unlocked: {dev} from {self.client_address[0]}{C['end']} → {mapped}" +
                           (f"; files at {mp}" if mp else (f" ({C['yel']}NTFS won't mount: {err}{C['end']})" if err else "")))
                     if all(os.path.exists(f"/dev/mapper/bitlocker-{os.path.basename(v[0])}") for v in vols):
                         state["stop"] = "all BitLocker volumes unlocked"
@@ -182,7 +182,7 @@ def serve(volumes, unlock, mount, audit, machine="", color=None):
                 else:
                     state["failures"] += 1
                     left = MAX_FAILURES - state["failures"]
-                    print(f"\n  {C['yel']}✗ Wrong key for {dev} from {self.client_address[0]} ({left} attempt(s) left){C['end']}")
+                    print(f"\n  {C['yel']}Wrong key for {dev} from {self.client_address[0]} ({left} attempt(s) left){C['end']}")
                     time.sleep(2)
                     if left <= 0:
                         state["stop"] = f"{MAX_FAILURES} wrong keys"

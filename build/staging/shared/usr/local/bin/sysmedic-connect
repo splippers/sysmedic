@@ -27,7 +27,7 @@ echo "  ${BOLD}SysMedic · network${NC}"
 echo ""
 echo "  ${DIM}Checking for an internet connection…${NC}"
 if wait_online 8; then
-    echo "  ${GRN}✓ Online via $(via)${NC}"
+    echo "  ${GRN}Online via $(via)${NC}"
     sleep 2
     exit 0
 fi
@@ -62,7 +62,7 @@ clear
 echo ""
 echo "  ${DIM}Checking the connection…${NC}"
 if wait_online 20; then
-    echo "  ${GRN}✓ Online via $(via)${NC}"
+    echo "  ${GRN}Online via $(via)${NC}"
 else
     echo "  ${YEL}Still no internet.${NC} If the network has a sign-in page (hotel, guest Wi-Fi), it can't be"
     echo "  completed from here: use a phone hotspot instead. Try again later with: wifi (or menu 2)"
