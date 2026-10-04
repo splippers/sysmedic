@@ -1,0 +1,6 @@
+# Files left by older SysMedic builds that must not survive a deploy (paths relative to the drive's root).
+# Removed on both editions every time sysmedic-deploy runs.
+
+# 2026.10.04: emptied wpa_supplicant's ordering (After=dbus.service) so it could start before D-Bus,
+# fail, and leave NetworkManager with Wi-Fi "unavailable" on a fresh boot (Latitude 3410, stick).
+etc/systemd/system/wpa_supplicant.service.d/override.conf

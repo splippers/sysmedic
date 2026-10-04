@@ -30,12 +30,12 @@ mnt() { sudo mount "$@"; MOUNTS+=("${@: -1}"); }
 version() {
     local h
     # covers everything that ends up on the drives: shared files, AI instructions, package lists
-    h=$(cd "$ST" && find shared agent packages -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-8)
+    h=$(cd "$ST" && find shared agent packages obsolete.txt -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-8)
     # date of the last commit that touched the shared core (so identical cores get identical versions);
     # today's date only if there are uncommitted changes
     local d repo; repo=$(cd "$(realpath "$ST")/../.." && pwd)
-    if git -C "$repo" diff --quiet HEAD -- build/staging/shared build/staging/agent build/staging/packages 2>/dev/null; then
-        d=$(git -C "$repo" log -1 --format=%cd --date=format:%Y.%m.%d -- build/staging/shared build/staging/agent build/staging/packages 2>/dev/null)
+    if git -C "$repo" diff --quiet HEAD -- build/staging/shared build/staging/agent build/staging/packages build/staging/obsolete.txt 2>/dev/null; then
+        d=$(git -C "$repo" log -1 --format=%cd --date=format:%Y.%m.%d -- build/staging/shared build/staging/agent build/staging/packages build/staging/obsolete.txt 2>/dev/null)
     fi
     echo "${d:-$(date +%Y.%m.%d)}-$h"
 }
@@ -47,6 +47,11 @@ install_tree() {
     local root=$1 ed=$2 before after v
     v=$(version)
     before=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null" | md5sum)
+    # Leftovers from older builds that break things (staging/obsolete.txt)
+    grep -vE '^\s*(#|$)' "$ST/obsolete.txt" 2>/dev/null | while read -r f; do
+        [ -e "$root/$f" ] && { sudo rm -f "$root/$f"; say "Removed obsolete /$f"; }
+        sudo rmdir "$(dirname "$root/$f")" 2>/dev/null || true
+    done
     sudo rsync -rlpt --chown=root:root "$ST/shared/" "$root/"
     [ -d "$ST/editions/$ed" ] && sudo rsync -rlpt --chown=root:root "$ST/editions/$ed/" "$root/"
     # AI instructions: shared core with this edition's toolkit section

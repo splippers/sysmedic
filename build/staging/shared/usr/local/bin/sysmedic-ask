@@ -13,12 +13,14 @@ Usage: sysmedic-ask [--explain] [--model NAME] [--warm]
 """
 import json
 import os
+import queue
 import re
 import readline  # noqa: F401  (line editing for input())
 import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -79,14 +81,25 @@ TOOLS = [{
 BOLD, DIM, CYAN, YELLOW, END = ("\033[1m", "\033[2m", "\033[36m", "\033[33m", "\033[0m") if sys.stdout.isatty() else ("",) * 5
 
 
+def edition():
+    try:
+        return open("/etc/sysmedic/edition").read().strip()
+    except OSError:
+        return "dev"
+
+
 def pick_model():
+    # The stick reads models over USB 2.0 and runs on whatever laptop it's in: the 7B takes minutes
+    # to load and answers slowly, so the stick uses the 3B (sysmedic-ask --model qwen2.5:7b for the bigger one).
+    if edition() == "stick":
+        return "qwen2.5:3b"
     with open("/proc/meminfo") as f:
         kb = int(next(l for l in f if l.startswith("MemTotal")).split()[1])
     return "qwen2.5:7b" if (kb + 524288) // 1048576 >= 12 else "qwen2.5:3b"
 
 
 def edition_note():
-    ed = open("/etc/sysmedic/edition").read().strip() if os.path.exists("/etc/sysmedic/edition") else "dev"
+    ed = edition()
     if ed == "stick":
         return ("\nThis is the SysMedic stick edition: a lean live USB. If the job needs disk imaging, stress/burn-in tests, "
                 "macOS repair or file carving, say it needs the SysMedic caddy edition instead of improvising.")
@@ -115,6 +128,51 @@ def ollama_chat(model, messages, stream=True, num_predict=None):
         for line in resp:
             if line.strip():
                 yield json.loads(line)
+
+
+def with_wait_timer(chunks):
+    """Pass chunks through; until the first one arrives, show a ticking timer so a slow start never looks like a hang."""
+    if not sys.stdout.isatty():
+        yield from chunks
+        return
+    q, stop = queue.Queue(), threading.Event()
+
+    def pump():
+        try:
+            for c in chunks:
+                if stop.is_set():
+                    break
+                q.put(("chunk", c))
+            q.put(("end", None))
+        except Exception as e:  # noqa: BLE001  (handed to the main thread)
+            q.put(("error", e))
+        finally:
+            chunks.close()
+
+    threading.Thread(target=pump, daemon=True).start()
+    t0, waiting = time.time(), True
+    try:
+        while True:
+            try:
+                kind, val = q.get(timeout=1)
+            except queue.Empty:
+                if waiting:
+                    s = int(time.time() - t0)
+                    hint = "  (the first answer after boot is slower: the model is loading)" if s >= 15 else ""
+                    print(f"\r\033[K{CYAN}SysMedic:{END} {DIM}thinking… {s // 60}:{s % 60:02d}{hint}{END}", end="", flush=True)
+                continue
+            if waiting:
+                waiting = False
+                if time.time() - t0 >= 1:
+                    print(f"\r\033[K{CYAN}SysMedic:{END} ", end="", flush=True)
+            if kind == "chunk":
+                yield val
+            elif kind == "error":
+                raise val
+            else:
+                return
+    finally:
+        stop.set()
 
 
 def is_read_only(cmd):
@@ -257,7 +315,7 @@ def assistant_turn(model, messages):
         t0 = time.time()
         content, calls = "", []
         try:
-            for chunk in ollama_chat(model, messages):
+            for chunk in with_wait_timer(ollama_chat(model, messages)):
                 msg = chunk.get("message", {})
                 piece = msg.get("content", "")
                 if piece:
