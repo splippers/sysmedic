@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.10.05: lessons from a stick-vs-caddy run on the same Latitude 3410
+
+Measured: the stick (Cruzer Blade) is a USB 2.0 drive, 25 MB/s sequential / 252 random IOPS; the caddy 276 MB/s / 1,768 IOPS. Loading the offline model: stick 253 s (3B, 1.9 GB), caddy 13.8 s (7B, 4.7 GB). With everything in RAM they're equal (same CPU, same cloud model).
+- **The AI can't power the machine off.** It had rebooted or powered off in three sessions despite instructions. `reboot`, `poweroff`, `shutdown`, `halt`, `systemctl reboot|poweroff|…`, `init 0/6`, sysrq are now denied in OpenCode's config and refused outright by the offline assistant (not even offered for approval). The instructions say so explicitly.
+- **No improvising:** `dislocker`, `pip install` and reading or copying the SAM/SECURITY hives are denied (the caddy's AI had unlocked BitLocker with dislocker, copied the hives to /tmp and tried to pip-install a parser). The instructions point at `sysmedic-win` instead. Rules checked against OpenCode's own matching logic (longest pattern wins) and the exact commands from that session.
+- **Honest drive-speed advice:** the scan reads the drive's own USB version. A USB 2.0 drive is reported as such ("can't go faster in any port; use the caddy or a USB 3 stick") instead of "use a USB 3 port"; the port advice is kept for USB 3 drives on a slow link. The drive model is named.
+
 ## 2026.10.04: Wi-Fi first, BitLocker from a phone, OpenCode as SysMedic
 
 - **Network first:** the first screen at boot gets SysMedic online (`sysmedic-connect`): wired passes by itself, otherwise nearby Wi-Fi networks are listed and `nmtui` opens on Enter; skipping (or 60 s) carries on offline. The banner then shows how SysMedic is connected.

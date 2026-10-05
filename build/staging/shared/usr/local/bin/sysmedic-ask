@@ -231,6 +231,24 @@ def stream_command(cmd):
     return "\n".join(out), status
 
 
+# Never proposed to the engineer at all (they'd be one Enter away): power actions on the rescue machine,
+# improvised BitLocker/installs, and the credential hives. The same rules are in OpenCode's config.
+FORBIDDEN = [
+    (re.compile(r"(^|[;&|(`]\s*|\b(sudo|timeout\s+\S+)\s+)(reboot|poweroff|shutdown|halt|telinit|kexec)\b|"
+                r"\b(systemctl|loginctl)\s+(reboot|poweroff|halt|kexec|suspend|hibernate|soft-reboot|isolate)\b|"
+                r"\binit\s+[06]\b|sysrq-trigger"),
+     "Refused: the AI never restarts or powers off the rescue machine. The engineer does that."),
+    (re.compile(r"\bdislocker"), "Refused: BitLocker is unlocked by the engineer with sysmedic-win bitlocker (or bitlocker-web)."),
+    (re.compile(r"\bpip3?\s+install\b|-m\s+pip\b|\bpipx\b"), "Refused: nothing is installed onto the rescue system; use SysMedic's tools."),
+    (re.compile(r"(^|[/\s,{])(SAM|SECURITY)(\.LOG\d?)?($|[\s,}'\"])"),
+     "Refused: the SAM and SECURITY hives hold password hashes and secrets; SysMedic never reads them."),
+]
+
+
+def forbidden(cmd):
+    return next((why for rx, why in FORBIDDEN if rx.search(cmd)), "")
+
+
 def run_approved(call):
     args = call.get("function", {}).get("arguments") or {}
     if isinstance(args, str):
@@ -242,6 +260,10 @@ def run_approved(call):
     why = (args.get("why") or "").strip()
     if not cmd:
         return "Error: no command given."
+    refusal = forbidden(cmd)
+    if refusal:
+        print(f"\n  {YELLOW}{refusal}{END}  {DIM}({cmd[:80]}){END}")
+        return refusal
     if is_read_only(cmd):
         print(f"\n  {CYAN}▶ running (read-only):{END} {BOLD}{cmd}{END}" + (f"  {DIM}— {why}{END}" if why else ""))
     else:

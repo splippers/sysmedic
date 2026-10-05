@@ -146,18 +146,25 @@ def check_self():
     if not disk:
         return
     dev = Path(f"/sys/block/{disk}").resolve()
+    model = (read(f"/sys/block/{disk}/device/model") or "").strip() or disk
     for d in [dev, *dev.parents]:
         if (d / "speed").exists() and (d / "idVendor").exists():
             try:
                 speed = int(read(d / "speed").strip() or 0)
+                usb_ver = float((read(d / "version") or "0").strip() or 0)   # what the drive itself supports
             except ValueError:
                 return
-            if 0 < speed < 5000:
-                find("warning", "sysmedic", f"SysMedic's own drive is connected at USB {'2.0' if speed == 480 else '1.x'} speed ({speed} Mbit/s)",
+            if 0 < speed < 5000 and 0 < usb_ver < 3:
+                find("info", "sysmedic", f"SysMedic's drive ({model}) is a USB {usb_ver:.1f} drive: it can't go faster in any port",
+                     "Loading the offline AI, starting OpenCode and the first run of each tool wait on it (about 25 MB/s).",
+                     "Fine for triage. For speed, use the SysMedic caddy (or put SysMedic on a USB 3 stick).")
+            elif 0 < speed < 5000:
+                find("warning", "sysmedic", f"SysMedic's drive ({model}) is on a USB {'2.0' if speed == 480 else '1.x'} link ({speed} Mbit/s), "
+                     f"but it supports USB {usb_ver:.1f}",
                      "Everything (the AI, scans, disk imaging) runs many times slower than it should.",
                      "Power off first (SysMedic runs from this drive), then use a USB 3 port (often blue or marked SS) and a USB 3 cable.")
             elif speed:
-                find("ok", "sysmedic", f"SysMedic's drive is on a fast USB link ({speed // 1000} Gbit/s)")
+                find("ok", "sysmedic", f"SysMedic's drive ({model}) is on a fast USB link ({speed // 1000} Gbit/s)")
             break
     # SysMedic's own EFI partition: if it fills up, bootloader and kernel updates fail
     for esp in ("/boot/efi",):
