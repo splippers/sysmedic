@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.10.06: build from scratch, tests everywhere, a cleaner OpenCode, AI self-repair
+
+- **Build from scratch:** `build/bootstrap.sh` (kit, fetch, stick-base, caddy) turns the stock Ubuntu 24.04.5 ISO into a stick or caddy, with pinned OpenCode 1.18.34, Ollama 0.23.4 and Qwen models; guide in [BUILDING](BUILDING.md). The ISO build accepts the stock ISO (installer layers left out, EFI image extracted); the stick's initramfs boots casper (`conf.d/default-boot-to-casper.conf`, now in the repo).
+- **Tests everywhere:** `sysmedic-tests` catalogues 19 hardware and software tests, runs them in the background and records them in the job report. They're OpenCode slash commands (`/disk-test`, `/cpu-stress`, `/windows-checkup`, `/full-check`, `/tests`…), menu 16, and a Tests card on the phone dashboard (run, live output, stop).
+- **A cleaner OpenCode:** no sidebar, thinking, timestamps, metadata, animations, tips or upsells; the `/` menu shows the tests instead of developer commands (still in Ctrl+P). On both 1.18 and 2.0.
+- **AI self-repair:** `sysmedic-ai-repair` (menu 17) restores OpenCode and the offline AI to a known-good state and self-checks; boot points to it if OpenCode crashes at start.
+- **Qwen only:** jonotron removed (repo, config, stick, caddies).
+- **Caddy settings in the repo:** boot menu, Ethernet netplan, UK keyboard, persistence service, root's shell setup, the toolkit in `/opt/sysmedic` (it had drifted). The blacklist that left Realtek USB Wi-Fi dongles without a driver on kernel 7.0 is removed. More services that announce on networks are masked.
+- The deploy stops with the failing line instead of silently, and handles a fresh system.
+
 ## 2026.10.05: lessons from a stick-vs-caddy run on the same Latitude 3410
 
 Measured: the stick (Cruzer Blade) is a USB 2.0 drive, 25 MB/s sequential / 252 random IOPS; the caddy 276 MB/s / 1,768 IOPS. Loading the offline model: stick 253 s (3B, 1.9 GB), caddy 13.8 s (7B, 4.7 GB). With everything in RAM they're equal (same CPU, same cloud model).

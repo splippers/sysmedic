@@ -15,6 +15,9 @@ At boot, with internet **and** customer consent (`y`), and 4 GB RAM plus an AVX 
   - Read-only diagnostics run without asking (lsblk, smartctl, dmesg, ping, dig, `sysmedic-scan`, `sysmedic-win info/crashes/events/autoruns/malware`, `sysmedic-hwtest report`, …).
   - Everything else asks. File edits ask, and reads outside SysMedic's folders ask.
   - Unlock, blockdev, hdparm, BitLocker, repairs, chntpw, nwipe, mkfs and `dd of=/dev/…` are **denied**.
+- **Tests as slash commands:** type `/` for the menu of SysMedic's tests (`/disk-test`, `/cpu-stress`, `/windows-checkup`, `/full-check`…; see [HARDWARE-TESTING](HARDWARE-TESTING.md)). OpenCode's developer commands are out of the `/` menu (still in Ctrl+P).
+- **A clean screen:** no sidebar, no "thinking", no timestamps or metadata lines, no animations, no tips or upsells; a scrollbar for long output. These defaults ship in `~/.local/state/opencode/kv.json` (1.18) and `~/.config/opencode/cli.json` (2.0).
+- **If OpenCode misbehaves:** `sysmedic-ai-repair` (menu 17, or on console 2) saves the conversation, stops stuck processes, clears OpenCode's state, restores SysMedic's settings and, if needed, the known-good program (kept in `/usr/local/share/sysmedic/opencode`), restarts the offline AI, and runs a self-check (`sysmedic-ai-repair --check` for the check alone). If OpenCode exits with an error straight after starting, the console says so and points to it.
 - **Full tool output is shown.** OpenCode normally cuts command output to a few lines behind "Click to expand", which needs a mouse; SysMedic starts every output expanded, so long results are read with **Page Up/Down**. Its history is wiped at each boot, and the visit's conversation is copied into the session for review.
 - If it says "Reconnect OpenCode Console": that was caused by a stale paid-plan login, now removed. Free use needs no login.
 

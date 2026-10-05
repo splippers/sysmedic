@@ -1,4 +1,4 @@
 # Services that must never start by themselves (they'd announce or serve on a customer's network)
-lldpd hostapd avahi-daemon rpcbind nfs-client.target clamav-freshclam sysstat
+lldpd hostapd avahi-daemon avahi-daemon.socket rpcbind rpcbind.socket nfs-client.target clamav-freshclam sysstat
 # don't announce or serve on customer networks (caddy had these masked by hand)
 smbd nmbd snmpd dropbear

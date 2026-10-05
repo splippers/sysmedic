@@ -47,7 +47,7 @@ host_disk() { lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -1; }
 install_tree() {
     local root=$1 ed=$2 before after v
     v=$(version)
-    before=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null; true" | md5sum)
+    before=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* $root/etc/initramfs-tools/conf.d/* 2>/dev/null; true" | md5sum)
     # Leftovers from older builds that break things (staging/obsolete.txt)
     grep -vE '^\s*(#|$)' "$ST/obsolete.txt" 2>/dev/null | while read -r f; do
         [ -e "$root/$f" ] && { sudo rm -f "$root/$f"; say "Removed obsolete /$f"; }
@@ -119,7 +119,7 @@ PY
         printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
     echo "$ed" | sudo tee "$root/etc/sysmedic/edition" >/dev/null
     echo "$v" | sudo tee "$root/etc/sysmedic/version" >/dev/null
-    after=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null; true" | md5sum)
+    after=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* $root/etc/initramfs-tools/conf.d/* 2>/dev/null; true" | md5sum)
     HOOKS_CHANGED=0; [ "$before" = "$after" ] || HOOKS_CHANGED=1
     DEPLOYED_VERSION=$v
     say "Installed SysMedic $ed edition v$v into $root"

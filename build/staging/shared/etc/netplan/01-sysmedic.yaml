@@ -1,3 +1,4 @@
+# SysMedic: bring up wired interfaces with DHCP (Wi-Fi is NetworkManager's, see sysmedic-connect)
 network:
   version: 2
   renderer: networkd

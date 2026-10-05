@@ -58,7 +58,8 @@ Low RAM: the cloud AI needs 4 GB and an AVX-capable CPU, and the offline AI need
 | 13 | **Job report** |
 | 14 | **Phone dashboard** (QR code) |
 | 15 | Advanced toolkit **(caddy)**: stress/burn-in, OS imaging, macOS, extra Windows repairs. On the stick it tells you to use the caddy |
-| 16 | **Hardware tests** |
+| 16 | **Tests** (hardware & software; also on the phone and as OpenCode slash commands) |
+| 17 | **Repair the AI assistant** (`sysmedic-ai-repair`) |
 | 10 / 0 | Reboot / shut down |
 
 ## 6. A typical repair
@@ -96,7 +97,7 @@ The first screen at boot offers Wi-Fi. Later, `wifi` (menu 2) opens NetworkManag
 
 ## 9. Phone dashboard
 
-Scan the QR code on console 2 (or run `sysmedic-dash`). The phone must be on the same network (the same Wi-Fi, or USB tethering). It shows live findings, which disks are locked, the job form, notes, and the report. It can't repair or unlock anything. Anyone with the link can see the visit's findings, so don't share it.
+Scan the QR code on console 2 (or run `sysmedic-dash`). The phone must be on the same network (the same Wi-Fi, or USB tethering). It shows live findings, which disks are locked, the job form, notes and the report, and its **Tests** card runs every hardware and software test with live output (see [HARDWARE-TESTING](HARDWARE-TESTING.md)). It can't repair or unlock anything, and tests never write to the customer's disks. Anyone with the link can see the visit's findings, so don't share it.
 
 ## 10. Troubleshooting
 

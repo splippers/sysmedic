@@ -13,6 +13,7 @@ ok()   { echo "    ${G}OK${N}      $*"; }
 bad()  { echo "    ${R}FAILED${N}  $*"; FAILS=$((FAILS + 1)); }
 note() { echo "    ${D}$*${N}"; }
 FAILS=0
+oc_ok() { bash -c 'timeout 20 opencode --version' >/dev/null 2>&1; }   # a child shell keeps crash messages off the screen
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
 if [ -n "${SYSMEDIC_AI:-}" ]; then
     echo "  The AI can't repair itself from inside a session: the engineer runs sysmedic-ai-repair on console 2 (Alt+F2)."
@@ -23,7 +24,7 @@ audit() { . /etc/sysmedic/audit.sh 2>/dev/null; printf '%s [ai-repair] %s\n' "$(
 
 check() {
     step "Self-check"
-    if timeout 20 opencode --version >/dev/null 2>&1; then ok "OpenCode starts ($(timeout 20 opencode --version 2>/dev/null | tail -1))"; else bad "OpenCode won't start"; fi
+    if oc_ok; then ok "OpenCode starts ($(bash -c 'timeout 20 opencode --version' 2>/dev/null | tail -1))"; else bad "OpenCode won't start"; fi
     if [ -f "$GOOD/opencode.sha256" ] && (cd /usr/local/bin && sha256sum -c --quiet "$GOOD/opencode.sha256" >/dev/null 2>&1); then
         ok "OpenCode binary matches the known-good copy"
     elif [ -f "$GOOD/opencode.sha256" ]; then bad "OpenCode binary differs from the known-good copy"; fi
@@ -88,7 +89,7 @@ else
 fi
 
 step "5. Checking the OpenCode program"
-if [ -f "$GOOD/opencode" ] && { ! timeout 20 opencode --version >/dev/null 2>&1 || ! (cd /usr/local/bin && sha256sum -c --quiet "$GOOD/opencode.sha256" >/dev/null 2>&1); }; then
+if [ -f "$GOOD/opencode" ] && { ! oc_ok || ! (cd /usr/local/bin && sha256sum -c --quiet "$GOOD/opencode.sha256" >/dev/null 2>&1); }; then
     install -m 755 "$GOOD/opencode" /usr/local/bin/opencode && ok "restored the known-good OpenCode"
 else
     ok "program is intact"
