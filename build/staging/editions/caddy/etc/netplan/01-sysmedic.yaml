@@ -1,0 +1,10 @@
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    all:
+      match:
+        name: "en*"
+      optional: true
+      dhcp4: true
+      dhcp6: false

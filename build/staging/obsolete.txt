@@ -8,3 +8,10 @@ etc/systemd/system/wpa_supplicant.service.d/override.conf
 # 2026.10.05: OpenCode 2.x reads only opencode.json (it ignored config.json, so on the caddy none of SysMedic's
 # OpenCode settings applied: permissions, model, agent). Both 1.18 and 2.x read opencode.json.
 root/.config/opencode/config.json
+
+# 2026.10.05: the caddy blacklisted the kernel's rtl8xxxu Realtek USB Wi-Fi driver in favour of a hand-built
+# 8192eu that only exists for the old 6.8 kernel, so on kernel 7.0 those dongles had no driver at all.
+etc/modprobe.d/rtl8xxxu.conf
+etc/modprobe.d/8192eu.conf
+# jonotron is gone; SysMedic uses Qwen only
+opt/sysmedic/models/Modelfile

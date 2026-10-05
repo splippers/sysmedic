@@ -61,6 +61,7 @@ Step by step: **[docs/FIELD-GUIDE.md](docs/FIELD-GUIDE.md)**. On the drive itsel
 | [HARDWARE-TESTING](docs/HARDWARE-TESTING.md) | `sysmedic-hwtest` and the tools behind it; reading results |
 | [NETWORK](docs/NETWORK.md) | Network toolkit, Wi-Fi, DNS fallback |
 | [AI-ASSISTANTS](docs/AI-ASSISTANTS.md) | Cloud and offline AI, approvals, models, limits |
+| [BUILDING](docs/BUILDING.md) | **Build a stick or caddy from scratch** (Ubuntu ISO → SysMedic), test in QEMU |
 | [EDITIONS-AND-DEPLOY](docs/EDITIONS-AND-DEPLOY.md) | Caddy vs stick, the build kit, `sysmedic-deploy`, versions, testing |
 | [IMPROVING-SYSMEDIC](docs/IMPROVING-SYSMEDIC.md) | Transcripts, `claude-review.md`, feedback, collecting sessions |
 | [CHANGELOG](docs/CHANGELOG.md) · [ROADMAP](ROADMAP.md) | History and what's next |

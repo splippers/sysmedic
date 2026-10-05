@@ -12,6 +12,9 @@
 
 Shared on both: the triage scan, guard, audit, assistants, Windows toolkit, hardware tests, network toolkit, reports, dashboard, transcripts and docs.
 
+
+**Building a new stick or caddy from nothing** (stock Ubuntu ISO → SysMedic): see [BUILDING](BUILDING.md). This page covers keeping existing drives current.
+
 ## Source of truth
 
 ```
@@ -58,7 +61,7 @@ The stick deploy then builds the ISO and the test image, backs up the persistenc
 
 Rebuilding from scratch needs the Ubuntu Server 24.04.3 live ISO and a pass through the original remaster steps; `root/` is the maintained state.
 
-Offline AI models (Ollama runtime + qwen2.5 3b/7b + jonotron) are copied from the build PC's Ollama store by `make-stick.sh` (stick) or once onto the caddy's `/srv/sysmedic/ollama`.
+Offline AI models (Ollama runtime + qwen2.5 3b/7b) are copied from the build PC's Ollama store by `make-stick.sh` (stick) or once onto the caddy's `/srv/sysmedic/ollama`.
 
 ## Testing (QEMU)
 

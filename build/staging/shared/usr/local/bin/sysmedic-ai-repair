@@ -1,0 +1,107 @@
+#!/bin/bash
+# sysmedic-ai-repair — put the AI assistants (OpenCode and the offline Ollama/Qwen) back to a known-good state.
+# Safe any time: it never touches customer disks or the visit's records (the current AI conversation is
+# saved into the session first).
+#   sysmedic-ai-repair           repair, then self-check            (menu 17)
+#   sysmedic-ai-repair --check   self-check only
+set -u
+GOOD=/usr/local/share/sysmedic/opencode          # known-good copies, installed by sysmedic-deploy
+CFG=/root/.config/opencode
+B=$'\033[1m'; G=$'\033[0;32m'; Y=$'\033[1;33m'; R=$'\033[1;31m'; D=$'\033[2m'; N=$'\033[0m'
+step() { echo "  ${B}$*${N}"; }
+ok()   { echo "    ${G}OK${N}      $*"; }
+bad()  { echo "    ${R}FAILED${N}  $*"; FAILS=$((FAILS + 1)); }
+note() { echo "    ${D}$*${N}"; }
+FAILS=0
+[ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
+if [ -n "${SYSMEDIC_AI:-}" ]; then
+    echo "  The AI can't repair itself from inside a session: the engineer runs sysmedic-ai-repair on console 2 (Alt+F2)."
+    exit 1
+fi
+
+audit() { . /etc/sysmedic/audit.sh 2>/dev/null; printf '%s [ai-repair] %s\n' "$(date -Is)" "$*" >> "$(_sysmedic_audit_file 2>/dev/null || echo /run/sysmedic/audit.log)" 2>/dev/null; }
+
+check() {
+    step "Self-check"
+    if timeout 20 opencode --version >/dev/null 2>&1; then ok "OpenCode starts ($(timeout 20 opencode --version 2>/dev/null | tail -1))"; else bad "OpenCode won't start"; fi
+    if [ -f "$GOOD/opencode.sha256" ] && (cd /usr/local/bin && sha256sum -c --quiet "$GOOD/opencode.sha256" >/dev/null 2>&1); then
+        ok "OpenCode binary matches the known-good copy"
+    elif [ -f "$GOOD/opencode.sha256" ]; then bad "OpenCode binary differs from the known-good copy"; fi
+    if python3 - "$CFG/opencode.json" <<'PY' 2>/dev/null
+import json, sys
+c = json.load(open(sys.argv[1]))
+assert c.get("default_agent") == "SysMedic" and "SysMedic" in c.get("agent", {})
+assert len(c["permission"]["bash"]) > 50 and c.get("command")
+PY
+    then ok "Config: SysMedic agent, permission rules and test commands present"; else bad "Config is missing or damaged ($CFG/opencode.json)"; fi
+    [ -s /opt/sysmedic/SYSMEDIC-AGENT.md ] && ok "SysMedic instructions present" || bad "SysMedic instructions missing (/opt/sysmedic/SYSMEDIC-AGENT.md)"
+    if curl -sf --max-time 3 http://127.0.0.1:11434/api/version >/dev/null; then
+        local models; models=$(curl -sf --max-time 5 http://127.0.0.1:11434/api/tags | python3 -c "import json,sys; print(' '.join(m['name'] for m in json.load(sys.stdin)['models']))" 2>/dev/null)
+        case "$models" in *qwen2.5*) ok "Offline AI running ($models)" ;; *) bad "Offline AI running but no Qwen model found" ;; esac
+    else
+        bad "Offline AI (Ollama) not running"
+    fi
+    if curl -s -o /dev/null --max-time 6 https://opencode.ai; then ok "Cloud AI reachable (internet OK)"; else note "Cloud AI not reachable (no internet): the offline assistant still works"; fi
+}
+
+if [ "${1:-}" = --check ]; then
+    echo; check; echo
+    [ $FAILS = 0 ] && echo "  ${G}All good.${N}" || echo "  ${Y}$FAILS problem(s). Run sysmedic-ai-repair (menu 17) to fix.${N}"
+    exit $((FAILS > 0))
+fi
+
+echo
+echo "  ${B}Repairing the AI assistants${N} ${D}(customer disks and visit records are not touched)${N}"
+audit "AI repair started"
+
+step "1. Saving the current AI conversation"
+sd=$(readlink -f /run/sysmedic/latest 2>/dev/null)
+if [ -d "$sd" ] && [ -d /root/.local/share/opencode/storage ]; then
+    mkdir -p "$sd/ai" && cp -a /root/.local/share/opencode/storage "$sd/ai/opencode-before-repair-$(date +%H%M%S)" 2>/dev/null && ok "kept in the session folder"
+else
+    note "nothing to save"
+fi
+
+step "2. Stopping stuck processes"
+for p in $(pgrep -x opencode; pgrep -f '/opencode serve'); do kill "$p" 2>/dev/null; done
+pkill -x ollama 2>/dev/null
+sleep 2
+for p in $(pgrep -x opencode; pgrep -f '/opencode serve'); do kill -9 "$p" 2>/dev/null; done
+pkill -9 -x ollama 2>/dev/null
+ok "stopped"
+
+step "3. Clearing OpenCode's state (caches, database, locks)"
+rm -rf /root/.local/share/opencode /root/.cache/opencode /root/.local/state/opencode/locks \
+       /root/.local/state/opencode/model.json /tmp/opencode 2>/dev/null
+mkdir -p /root/.local/state/opencode
+[ -f "$GOOD/kv.json" ] && cp "$GOOD/kv.json" /root/.local/state/opencode/kv.json
+ok "cleared; display settings back to SysMedic's defaults"
+
+step "4. Restoring SysMedic's OpenCode settings"
+if [ -d "$GOOD/config" ]; then
+    mkdir -p "$CFG"
+    rm -f "$CFG/service.json" "$CFG/config.json"
+    cp -a "$GOOD/config/." "$CFG/"
+    ok "agent, permissions, test commands and theme restored"
+else
+    bad "no known-good settings on this drive ($GOOD/config): redeploy SysMedic"
+fi
+
+step "5. Checking the OpenCode program"
+if [ -f "$GOOD/opencode" ] && { ! timeout 20 opencode --version >/dev/null 2>&1 || ! (cd /usr/local/bin && sha256sum -c --quiet "$GOOD/opencode.sha256" >/dev/null 2>&1); }; then
+    install -m 755 "$GOOD/opencode" /usr/local/bin/opencode && ok "restored the known-good OpenCode"
+else
+    ok "program is intact"
+fi
+
+step "6. Restarting the offline AI"
+/usr/local/sbin/start-ollama >/dev/null 2>&1 && ok "Ollama started" || note "Ollama didn't start (no offline AI on this drive?)"
+
+echo; check; echo
+audit "AI repair finished ($FAILS problem(s) left)"
+if [ $FAILS = 0 ]; then
+    echo "  ${G}Repaired.${N} Start the assistant again: ${B}opencode${N} (cloud) or ${B}sysmedic-ask${N} (offline), or the menu."
+else
+    echo "  ${Y}$FAILS problem(s) remain.${N} Use the offline assistant (sysmedic-ask) or the menu meanwhile, and redeploy"
+    echo "  SysMedic from the build PC when you can (sysmedic-deploy). Note it: sysmedic-note --feedback \"AI repair failed: …\""
+fi

@@ -109,8 +109,14 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     echo ''
 
     if [ "$mode" = cloud ]; then
+        t0=$(date +%s)
         SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode --model opencode/big-pickle \
             --prompt 'Read /run/sysmedic/latest/summary.txt (the triage scan of this machine). Explain the findings in plain English, most urgent first, and propose a repair plan. Do not change anything yet.'
+        rc=$?
+        if [ "$rc" != 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ]; then
+            echo ''
+            echo "  OpenCode stopped straight away (exit $rc). Repair it: sysmedic-ai-repair (menu 17), then type: opencode"
+        fi
         # Keep the cloud AI conversation with this visit (for the transcript bundle)
         sd=$(readlink -f /run/sysmedic/latest 2>/dev/null)
         [ -d "$sd" ] && [ -d /root/.local/share/opencode/storage ] && mkdir -p "$sd/ai" && \

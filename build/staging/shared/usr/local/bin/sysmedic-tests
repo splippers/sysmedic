@@ -1,0 +1,387 @@
+#!/usr/bin/env python3
+"""sysmedic-tests — every SysMedic hardware and software test, run in the background with live results.
+
+One catalogue used by the console, the AI (OpenCode slash commands) and the phone dashboard.
+Nothing here writes to the customer's disks: disk tests are read-only, Windows checks read a
+read-only mount.
+
+  sysmedic-tests menu                          pick a test, watch it live (menu 16)
+  sysmedic-tests list [--json]                 the catalogue
+  sysmedic-tests start TEST [--disk /dev/X] [--minutes N]
+                                               start a test in the background; prints its run id
+  sysmedic-tests status [RUN] [--json]         running and finished tests (latest first)
+  sysmedic-tests wait RUN|TEST [--timeout S]   wait for it to finish (default 540 s), then show the result
+  sysmedic-tests log RUN|TEST [-n LINES]       the output so far
+  sysmedic-tests stop RUN|TEST|all             stop a running test
+  sysmedic-tests disks [--json]                disks you can test (not SysMedic's own)
+
+Runs and their output are kept in the visit's session folder (tests/), so they're part of the
+job report and the review bundle.
+"""
+import datetime
+import json
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+try:
+    import session
+except ImportError:      # outside SysMedic (e.g. generating OpenCode commands at deploy time)
+    session = None
+
+NETWORK = r"""
+echo "== Interfaces"; ip -br addr
+echo; echo "== Default route"; ip route show default || echo "  none"
+gw=$(ip route show default | awk '{print $3; exit}')
+[ -n "$gw" ] && { echo; echo "== Gateway $gw"; ping -c 3 -W 2 "$gw" | tail -2; }
+echo; echo "== DNS"; resolvectl status 2>/dev/null | grep -E 'Current DNS|DNS Servers' | sort -u
+getent hosts www.microsoft.com >/dev/null && echo "  name lookup: OK" || echo "  name lookup: FAILED"
+echo; echo "== Internet"
+curl -s -o /dev/null -w '  HTTPS to microsoft.com: %{http_code} in %{time_total}s\n' --max-time 8 https://www.microsoft.com || echo "  HTTPS: FAILED"
+ping -c 3 -W 2 1.1.1.1 | tail -2
+echo; echo "== Wi-Fi"; nmcli -f DEVICE,TYPE,STATE,CONNECTION device 2>/dev/null
+nmcli -f IN-USE,SSID,SIGNAL,RATE,SECURITY device wifi list 2>/dev/null | head -8
+""".strip()
+
+# id: (category, title, what it does, command, needs, estimate, person)
+#   needs: "" | "disk" | "minutes";  person: what a person must do during the test ("" = nothing)
+TESTS = {
+    "health":    ("hardware", "Health report", "Temperatures, fans, throttling, battery, SMART of every disk, hardware errors",
+                  "sysmedic-hwtest report", "", "30 s", ""),
+    "cpu":       ("hardware", "CPU & cooling stress", "Full CPU load with temperatures and throttling logged; shows heat or power faults",
+                  "sysmedic-hwtest cpu {minutes}", "minutes", "5 min", ""),
+    "ram":       ("hardware", "RAM test", "memtester on all free memory, one pass (for a full test use MemTest86+ from the boot menu)",
+                  "sysmedic-hwtest ram", "", "20–60 min", ""),
+    "disk":      ("hardware", "Disk self-test & speed", "SMART short self-test plus read-only speed and latency tests",
+                  "sysmedic-hwtest disk {disk}", "disk", "3 min", ""),
+    "surface":   ("hardware", "Disk surface scan", "Reads every sector looking for bad blocks (read-only, slow)",
+                  "sysmedic-hwtest surface {disk}", "disk", "1–4 h", ""),
+    "gpu":       ("hardware", "Graphics benchmark", "glmark2 off-screen 3D benchmark with a score",
+                  "echo '== GPU'; lspci | grep -iE 'vga|3d|display'; glmark2-es2-drm --off-screen 2>&1 | grep -E 'GL_RENDERER|Score|FPS' | tail -14",
+                  "", "2 min", ""),
+    "battery":   ("hardware", "Battery health", "Design vs current capacity, wear, charge cycles, adapter",
+                  "sysmedic-hwtest battery", "", "5 s", ""),
+    "inventory": ("hardware", "Hardware inventory", "Full component list (serial numbers hidden)",
+                  "sysmedic-hwtest inventory", "", "15 s", ""),
+    "input":     ("hardware", "Keyboard & touchpad", "Shows every key press, touchpad move and click for 60 seconds",
+                  "echo 'Press every key, use the touchpad and buttons now (60 s)…'; timeout 60 libinput debug-events --show-keycodes 2>&1; true",
+                  "", "60 s", "press keys, move and click on the laptop"),
+    "audio":     ("hardware", "Speakers & microphone", "Says 'Front Left' then 'Front Right', then records 5 s and plays it back",
+                  "sysmedic-hwtest audio", "", "20 s", "listen at the laptop, and speak when it records"),
+    "scan":      ("software", "Triage scan", "Re-runs SysMedic's read-only scan: disks, health, filesystems, boot, Windows, network",
+                  "sysmedic-scan", "", "1 min", ""),
+    "network":   ("software", "Network check", "Interfaces, gateway, DNS, internet and Wi-Fi signal, step by step",
+                  NETWORK, "", "20 s", ""),
+    "windows-checkup":  ("software", "Windows check-up", "Everything below in one report (saved in the session)",
+                         "sysmedic-win checkup", "", "1–3 min", ""),
+    "windows-events":   ("software", "Windows event logs", "Every event log: crashes, power, disk, drivers, updates, apps, Defender, boot times",
+                         "sysmedic-win evtx", "", "1–2 min", ""),
+    "windows-registry": ("software", "Windows registry evidence", "Missing drivers/services, broken filters, hijacks, policies, recent installs",
+                         "sysmedic-win registry", "", "20 s", ""),
+    "windows-updates":  ("software", "Windows updates & repair logs", "CBS, DISM, Windows Update, upgrade logs: failing updates and corruption",
+                         "sysmedic-win cbs", "", "30 s", ""),
+    "windows-crashes":  ("software", "Blue screens", "Crash dumps decoded, with the usual cause",
+                         "sysmedic-win crashes", "", "10 s", ""),
+    "autoruns":  ("software", "Autostart programs", "Everything that starts with Windows; suspicious entries flagged",
+                  "sysmedic-win autoruns", "", "15 s", ""),
+    "malware":   ("software", "Malware scan", "ClamAV on autostart files and user/program-data folders",
+                  "sysmedic-win malware", "", "10–40 min", ""),
+}
+SUITES = {"full-check": ["health", "scan", "battery", "network", "windows-checkup"]}
+# OpenCode slash command for each test
+SLASH = {"health": "health", "cpu": "cpu-stress", "ram": "ram-test", "disk": "disk-test", "surface": "surface-scan",
+         "gpu": "gpu-test", "battery": "battery", "inventory": "inventory", "input": "input-test", "audio": "audio-test",
+         "scan": "scan", "network": "network-check", "windows-checkup": "windows-checkup", "windows-events": "windows-events",
+         "windows-registry": "windows-registry", "windows-updates": "windows-updates", "windows-crashes": "windows-crashes",
+         "autoruns": "autoruns", "malware": "malware-scan"}
+RUN = Path("/run/sysmedic/tests")
+C = {k: (v if sys.stdout.isatty() else "") for k, v in {"g": "\033[0;32m", "y": "\033[1;33m", "r": "\033[1;31m",
+                                                        "b": "\033[1m", "d": "\033[2m", "e": "\033[0m"}.items()}
+
+
+def session_dir():
+    try:
+        return session.session_dir()
+    except Exception:  # noqa: BLE001
+        return Path("/run/sysmedic")
+
+
+def runs_dir():
+    d = session_dir() / "tests"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def own_disk():
+    try:
+        src = subprocess.run(["findmnt", "-no", "SOURCE", "/mnt/persist"], capture_output=True, text=True).stdout.strip() \
+            or subprocess.run(["findmnt", "-no", "SOURCE", "/"], capture_output=True, text=True).stdout.strip()
+        return subprocess.run(["lsblk", "-no", "PKNAME", src], capture_output=True, text=True).stdout.split()[0]
+    except (IndexError, OSError):
+        return ""
+
+
+def disks():
+    out = json.loads(subprocess.run(["lsblk", "-J", "-d", "-o", "NAME,SIZE,MODEL,TRAN,TYPE"], capture_output=True, text=True).stdout or "{}")
+    mine = own_disk()
+    return [{"dev": "/dev/" + d["name"], "size": d["size"], "model": (d.get("model") or "").strip(), "tran": d.get("tran") or ""}
+            for d in out.get("blockdevices", []) if d["type"] == "disk" and d["name"] != mine
+            and not d["name"].startswith(("loop", "zram", "sr"))]
+
+
+def runs():
+    out = []
+    for f in sorted(runs_dir().glob("*.json"), reverse=True):
+        try:
+            r = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        rc = Path(r["log"]).with_suffix(".rc")
+        if rc.exists():
+            r["state"] = "passed" if rc.read_text().strip() == "0" else "finished with errors"
+            r["exit"] = rc.read_text().strip()
+            r["ended"] = datetime.datetime.fromtimestamp(rc.stat().st_mtime).isoformat(timespec="seconds")
+        elif r.get("stopped"):
+            r["state"] = "stopped"
+        else:
+            alive = True
+            try:
+                os.kill(r["pid"], 0)
+            except OSError:
+                alive = False
+            r["state"] = "running" if alive else "ended unexpectedly"
+        out.append(r)
+    return out
+
+
+def find_run(key):
+    rs = runs()
+    if key in ("latest", None) and rs:
+        return rs[0]
+    return next((r for r in rs if r["run"] == key), None) or next((r for r in rs if r["test"] == key), None)
+
+
+def start(test, disk="", minutes=None, via="console"):
+    if test not in TESTS:
+        raise ValueError(f"unknown test '{test}' (sysmedic-tests list)")
+    cat, title, _what, cmd, needs, _est, _person = TESTS[test]
+    if any(r["test"] == test and r["state"] == "running" for r in runs()):
+        raise ValueError(f"{title} is already running (sysmedic-tests status)")
+    if needs == "disk":
+        ok = {d["dev"] for d in disks()}
+        if disk not in ok:
+            raise ValueError(f"choose a disk to test: {', '.join(sorted(ok)) or 'none found'}")
+    minutes = int(minutes or 5)
+    if not 1 <= minutes <= 120:
+        raise ValueError("minutes must be 1–120")
+    cmd = cmd.replace("{disk}", shlex.quote(disk)).replace("{minutes}", str(minutes))
+    stamp = datetime.datetime.now().strftime("%H%M%S")
+    run_id = f"{test}-{stamp}"
+    log = runs_dir() / f"{run_id}.log"
+    wrapped = f"exec 2>&1; echo \"== {title} — started $(date '+%H:%M:%S')\"; {{ {cmd}\n}}; rc=$?; " \
+              f"echo; echo \"== finished $(date '+%H:%M:%S'), exit $rc\"; echo $rc > {shlex.quote(str(log.with_suffix('.rc')))}"
+    env = dict(os.environ, TERM="dumb", PAGER="cat", SYSTEMD_PAGER="", SYSMEDIC_TEST_VIA=via)
+    p = subprocess.Popen(["bash", "-c", wrapped], stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         start_new_session=True, env=env, cwd="/root")
+    rec = {"run": run_id, "test": test, "title": title, "category": cat, "disk": disk, "minutes": minutes if needs == "minutes" else None,
+           "pid": p.pid, "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log), "via": via}
+    (runs_dir() / f"{run_id}.json").write_text(json.dumps(rec))
+    if session:
+        try:
+            session.audit("tests", f"started {title}{(' ' + disk) if disk else ''} via {via} ({run_id})")
+        except Exception:  # noqa: BLE001
+            pass
+    return rec
+
+
+def stop(key):
+    targets = [r for r in runs() if r["state"] == "running"] if key == "all" else [find_run(key)]
+    stopped = []
+    for r in targets:
+        if not r or r["state"] != "running":
+            continue
+        try:
+            os.killpg(r["pid"], signal.SIGTERM)
+        except OSError:
+            pass
+        r["stopped"] = True
+        rec = {k: v for k, v in r.items() if k not in ("state", "exit", "ended")}
+        (runs_dir() / f"{r['run']}.json").write_text(json.dumps(rec))
+        stopped.append(r["run"])
+    return stopped
+
+
+def tail(r, n=40):
+    try:
+        lines = Path(r["log"]).read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    return "\n".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", l) for l in lines[-n:])
+
+
+def opencode_commands():
+    """OpenCode slash commands: one per test plus /tests, /full-check and /test-status (merged in at deploy)."""
+    howto = ("Run it with the bash tool: `{start}`. Then call `sysmedic-tests wait {test} --timeout 540` "
+             "(repeat while it says it's still running; for tests longer than ~30 minutes, tell the engineer it's "
+             "running, that they can watch it with `sysmedic-tests log {test}` or on the phone dashboard, and stop "
+             "waiting). When it finishes, read the output and explain the result in plain English: pass or fail, "
+             "what's abnormal, and what to do next. Keep it short.")
+    cmds = {}
+    for t, (cat, title, what, _cmd, needs, est, person) in TESTS.items():
+        start_cmd = f"sysmedic-tests start {t}" + (" --disk <DISK>" if needs == "disk" else "") + (" --minutes <N>" if needs == "minutes" else "")
+        parts = [f"SysMedic {cat} test: **{title}** ({what}; about {est})."]
+        if needs == "disk":
+            parts.append("Test the customer's disk(s): run `sysmedic-tests disks` and use the one(s) listed "
+                         "(if there are several and the engineer didn't say which, test each in turn). $ARGUMENTS")
+        if needs == "minutes":
+            parts.append("Duration in minutes: use the number in '$ARGUMENTS' if there is one, otherwise 5.")
+        if person:
+            parts.append(f"Before starting, tell the engineer what to do: {person}. Ask them afterwards what they saw or heard.")
+        parts.append(howto.format(start=start_cmd, test=t))
+        cmds[SLASH[t]] = {
+            "description": f"{title}: {what} ({est})", "agent": "SysMedic", "template": " ".join(parts)}
+    cmds["full-check"] = {"description": "Quick full check: health, scan, battery, network, Windows check-up (~5 min)", "agent": "SysMedic",
+                          "template": "Run SysMedic's quick full check: start each of " + ", ".join(f"`sysmedic-tests start {t}`" for t in SUITES["full-check"])
+                          + " one after another (wait for each with `sysmedic-tests wait TEST --timeout 540`). Then give one combined "
+                          "summary: what's healthy, what's wrong (most urgent first) and the next steps."}
+    cmds["tests"] = {"description": "List every hardware and software test SysMedic can run", "agent": "SysMedic",
+                     "template": "Run `sysmedic-tests list` and show the engineer the tests as a short numbered menu "
+                     "(name, what it shows, time). Mention the slash commands (e.g. /disk-test, /cpu-stress, /windows-checkup, "
+                     "/full-check) and that the phone dashboard can run them too. Ask which to run."}
+    cmds["test-status"] = {"description": "Show running and finished tests, with results", "agent": "SysMedic",
+                           "template": "Run `sysmedic-tests status` and summarise: what's running (and for how long), and the "
+                           "result of each finished test in one line."}
+    return cmds
+
+
+def menu():
+    ids = list(TESTS)
+    while True:
+        print(f"\n{C['b']}  SysMedic tests{C['e']}   {C['d']}(read-only; results go into this visit's job report){C['e']}")
+        for i, t in enumerate(ids, 1):
+            v = TESTS[t]
+            if i == 1 or v[0] != TESTS[ids[i - 2]][0]:
+                print(f"\n  {C['b']}{v[0].capitalize()}{C['e']}")
+            print(f"  {i:2}) {v[1]:30} {C['d']}{v[5]}{C['e']}" + (f"  {C['y']}(you: {v[6]}){C['e']}" if v[6] else ""))
+        print(f"\n   s) Status of tests run this visit    x) Stop running tests    0) Back")
+        print(f"  {C['d']}Full RAM test: reboot into MemTest86+ from the boot menu. The phone dashboard runs these too.{C['e']}")
+        c = input("  Choose: ").strip().lower()
+        if c in ("0", "", "q"):
+            return
+        if c == "s":
+            os.system("sysmedic-tests status"); input("  Press Enter…"); continue
+        if c == "x":
+            print("  " + (", ".join(stop("all")) or "Nothing running.")); input("  Press Enter…"); continue
+        if not c.isdigit() or not 1 <= int(c) <= len(ids):
+            continue
+        t = ids[int(c) - 1]
+        v = TESTS[t]
+        disk, minutes = "", None
+        if v[4] == "disk":
+            ds = disks()
+            for j, d in enumerate(ds, 1):
+                print(f"   {j}) {d['dev']:14} {d['size']:>8}  {d['model']} {d['tran']}")
+            pick = input("  Disk number: ").strip()
+            if not pick.isdigit() or not 1 <= int(pick) <= len(ds):
+                continue
+            disk = ds[int(pick) - 1]["dev"]
+        if v[4] == "minutes":
+            minutes = input("  Minutes [5]: ").strip() or "5"
+        if v[6]:
+            print(f"  {C['y']}You'll need to {v[6]}.{C['e']}")
+        try:
+            r = start(t, disk, minutes)
+        except ValueError as e:
+            print(f"  {e}"); input("  Press Enter…"); continue
+        print(f"  Started {r['title']}. Showing its output live; Ctrl-C returns to the menu (the test keeps running).\n")
+        try:
+            subprocess.run(["bash", "-c", f"tail -n +1 -f {shlex.quote(r['log'])} & t=$!; "
+                            f"while [ ! -e {shlex.quote(str(Path(r['log']).with_suffix('.rc')))} ]; do sleep 1; done; sleep 1; kill $t"])
+            input("\n  Finished. Press Enter…")
+        except KeyboardInterrupt:
+            print("\n  (still running in the background: sysmedic-tests status)")
+
+
+def main():
+    a = sys.argv[1:]
+    js = "--json" in a
+    a = [x for x in a if x != "--json"]
+    opt = lambda name, d=None: a[a.index(name) + 1] if name in a and a.index(name) + 1 < len(a) else d  # noqa: E731
+    cmd = a[0] if a else "list"
+    if cmd in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    if cmd == "opencode-commands":
+        print(json.dumps(opencode_commands(), indent=2))
+        return
+    if os.geteuid() != 0:
+        sys.exit("sysmedic-tests must run as root")
+    if cmd == "menu":
+        try:
+            menu()
+        except (KeyboardInterrupt, EOFError):
+            print()
+        return
+    if cmd == "list":
+        if js:
+            print(json.dumps([{"id": t, "category": v[0], "title": v[1], "what": v[2], "needs": v[4], "estimate": v[5], "person": v[6]}
+                              for t, v in TESTS.items()], indent=1))
+            return
+        for cat in ("hardware", "software"):
+            print(f"\n{C['b']}{cat.capitalize()} tests{C['e']}")
+            for t, v in TESTS.items():
+                if v[0] == cat:
+                    extra = " --disk /dev/X" if v[4] == "disk" else " [--minutes N]" if v[4] == "minutes" else ""
+                    print(f"  {t:17} {v[1]:30} {C['d']}{v[5]:>9}  {v[2]}{C['e']}" + (f"  {C['y']}(person: {v[6]}){C['e']}" if v[6] else ""))
+        print(f"\n  Start: sysmedic-tests start TEST   ·   Watch: sysmedic-tests status / log TEST   ·   Full RAM test: MemTest86+ in the boot menu")
+    elif cmd == "disks":
+        ds = disks()
+        print(json.dumps(ds) if js else "\n".join(f"  {d['dev']:14} {d['size']:>8}  {d['model']} {d['tran']}" for d in ds) or "  no disks to test")
+    elif cmd == "start":
+        try:
+            r = start(a[1] if len(a) > 1 else "", opt("--disk", ""), opt("--minutes"), via=os.environ.get("SYSMEDIC_TESTS_VIA") or ("ai" if os.environ.get("SYSMEDIC_AI") else "console"))
+        except (ValueError, IndexError) as e:
+            sys.exit(f"  {e}")
+        print(json.dumps(r) if js else f"  Started {r['title']} ({r['run']}). Watch: sysmedic-tests log {r['test']}")
+    elif cmd == "status":
+        rs = runs()
+        if len(a) > 1:
+            rs = [r for r in rs if r["run"] == a[1] or r["test"] == a[1]][:1]
+        if js:
+            print(json.dumps(rs))
+            return
+        if not rs:
+            print("  No tests run yet this visit. sysmedic-tests list")
+        for r in rs:
+            col = {"running": C["y"], "passed": C["g"]}.get(r["state"], C["r"])
+            print(f"  {col}{r['state']:20}{C['e']} {r['title']}{(' ' + r['disk']) if r.get('disk') else ''}  {C['d']}{r['run']}, started {r['started'][11:19]}{C['e']}")
+    elif cmd == "wait":
+        key = a[1] if len(a) > 1 else "latest"
+        limit, t0 = int(opt("--timeout", 540)), time.time()
+        while True:
+            r = find_run(key)
+            if not r:
+                sys.exit(f"  no such test run: {key}")
+            if r["state"] != "running" or time.time() - t0 > limit:
+                break
+            time.sleep(3)
+        print(tail(r, 80))
+        print(f"\n  [{r['title']}: {r['state']}" + ("" if r["state"] != "running" else f" — still running after {limit} s; wait again or check later") + "]")
+    elif cmd == "log":
+        r = find_run(a[1] if len(a) > 1 else "latest")
+        print(tail(r, int(opt("-n", 60))) if r else "  no such test run")
+    elif cmd == "stop":
+        s = stop(a[1] if len(a) > 1 else "all")
+        print(f"  Stopped: {', '.join(s)}" if s else "  Nothing running.")
+    else:
+        sys.exit(f"Unknown command '{cmd}'. Try: sysmedic-tests help")
+
+
+if __name__ == "__main__":
+    main()

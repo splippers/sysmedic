@@ -7,8 +7,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 TARGET=$1
 ISO=sysmedic-v2.iso
-OLLAMA_SRC_MODELS=/usr/share/ollama/.ollama/models
-MODELS="qwen2.5:3b qwen2.5:7b jonotron:v3"
+# Ollama runtime and models: from the kit if bootstrap.sh fetched them, else this PC's own Ollama install
+OLLAMA_SRC_MODELS=$( [ -d ollama-models/manifests ] && echo "$PWD/ollama-models" || echo /usr/share/ollama/.ollama/models )
+OLLAMA_BIN=$( [ -x downloads/ollama/bin/ollama ] && echo downloads/ollama/bin/ollama || echo /usr/local/bin/ollama )
+OLLAMA_LIB=$( [ -d downloads/ollama/lib/ollama ] && echo downloads/ollama/lib/ollama || echo /usr/local/lib/ollama )
+MODELS="qwen2.5:3b qwen2.5:7b"
 
 sudo dd if="$ISO" of="$TARGET" bs=4M conv=fsync,notrunc status=none
 sync
@@ -36,8 +39,8 @@ mkdir -p pmnt
 sudo mount "$PART" pmnt
 P=pmnt
 sudo mkdir -p $P/{logs,backups,sessions} $P/ollama/{bin,lib/ollama} $P/ollama/models/blobs
-sudo cp /usr/local/bin/ollama $P/ollama/bin/
-sudo cp -a /usr/local/lib/ollama/libggml-*.so* $P/ollama/lib/ollama/   # CPU backends only
+sudo cp "$OLLAMA_BIN" $P/ollama/bin/
+sudo cp -a "$OLLAMA_LIB"/libggml-*.so* $P/ollama/lib/ollama/   # CPU backends only
 
 for m in $MODELS; do
     name=${m%:*} tag=${m#*:}
@@ -60,7 +63,7 @@ SysMedic persistence partition (label FOG_AMB_PERSIST)
 logs/      SysMedic and Ollama logs
 backups/   data rescued from machines being repaired
 sessions/  repair session records saved with menu option 3 (sync-back)
-ollama/    offline AI: Ollama runtime (CPU) + qwen2.5:7b / qwen2.5:3b agents + jonotron:v3 chat
+ollama/    offline AI: Ollama runtime (CPU) + qwen2.5:7b / qwen2.5:3b agents
 clamav/    ClamAV virus signatures (updated automatically when online)
 private/   serial numbers from scans — kept away from the AI
 

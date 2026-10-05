@@ -2,7 +2,8 @@
 """Rebrand an OpenCode binary as SysMedic (in place, same size, idempotent).
 
 Changes only what's shown on screen: the logo, the prompt's example questions, the home-screen
-tips (rescue tips instead of coding tips), and tool output starts fully expanded (OpenCode cuts it to
+tips (rescue tips instead of coding tips), a "/" menu without the developer commands (they stay in
+Ctrl+P; SysMedic's tests are the slash commands), and tool output starts fully expanded (OpenCode cuts it to
 3-10 lines behind "Click to expand", which needs a mouse; the SysMedic console has none, so long
 output is read with Page Up/Down instead).
 
@@ -76,8 +77,28 @@ def replace_span(data, start, end, new, what):
     return data[:start] + new + b" " * (end - start - len(new)) + data[end:], True
 
 
+# Built-in slash commands an engineer needs; the rest (agents, connect, diff, editor, MCPs, share…) leave the
+# "/" menu, which then shows SysMedic's tests. They stay available in the Ctrl+P command palette.
+SLASH_KEEP = {"new", "exit", "help", "models", "undo", "redo", "compact", "copy"}
+
+
+def hide_slash(data):
+    n = 0
+
+    def sub(m):
+        nonlocal n
+        if m.group(2).decode() in SLASH_KEEP:
+            return m.group(0)
+        n += 1
+        return (b"slashNamX:" if m.group(1) == b"slashName:" else b"slasX:{name:") + b'"' + m.group(2) + b'"'
+    return re.sub(rb'(slashName:|slash:\{name:)"([a-z-]+)"', sub, data), n
+
+
 def patch_texts(data):
     done = []
+    data, hidden = hide_slash(data)
+    if hidden:
+        done.append(f"{hidden} developer commands out of the / menu")
     # Prompt placeholder examples
     m = re.search(rb'\{normal:\["Fix a TODO in the codebase",(?:"(?:[^"\\]|\\.)*",?)*\],shell:\[(?:"(?:[^"\\]|\\.)*",?)*\]\}', data)
     if m:

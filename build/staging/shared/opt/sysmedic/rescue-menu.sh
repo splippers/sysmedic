@@ -10,31 +10,30 @@ while true; do
     clear
     echo ""
     echo -e "${BOLD}  ╔══════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}  ║   🚑  SysMedic Rescue System   ║${NC}"
+    echo -e "${BOLD}  ║    SysMedic Rescue System            ║${NC}"
     echo -e "${BOLD}  ╠══════════════════════════════════════╣${NC}"
-    echo -e "${BOLD}  ║  1) OpenCode AI Rescue Assistant    ║${NC}"
-    echo -e "${BOLD}  ║  2) Wi-Fi connect (nmtui)           ║${NC}"
-    echo -e "${BOLD}  ║  3) Save session log to USB         ║${NC}"
+    echo -e "${BOLD}  ║  1) AI rescue assistant (OpenCode)   ║${NC}"
+    echo -e "${BOLD}  ║  2) Wi-Fi connect                    ║${NC}"
+    echo -e "${BOLD}  ║  3) Save session log to USB          ║${NC}"
     echo -e "${BOLD}  ║  4) Triage scan (read-only)          ║${NC}"
     echo -e "${BOLD}  ║  5) Fix Linux boot (GRUB/initramfs)  ║${NC}"
-    echo -e "${BOLD}  ║  6) Windows tools (BitLocker, BSOD…)  ║${NC}"
+    echo -e "${BOLD}  ║  6) Windows tools (BitLocker, BSOD…) ║${NC}"
     echo -e "${BOLD}  ║  7) Fix macOS (HFS+/APFS)            ║${NC}"
-    echo -e "${BOLD}  ║  8) Backup data                       ║${NC}"
-    echo -e "${BOLD}  ║  9) Drop to shell (exit when done)   ║${NC}"
-    echo -e "${BOLD}  ║ 10) Reboot                            ║${NC}"
-    echo -e "${BOLD}  ║ 11) Unlock a partition for repair     ║${NC}"
-    echo -e "${BOLD}  ║ 12) Write-protect all disks again     ║${NC}"
-    echo -e "${BOLD}  ║ 13) Job report (for the customer)     ║${NC}"
-    echo -e "${BOLD}  ║ 14) Phone dashboard (QR code)         ║${NC}"
-    echo -e "${BOLD}  ║ 15) Advanced toolkit (stress test,    ║${NC}"
-    echo -e "${BOLD}  ║     OS imaging, macOS, Windows extras)║${NC}"
-    echo -e "${BOLD}  ║ 16) Hardware tests (CPU, RAM, disk,   ║${NC}"
-    echo -e "${BOLD}  ║     GPU, battery, keyboard, audio)    ║${NC}"
-    echo -e "${BOLD}  ║  0) Shutdown                          ║${NC}"
+    echo -e "${BOLD}  ║  8) Backup data                      ║${NC}"
+    echo -e "${BOLD}  ║  9) Shell (type exit to return)      ║${NC}"
+    echo -e "${BOLD}  ║ 10) Reboot                           ║${NC}"
+    echo -e "${BOLD}  ║ 11) Unlock a partition for repair    ║${NC}"
+    echo -e "${BOLD}  ║ 12) Write-protect all disks again    ║${NC}"
+    echo -e "${BOLD}  ║ 13) Job report (for the customer)    ║${NC}"
+    echo -e "${BOLD}  ║ 14) Phone dashboard (QR code)        ║${NC}"
+    echo -e "${BOLD}  ║ 15) Advanced toolkit                 ║${NC}"
+    echo -e "${BOLD}  ║ 16) Tests (hardware & software)      ║${NC}"
+    echo -e "${BOLD}  ║ 17) Repair the AI assistant          ║${NC}"
+    echo -e "${BOLD}  ║  0) Shutdown                         ║${NC}"
     echo -e "${BOLD}  ╚══════════════════════════════════════╝${NC}"
     echo -e "  ${CYAN}SysMedic ${EDITION} edition · v${VERSION}${NC}"
     echo ""
-    echo -ne "  ${CYAN}Choice [0-16]:${NC} "
+    echo -ne "  ${CYAN}Choice [0-17]:${NC} "
     read choice
     echo ""
     
@@ -42,7 +41,11 @@ while true; do
         1)
             clear
             if command -v opencode &>/dev/null; then
+                t0=$(date +%s)
                 SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode
+                rc=$?
+                [ "$rc" != 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ] && \
+                    { echo ""; echo "  OpenCode stopped straight away (exit $rc). Repair it with option 17."; read -p "  Press Enter..."; }
             else
                 echo "OpenCode not found"
                 read -p "Press Enter..."
@@ -201,7 +204,12 @@ while true; do
             ;;
         16)
             clear
-            /usr/local/bin/sysmedic-hwtest
+            /usr/local/bin/sysmedic-tests menu
+            ;;
+        17)
+            clear
+            /usr/local/bin/sysmedic-ai-repair
+            read -p "  Press Enter..."
             ;;
         0)
             echo "Shutting down..."

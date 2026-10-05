@@ -5,8 +5,9 @@
   sysmedic-dash            show its address and a QR code to scan with a phone
 
 Shows live status, findings, write protection, the audit trail and backups;
-takes job details and notes; builds and serves the job report. It cannot
-repair, unlock or change anything on the computer being worked on.
+takes job details and notes; builds and serves the job report; runs SysMedic's
+hardware and software tests (sysmedic-tests: all read-only) and shows them live.
+It cannot repair, unlock or change anything on the computer being worked on.
 Access needs the random token in the QR code; the phone must be on the same
 network (same Wi-Fi, or USB tethering from the phone).
 """
@@ -81,6 +82,11 @@ main{padding:12px 16px 80px;max-width:760px;margin:0 auto}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat{text-align:center}.stat b{display:block;font-size:24px}.stat span{font-size:12px;color:var(--muted)}
 .f{border-left:3px solid var(--line);padding:6px 0 6px 10px;margin:6px 0}.f.critical{border-color:var(--crit)}.f.warning{border-color:var(--warn)}.f.info{border-color:var(--info)}.f.ok{border-color:var(--ok)}
 .f small{display:block;color:var(--muted);font-size:13px}.pill{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--line);margin:2px 4px 2px 0}
+.t{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+.t div{flex:1}.t small{display:block;color:var(--muted);font-size:13px}.t button{margin:0;padding:8px 14px;white-space:nowrap}
+.t select,.t input{margin:4px 0 0;padding:6px;font-size:14px;width:auto}.run{padding:6px 0;border-top:1px solid var(--line)}
+.state{font-size:12px;padding:2px 8px;border-radius:99px;background:var(--line)}.state.running{color:var(--warn);font-weight:700}
+.state.passed{color:var(--ok)}pre.log{max-height:320px;overflow:auto;white-space:pre-wrap;font-size:12px;margin:6px 0 0}
 .pill.locked{color:var(--ok)}.pill.WRITABLE{color:var(--warn);font-weight:700}
 pre{white-space:pre-wrap;word-break:break-word;font-size:11.5px;margin:0;color:var(--muted)}
 input,textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;margin:4px 0}
@@ -94,6 +100,9 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px}#toast{position
  <div class=stat><b id=nc>–</b><span>critical</span></div><div class=stat><b id=nw>–</b><span>warnings</span></div>
  <div class=stat><b id=nb>–</b><span>backups</span></div><div class=stat><b id=ng>–</b><span>unlocked</span></div></div></div>
 <div class=card><h2>Findings</h2><div id=findings></div></div>
+<div class=card><h2>Tests</h2><p class=muted style="font-size:13px;margin:0 0 6px">Read-only: nothing is written to the customer's disks. Results go into the job report.</p>
+ <div id=runs></div><details style="margin-top:8px"><summary>Hardware tests</summary><div id=thw></div></details>
+ <details><summary>Software tests</summary><div id=tsw></div></details></div>
 <div class=card><h2>Disk write protection</h2><div id=guard></div><p class=muted style="font-size:13px;margin:8px 0 0">Unlocking is only possible on the rescue computer's console (Alt+F2).</p></div>
 <div class=card><h2>Job</h2>
  <label>Customer</label><input id=customer><label>Contact</label><input id=contact>
@@ -132,7 +141,26 @@ async function addNote(){const t=$('note').value.trim();if(!t)return;await post(
 async function makeReport(){$('rbtn').disabled=true;$('rstate').textContent='Re-scanning and building the report (about 30 s)…';
  try{const r=await post('api/report',{});$('rstate').textContent=r.summary;$('ropen').style.display='inline-block'}catch(e){$('rstate').textContent='Failed: '+e.message}
  $('rbtn').disabled=false;refresh()}
-refresh();setInterval(refresh,5000);
+let openLog=null,testsBuilt=false;
+async function tests(){
+ let d;try{const r=await fetch('api/tests?t='+T);if(!r.ok)return;d=await r.json()}catch(e){return}
+ if(!testsBuilt){testsBuilt=true;
+  for(const t of d.tests){const row=el('div','t'),info=el('div','',t.title);info.append(el('small','',t.what+' · about '+t.estimate+(t.person?' · you: '+t.person:'')));
+   let sel=null,min=null;
+   if(t.needs=='disk'){sel=el('select');for(const k of d.disks)sel.append(new Option(k.dev+' · '+k.size+' '+k.model,k.dev));if(!d.disks.length)sel.append(new Option('no disk found',''));info.append(sel)}
+   if(t.needs=='minutes'){min=el('input');min.type='number';min.value=5;min.min=1;min.max=120;min.style.width='70px';info.append(min);info.append(el('small','','minutes'))}
+   const b=el('button','','Run');b.onclick=async()=>{b.disabled=true;try{await post('api/tests/start',{test:t.id,disk:sel?sel.value:'',minutes:min?min.value:null});toast(t.title+' started');openLog=null;tests()}catch(e){toast('Not started: '+e.message)}b.disabled=false};
+   row.append(info,b);$(t.category=='hardware'?'thw':'tsw').append(row)}}
+ const R=$('runs');R.replaceChildren();
+ if(!d.runs.length)R.append(el('p','muted','No tests run yet this visit.'));
+ for(const r of d.runs.slice(0,12)){const box=el('div','run'),top=el('div','');
+  top.append(el('span','state '+(r.state=='running'?'running':r.state=='passed'?'passed':''),r.state),' '+r.title+(r.disk?' '+r.disk:'')+' · '+r.started.slice(11,16)+(r.via?' · '+r.via:''));
+  const v=el('button','',openLog==r.run?'Hide':'Show output');v.style.cssText='margin:4px 6px 0 0;padding:6px 10px';v.onclick=()=>{openLog=openLog==r.run?null:r.run;tests()};top.append(el('br'),v);
+  if(r.state=='running'){const s=el('button','','Stop');s.style.cssText='margin:4px 0 0;padding:6px 10px;background:var(--crit)';s.onclick=async()=>{await post('api/tests/stop',{run:r.run});toast('Stopped');tests()};top.append(s)}
+  box.append(top);
+  if(openLog==r.run){const pre=el('pre','log','…');box.append(pre);fetch('api/tests/log?run='+encodeURIComponent(r.run)+'&t='+T).then(x=>x.text()).then(x=>{pre.textContent=x;pre.scrollTop=pre.scrollHeight})}
+  R.append(box)}}
+refresh();setInterval(refresh,5000);tests();setInterval(tests,3000);
 </script></html>"""
 
 
@@ -170,6 +198,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(200, PAGE, "text/html")
         if path == "/api/status":
             return self.send(200, status())
+        if path == "/api/tests":
+            return self.send(200, tests_state())
+        if path == "/api/tests/log":
+            run = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("run") or [""])[0]
+            p = subprocess.run(["/usr/local/bin/sysmedic-tests", "log", run, "-n", "200"], capture_output=True, text=True, timeout=20)
+            return self.send(200, p.stdout, "text/plain")
         if path in ("/report", "/report.txt"):
             f = session.session_dir() / ("report.html" if path == "/report" else "report.txt")
             if not f.exists():
@@ -199,6 +233,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if changed:
                 session.audit("phone", "JOB details updated: " + ", ".join(changed))
             return self.send(200, {"ok": True})
+        if path == "/api/tests/start":
+            args = ["/usr/local/bin/sysmedic-tests", "start", str(body.get("test", ""))]
+            if body.get("disk"):
+                args += ["--disk", str(body["disk"])]
+            if body.get("minutes"):
+                args += ["--minutes", str(body["minutes"])]
+            p = subprocess.run(args, capture_output=True, text=True, timeout=30, env=dict(os.environ, SYSMEDIC_TESTS_VIA="phone"))
+            return self.send(200 if p.returncode == 0 else 400, {"ok": p.returncode == 0, "message": (p.stdout + p.stderr).strip()}
+                             if p.returncode == 0 else (p.stdout + p.stderr).strip(), "application/json" if p.returncode == 0 else "text/plain")
+        if path == "/api/tests/stop":
+            subprocess.run(["/usr/local/bin/sysmedic-tests", "stop", str(body.get("run", "all"))], capture_output=True, timeout=30)
+            session.audit("phone", f"test stopped: {body.get('run', 'all')}")
+            return self.send(200, {"ok": True})
         if path == "/api/report":
             with report_lock:
                 p = subprocess.run(["/usr/local/bin/sysmedic-report"], capture_output=True, text=True, timeout=300)
@@ -207,10 +254,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.send(404, "not found", "text/plain")
 
 
+def tests_state():
+    run = lambda *a: json.loads(subprocess.run(["/usr/local/bin/sysmedic-tests", *a, "--json"], capture_output=True, text=True,  # noqa: E731
+                                               timeout=20).stdout or "[]")
+    return {"tests": run("list"), "runs": run("status"), "disks": run("disks")}
+
+
 def show_qr():
     t = token()
     ips = addresses()
-    print("\n  SysMedic phone dashboard (read-only + job notes)")
+    print("\n  SysMedic phone dashboard (status, job notes, tests)")
     if not ips:
         print("  No network yet. Put the phone on the same Wi-Fi, or plug it in and turn on USB tethering,")
         print("  then run: sysmedic-dash")

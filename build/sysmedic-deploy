@@ -9,7 +9,8 @@
 # Source of truth: staging/shared/ (identical on both), staging/editions/<edition>/,
 # staging/agent/{core,caddy,stick}.md. Both drives get the same version stamp when
 # their shared core is the same, so /etc/sysmedic/version tells you if they're in step.
-set -euo pipefail
+set -Eeuo pipefail
+trap 'echo -e "\033[1;31mERROR:\033[0m deploy stopped at line $LINENO: $BASH_COMMAND" >&2' ERR
 cd "$(dirname "$0")"
 KIT=$PWD
 ST=$KIT/staging
@@ -46,7 +47,7 @@ host_disk() { lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -1; }
 install_tree() {
     local root=$1 ed=$2 before after v
     v=$(version)
-    before=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null" | md5sum)
+    before=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null; true" | md5sum)
     # Leftovers from older builds that break things (staging/obsolete.txt)
     grep -vE '^\s*(#|$)' "$ST/obsolete.txt" 2>/dev/null | while read -r f; do
         [ -e "$root/$f" ] && { sudo rm -f "$root/$f"; say "Removed obsolete /$f"; }
@@ -83,11 +84,31 @@ EOF
     fi
     sudo grep -lsE '^\s*password:' "$root"/etc/netplan/* >/dev/null 2>&1 && \
         say "WARNING: a password is still stored in $root/etc/netplan — check it"
+    # OpenCode slash commands for every test (/disk-test, /cpu-stress, /windows-checkup, /full-check, /tests…),
+    # generated from sysmedic-tests' catalogue so the menu always matches the tests
+    python3 "$ST/shared/usr/local/bin/sysmedic-tests" opencode-commands > "$WORK/commands.json"
+    sudo python3 - "$root/root/.config/opencode/opencode.json" "$WORK/commands.json" <<'PY'
+import json, sys
+from collections import OrderedDict
+p = sys.argv[1]; c = json.load(open(p), object_pairs_hook=OrderedDict)
+c["command"] = json.load(open(sys.argv[2]))
+json.dump(c, open(p, "w"), indent=2)
+PY
     # OpenCode as SysMedic: logo, examples, tips, and tool output fully expanded (no mouse on the console)
     local oc
     for oc in "$root/usr/local/bin/opencode" "$root/root/.opencode/bin/opencode"; do
         [ -f "$oc" ] && [ ! -L "$oc" ] && { sudo python3 "$repo/build/opencode-brand.py" "$oc" | sed 's|^|    |' || say "WARNING: couldn't brand $oc (OpenCode changed?); it still works, unbranded"; }
     done
+    # Known-good copies for sysmedic-ai-repair (after branding, so a restore keeps the SysMedic changes)
+    local good=$root/usr/local/share/sysmedic/opencode
+    sudo rm -rf "$good"; sudo mkdir -p "$good/config"
+    sudo cp -a "$root/root/.config/opencode/opencode.json" "$root/root/.config/opencode/tui.json" \
+               "$root/root/.config/opencode/cli.json" "$root/root/.config/opencode/themes" "$good/config/"
+    sudo cp "$ST/shared/root/.local/state/opencode/kv.json" "$good/kv.json"
+    if [ -f "$root/usr/local/bin/opencode" ] && [ ! -L "$root/usr/local/bin/opencode" ]; then
+        sudo cp "$root/usr/local/bin/opencode" "$good/opencode"
+        (cd "$root/usr/local/bin" && sudo sha256sum opencode) | sudo tee "$good/opencode.sha256" >/dev/null
+    fi
     sudo ln -sf sysmedic-guard "$root/usr/local/sbin/sysmedic-lock"
     sudo ln -sf sysmedic-guard "$root/usr/local/sbin/sysmedic-unlock"
     sudo ln -sf ambulance "$root/usr/local/bin/menu"
@@ -98,7 +119,7 @@ EOF
         printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
     echo "$ed" | sudo tee "$root/etc/sysmedic/edition" >/dev/null
     echo "$v" | sudo tee "$root/etc/sysmedic/version" >/dev/null
-    after=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null" | md5sum)
+    after=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* 2>/dev/null; true" | md5sum)
     HOOKS_CHANGED=0; [ "$before" = "$after" ] || HOOKS_CHANGED=1
     DEPLOYED_VERSION=$v
     say "Installed SysMedic $ed edition v$v into $root"
@@ -168,6 +189,43 @@ find_caddy() {   # a USB disk (not this PC's) whose ext4 root carries SysMedic's
     done
 }
 
+# install_caddy_extras ROOT: what only the caddy has: the full toolkit in /opt/sysmedic (repo root),
+# root's shell setup, the persistence service, and only the Qwen models in the Ollama store
+install_caddy_extras() {
+    local root=$1 repo pruned
+    repo=$(cd "$(realpath "$ST")/../.." && pwd)
+    sudo rsync -rlpt --chown=root:root --exclude=.git --exclude=build --exclude=docs --exclude='*.pyc' \
+        "$repo/" "$root/opt/sysmedic/"
+    sudo install -o root -g root -m 755 "$repo/usr-local-bin/sysmedic" "$repo/usr-local-bin/sysmedic-menu" "$root/usr/local/bin/"
+    sudo install -o root -g root -m 644 "$repo/dotfiles/.bashrc" "$repo/dotfiles/.tmux.conf" "$root/root/"
+    sudo grep -q 'sysmedic/audit.sh' "$root/root/.bashrc" || \
+        printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
+    sudo mkdir -p "$root/etc/systemd/system/sysinit.target.wants"
+    sudo ln -sf /etc/systemd/system/sysmedic-persist.service "$root/etc/systemd/system/sysinit.target.wants/sysmedic-persist.service"
+    # Offline AI: Qwen only (anything else in the store is removed, with blobs no Qwen manifest uses)
+    pruned=$(sudo python3 - "$root/srv/sysmedic/ollama/models" <<'PY'
+import json, os, sys, shutil
+base = sys.argv[1]; lib = os.path.join(base, "manifests/registry.ollama.ai/library")
+if not os.path.isdir(lib):
+    sys.exit()
+removed, used = [], set()
+for name in os.listdir(lib):
+    if name != "qwen2.5":
+        shutil.rmtree(os.path.join(lib, name)); removed.append(name); continue
+    for tag in os.listdir(os.path.join(lib, name)):
+        m = json.load(open(os.path.join(lib, name, tag)))
+        used |= {m["config"]["digest"].replace(":", "-")} | {l["digest"].replace(":", "-") for l in m["layers"]}
+if removed:
+    for b in os.listdir(os.path.join(base, "blobs")):
+        if b not in used:
+            os.remove(os.path.join(base, "blobs", b))
+print(" ".join(removed))
+PY
+)
+    [ -n "$pruned" ] && say "Removed offline models other than Qwen: $pruned"
+    return 0
+}
+
 deploy_caddy() {
     local dev=${1:-} root=$WORK/caddy esp
     mkdir -p "$WORK/probe" "$root"
@@ -179,11 +237,17 @@ deploy_caddy() {
     esp=$(lsblk -lpno NAME,FSTYPE "$dev" | awk '$2=="vfat"{print $1; exit}')
     mnt "$rootp" "$root"
     [ -n "$esp" ] && mnt "$esp" "$root/boot/efi"
+    local grub_before; grub_before=$(sudo sh -c "cat $root/etc/default/grub $root/etc/default/grub.d/* 2>/dev/null; true" | md5sum)
     install_tree "$root" caddy
+    install_caddy_extras "$root"
     install_packages "$root" caddy
     if [ "$HOOKS_CHANGED" = 1 ]; then
         say "An initramfs hook changed: rebuilding the caddy's initramfs"
         chroot_run "$root" update-initramfs -u -k all
+    fi
+    if [ "$grub_before" != "$(sudo sh -c "cat $root/etc/default/grub $root/etc/default/grub.d/* 2>/dev/null; true" | md5sum)" ]; then
+        say "Boot menu settings changed: updating GRUB"
+        chroot_run "$root" update-grub 2>&1 | grep -E '^Found|done' || true
     fi
     sync
     say "Caddy updated. Safe to unplug once this finishes."

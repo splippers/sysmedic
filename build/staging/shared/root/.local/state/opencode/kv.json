@@ -1,0 +1,16 @@
+{
+  "sidebar": "hide",
+  "thinking_visibility": false,
+  "thinking_mode": "hide",
+  "timestamps": "hide",
+  "tool_details_visibility": true,
+  "generic_tool_output_visibility": true,
+  "assistant_metadata_visibility": false,
+  "scrollbar_visible": true,
+  "diff_wrap_mode": "word",
+  "animations_enabled": false,
+  "tips_hidden": true,
+  "dismissed_getting_started": true,
+  "go_upsell_dont_show": true,
+  "go_upsell_account_rate_limit_dont_show": true
+}

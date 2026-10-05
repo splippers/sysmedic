@@ -51,14 +51,6 @@
             "context": 16384,
             "output": 4096
           }
-        },
-        "jonotron:v3": {
-          "name": "Jonotron v3 (offline chat, no tools)",
-          "tool_call": false,
-          "limit": {
-            "context": 16384,
-            "output": 4096
-          }
         }
       }
     }
@@ -159,6 +151,7 @@
       "ras-mc-ctl --summary*": "allow",
       "ras-mc-ctl --errors*": "allow",
       "edac-util*": "allow",
+      "sysmedic-tests*": "allow",
       "blockdev *--setrw*": "deny",
       "blockdev --setrw*": "deny",
       "hdparm *-r*": "deny",

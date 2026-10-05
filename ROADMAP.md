@@ -13,6 +13,7 @@
 - Network toolkit, nmtui Wi-Fi, DNS fallback, firmware-failure diagnosis
 - Job reports, phone dashboard, session transcripts, review bundles, stick → caddy collection
 - `sysmedic-deploy` keeps both editions in step; docs on both drives
+- Reproducible builds from scratch (stock Ubuntu 24.04.5 ISO → stick or caddy): `build/bootstrap.sh`, [docs/BUILDING.md](docs/BUILDING.md)
 
 ## Next
 
@@ -24,7 +25,6 @@
 6. **Leaner OpenCode prompt** for offline use, or a SysMedic agent profile with fewer tools.
 7. **A passive network diagnosis** command (link → IP → gateway → DNS → internet, with a verdict).
 8. **APFS read-write**, once a driver builds on current kernels.
-9. **Reproducible stick builds** from the stock Ubuntu ISO (today the build starts from the maintained `root/`).
 
 ## Not planned
 

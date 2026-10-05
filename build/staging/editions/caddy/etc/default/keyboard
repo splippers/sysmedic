@@ -1,0 +1,6 @@
+# SysMedic caddy: UK keyboard
+XKBMODEL="pc105"
+XKBLAYOUT="gb"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"

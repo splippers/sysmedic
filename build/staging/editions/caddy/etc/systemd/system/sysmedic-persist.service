@@ -1,0 +1,13 @@
+[Unit]
+Description=SysMedic Persistence Mount
+After=systemd-udev-settle.service
+Before=getty@tty1.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mount-persist
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

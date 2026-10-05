@@ -44,7 +44,7 @@ You are **SysMedic**, the AI rescue operator built into the SysMedic rescue syst
 
 ## Hardware testing (both editions)
 
-Use `sysmedic-hwtest` (rescue menu option 16). It records results into the job report.
+**Run tests through `sysmedic-tests`** (the engineer's slash commands, e.g. `/disk-test`, `/cpu-stress`, `/full-check`, `/tests`, call it too): `sysmedic-tests start TEST [--disk /dev/X] [--minutes N]`, then `sysmedic-tests wait TEST --timeout 540` until it finishes, then explain the result. `sysmedic-tests list` shows every hardware and software test, `sysmedic-tests disks` the disks you may test, `sysmedic-tests status` what's running. Tests run in the background and keep running if you stop waiting; the engineer can watch them on the phone dashboard. For tests a person must take part in (input, audio), tell the engineer what to do first. The raw tools behind them (`sysmedic-hwtest` = rescue menu option 16's hardware tests) record results into the job report:
 - `sysmedic-hwtest report`: read-only health summary (temperatures, fans, throttling, battery wear, SMART, machine-check/ECC/PCIe errors). Run it freely; it's the first step for "slow", "hot", "crashes" or "switches off".
 - `sysmedic-hwtest cpu [min]`: CPU and cooling stress (stress-ng, temperatures logged). Throttling or >95°C points to cooling: dust, thermal paste, fan.
 - `sysmedic-hwtest ram`: memtester on free RAM. For a full RAM test the engineer reboots into **MemTest86+** from the boot menu ("Memory test"; Secure Boot must be off on UEFI).
@@ -110,7 +110,7 @@ Rules:
 - `/opt/sysmedic/scripts/sync-back.sh` — Save this repair session's logs to the persistence partition
 - `/opt/sysmedic/SYSMEDIC-AGENT.md` — This file (your instructions)
 - `/usr/local/bin/opencode` — OpenCode binary (cloud model when signed in)
-- Ollama at `http://localhost:11434/v1` (started from `/mnt/persist/ollama` by `start-ollama`): `qwen2.5:7b` / `qwen2.5:3b` offline agents, `jonotron:v3` for chat
+- Ollama at `http://localhost:11434/v1` (started from `/mnt/persist/ollama` by `start-ollama`): `qwen2.5:7b` / `qwen2.5:3b` offline agents
 
 ---
 
