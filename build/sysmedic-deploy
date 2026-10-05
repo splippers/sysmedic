@@ -233,6 +233,8 @@ deploy_caddy() {
     [ -n "$dev" ] || die "No caddy found (plug it in, or give the device: --caddy /dev/sdX)"
     [ "${dev#/dev/}" != "$(host_disk)" ] || die "$dev is this PC's own disk"
     say "Caddy: $dev ($(lsblk -dno MODEL,SERIAL "$dev" | xargs))"
+    local mp; mp=$(lsblk -lnpo MOUNTPOINTS "$dev" | grep -v '^$' | head -1 || true)
+    [ -z "$mp" ] || die "$dev is mounted at $mp: unmount it first (sudo umount $mp)"
     local rootp; rootp=$(lsblk -lpno NAME,FSTYPE "$dev" | awk '$2=="ext4"{print $1; exit}')
     esp=$(lsblk -lpno NAME,FSTYPE "$dev" | awk '$2=="vfat"{print $1; exit}')
     mnt "$rootp" "$root"
