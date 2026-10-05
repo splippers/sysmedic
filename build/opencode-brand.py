@@ -102,6 +102,15 @@ def patch_texts(data):
         i = m.group(0).find(b"(!1)") + m.start()
         data = data[:i] + b"(!0)" + data[i + 4:]
         n += 1
+    # OpenCode 2.x: the bash output's "expanded" state starts true; other tools' 4-line summaries uncut
+    for m in list(re.finditer(rb'\[\w+,\w+\]=\w+\(!1\),\[\w+,\w+\]=\w+\(""\),\[\w+,\w+\]=\w+\(!1\),\w+=!1,\w+=!1,\w+=0,', data)):
+        i = m.group(0).find(b"(!1)") + m.start()
+        data = data[:i] + b"(!0)" + data[i + 4:]
+        n += 1
+    for m in list(re.finditer(rb'=(\w+)\(\(\)=>\w+\((\w+)\(\),4,4\*Math\.max\(20,\w+\.width-6\)\)\.output\)', data)):
+        new = b"=" + m.group(1) + b"(()=>" + m.group(2) + b"())"
+        data, ok = replace_span(data, m.start(), m.end(), new[:-1] + b" " * (m.end() - m.start() - len(new)) + b")", "tool summary")
+        n += ok
     old = b'?"Click to collapse":"Click to expand"'
     k = data.count(old)
     data = data.replace(old, b'?"(full output)    ":"Click to expand"')
@@ -114,14 +123,10 @@ def patch_texts(data):
 
 def main(path):
     data = open(path, "rb").read()
-    if MARK in data:
-        print(f"{path}: already SysMedic-branded")
-        return 0
     out, n, pos = bytearray(), 0, 0
-    found = [m for m in LOGO.finditer(data) if b"\\u2588" in m.group(0)]
-    if not found:
-        print(f"{path}: OpenCode logo not found (new OpenCode version?) — left unchanged", file=sys.stderr)
-        return 1
+    found = [] if MARK in data else [m for m in LOGO.finditer(data) if b"\\u2588" in m.group(0)]
+    if not found and MARK not in data:
+        print(f"  {path}: OpenCode logo not found (new OpenCode version?)", file=sys.stderr)
     # The small logo sits right after a big one in the same statement, so the decoder is defined first.
     for m in found:
         width = len(re.findall(rb'"((?:[^"\\]|\\.)*)"', m.group(1))[1].decode("unicode_escape"))
@@ -136,12 +141,15 @@ def main(path):
     assert len(out) == len(data)
     out, texts = patch_texts(bytes(out))
     assert len(out) == len(data)
+    if not n and not texts:
+        print(f"{path}: already SysMedic-branded" if MARK in data else f"{path}: nothing to change")
+        return 0
     tmp = path + ".sysmedic-tmp"
     with open(tmp, "wb") as f:
         f.write(out)
     os.chmod(tmp, os.stat(path).st_mode)
     os.replace(tmp, path)
-    print(f"{path}: SysMedic logo applied ({n} logo(s)); also {', '.join(texts) or 'no text changes'}")
+    print(f"{path}: SysMedic changes applied: {n} logo(s)" + (f"; {', '.join(texts)}" if texts else ""))
     return 0
 
 

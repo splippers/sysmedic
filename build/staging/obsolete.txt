@@ -4,3 +4,7 @@
 # 2026.10.04: emptied wpa_supplicant's ordering (After=dbus.service) so it could start before D-Bus,
 # fail, and leave NetworkManager with Wi-Fi "unavailable" on a fresh boot (Latitude 3410, stick).
 etc/systemd/system/wpa_supplicant.service.d/override.conf
+
+# 2026.10.05: OpenCode 2.x reads only opencode.json (it ignored config.json, so on the caddy none of SysMedic's
+# OpenCode settings applied: permissions, model, agent). Both 1.18 and 2.x read opencode.json.
+root/.config/opencode/config.json

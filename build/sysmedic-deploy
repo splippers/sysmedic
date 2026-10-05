@@ -74,8 +74,15 @@ EOF
         echo "$wifi_saved" | while read -r f; do sudo rm -f "$f"; done
         say "Removed $(echo "$wifi_saved" | wc -l) saved Wi-Fi network(s) with passwords from the drive"
     fi
-    sudo grep -lsE '^\s*password:' "$root"/etc/netplan/*.yaml >/dev/null 2>&1 && \
-        say "WARNING: a Wi-Fi password is stored in $root/etc/netplan — check and remove it"
+    # Ubuntu's NetworkManager also mirrors networks into netplan (/etc/netplan/90-NM-<uuid>.yaml)
+    local np
+    np=$(sudo grep -lsE '^\s*password:' "$root"/etc/netplan/90-NM-*.yaml* 2>/dev/null || true)
+    if [ -n "$np" ]; then
+        echo "$np" | while read -r f; do sudo rm -f "$f"; done
+        say "Removed $(echo "$np" | wc -l) netplan Wi-Fi profile(s) with passwords from the drive"
+    fi
+    sudo grep -lsE '^\s*password:' "$root"/etc/netplan/* >/dev/null 2>&1 && \
+        say "WARNING: a password is still stored in $root/etc/netplan — check it"
     # OpenCode as SysMedic: logo, examples, tips, and tool output fully expanded (no mouse on the console)
     local oc
     for oc in "$root/usr/local/bin/opencode" "$root/root/.opencode/bin/opencode"; do

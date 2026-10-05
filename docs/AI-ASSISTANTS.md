@@ -8,7 +8,7 @@ At boot, with internet **and** customer consent (`y`), and 4 GB RAM plus an AVX 
 
 ## Cloud: OpenCode with Big Pickle
 
-- OpenCode 1.18 with `opencode/big-pickle`, on the **free OpenCode Zen tier: no account, no key**. It starts by reading the scan, explaining the findings and proposing a plan, without changing anything.
+- OpenCode (2.0.22 on the caddy, 1.18.34 on the stick; config in `~/.config/opencode/opencode.json`) with `opencode/big-pickle`, on the **free OpenCode Zen tier: no account, no key**. It starts by reading the scan, explaining the findings and proposing a plan, without changing anything.
 - **It is SysMedic.** OpenCode runs a dedicated **SysMedic** agent (the default; OpenCode's coding agents are switched off) whose system prompt is SysMedic's own instructions (`/opt/sysmedic/SYSMEDIC-AGENT.md`). That *replaces* OpenCode's "you are a coding assistant" prompt, so it knows what it is and what it's for, and the shorter prompt makes offline use faster.
 - **SysMedic look:** the SysMedic logo, a SysMedic theme in the 16 console colours (renders properly on the Linux console), rescue examples in the prompt, rescue tips instead of coding tips. The deploy applies this to OpenCode's binary (`build/opencode-brand.py`; logo and text only, same size, re-applied after any OpenCode update). Auto-update and sharing are off.
 - **Permissions:**

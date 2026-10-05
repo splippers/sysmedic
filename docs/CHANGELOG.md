@@ -5,6 +5,9 @@
 Measured: the stick (Cruzer Blade) is a USB 2.0 drive, 25 MB/s sequential / 252 random IOPS; the caddy 276 MB/s / 1,768 IOPS. Loading the offline model: stick 253 s (3B, 1.9 GB), caddy 13.8 s (7B, 4.7 GB). With everything in RAM they're equal (same CPU, same cloud model).
 - **The AI can't power the machine off.** It had rebooted or powered off in three sessions despite instructions. `reboot`, `poweroff`, `shutdown`, `halt`, `systemctl reboot|poweroff|…`, `init 0/6`, sysrq are now denied in OpenCode's config and refused outright by the offline assistant (not even offered for approval). The instructions say so explicitly.
 - **No improvising:** `dislocker`, `pip install` and reading or copying the SAM/SECURITY hives are denied (the caddy's AI had unlocked BitLocker with dislocker, copied the hives to /tmp and tried to pip-install a parser). The instructions point at `sysmedic-win` instead. Rules checked against OpenCode's own matching logic (longest pattern wins) and the exact commands from that session.
+- **OpenCode's settings now apply on the caddy too.** The caddy runs OpenCode **2.0.22** (the stick 1.18.34), and 2.x reads only `opencode.json`; it had been ignoring `config.json`, so on the caddy none of SysMedic's OpenCode settings applied (permissions, model, SysMedic agent). The file is now `opencode.json` (both versions read it; the old one is removed). Verified on 2.0.22: loads 167 rules, answers as SysMedic, blocks power commands and pip; rule outcomes checked to match on both versions (1.18: longest pattern wins; 2.0: last rule wins).
+- **Branding on OpenCode 2.x:** bash output starts expanded and tool summaries aren't cut to 4 lines. Each patch now applies independently, so an already-branded binary still gets new ones.
+- **Saved Wi-Fi passwords removed from netplan:** Ubuntu's NetworkManager had mirrored the caddy's networks into `/etc/netplan/90-NM-*.yaml` with their passwords. The deploy removes those; with networks kept in RAM, NetworkManager no longer writes them (verified).
 - **Honest drive-speed advice:** the scan reads the drive's own USB version. A USB 2.0 drive is reported as such ("can't go faster in any port; use the caddy or a USB 3 stick") instead of "use a USB 3 port"; the port advice is kept for USB 3 drives on a slow link. The drive model is named.
 
 ## 2026.10.04: Wi-Fi first, BitLocker from a phone, OpenCode as SysMedic
@@ -17,7 +20,7 @@ Measured: the stick (Cruzer Blade) is a USB 2.0 drive, 25 MB/s sequential / 252 
 - **No more "Click to expand":** tool output starts fully expanded (it needed a mouse); read long output with Page Up/Down. Verified: all 40 lines of a 40-line output drawn.
 - Console font: Terminus 11×22 in the **Vietnamese** set (full Latin plus the block and line-drawing characters; the Lat15 set chosen earlier lacked ▀ ▄ and garbled OpenCode's logo on the Linux console).
 - The ISO build now mounts its base image if needed and **fails loudly** if xorriso fails (a failure had silently left the previous ISO in place during testing; the drives weren't affected).
-- Correction: the OpenCode version is 1.18.34 (earlier notes said 2.0.22).
+- OpenCode versions: the caddy runs 2.0.22 and the stick 1.18.34.
 
 ## 2026.10.04: deep Windows troubleshooting
 
