@@ -48,6 +48,7 @@ SYSTEM = """You are SysMedic, an offline computer-repair assistant helping a fie
 
 Rules:
 - Start from the triage scan below and from command output you have actually seen. Never invent devices, sizes or results. If unsure, run a command to check.
+- Never suggest write-mode tests or repairs (badblocks -w or -n, fsck without -n, mkfs, dd to a disk): they are refused. For bad blocks use the read-only test: sysmedic-tests start surface --disk /dev/X. If a write fails on a write-protected disk, that is the protection, not bad hardware; judge health from SMART.
 - Every customer disk is write-protected by the kernel: writes fail with "Permission denied" or "read-only". Only the engineer can lift this, by running `sysmedic-unlock /dev/X` on console 2 (Alt+F2). You cannot unlock disks; when a repair needs writing, say exactly which device and why, and ask the engineer.
 - Before changing anything, back it up. If a disk's health is failing, recommend imaging it with ddrescue before any repair.
 - Mount customer filesystems read-only to inspect them (mount -o ro).
@@ -238,6 +239,14 @@ FORBIDDEN = [
                 r"\b(systemctl|loginctl)\s+(reboot|poweroff|halt|kexec|suspend|hibernate|soft-reboot|isolate)\b|"
                 r"\binit\s+[06]\b|sysrq-trigger"),
      "Refused: the AI never restarts or powers off the rescue machine. The engineer does that."),
+    (re.compile(r"\bbadblocks\b[^|;&]*\s-[a-zA-Z]*[wn]|"                                 # write-mode surface tests
+                r"\b(fsck(\.\w+)?|e2fsck|dosfsck|xfs_repair|ntfsfix)\b(?![^|;&]*\s-[a-zA-Z]*n\b)[^|;&]*/dev/|"  # repairs (no -n)
+                r"--repair\b|\bmkfs|\bmke2fs\b|\bwipefs\b|\bshred\b|\bblkdiscard\b|\bnwipe\b|\bdd\b[^|;&]*\bof=/dev/(?!null\b)|"
+                r"\bsgdisk\b[^|;&]*\s-(-zap|[ZondgtcN])|\bparted\b[^|;&]*\b(mklabel|mkpart|rm|resizepart)\b|"
+                r"\bhdparm\b[^|;&]*(--security|--trim-sector|--write-sector|\s-r0)|\bnvme\s+(format|sanitize|write)\b|"
+                r"\bchntpw\b|\bsysmedic-unlock\b|\bblockdev\b[^|;&]*--setrw|\bcryptsetup\s+(open|luksFormat|erase|reencrypt)"),
+     "Refused: that writes to or erases a disk. Repairs are the engineer's, on console 2 after sysmedic-unlock. "
+     "A surface test is read-only: sysmedic-tests start surface --disk /dev/X"),
     (re.compile(r"\bdislocker"), "Refused: BitLocker is unlocked by the engineer with sysmedic-win bitlocker (or bitlocker-web)."),
     (re.compile(r"\bpip3?\s+install\b|-m\s+pip\b|\bpipx\b"), "Refused: nothing is installed onto the rescue system; use SysMedic's tools."),
     (re.compile(r"(^|[/\s,{])(SAM|SECURITY)(\.LOG\d?)?($|[\s,}'\"])"),

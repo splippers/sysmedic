@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.10.06 (later): lessons from the new caddy's first two 3410 visits
+
+- **The offline AI ran a destructive disk test.** Qwen 7B proposed `badblocks -w` (overwrite test) on the customer's Windows partition, and `fsck -f`; both were approved at the prompt. The kernel write-protection refused every write, so **no data was touched**, but the AI then misread the refused writes as "multiple bad blocks". Now: write-mode badblocks, fsck-family repairs (anything without `-n`), mkfs, wipefs, shred, discard, `dd` to a disk, partitioning, secure erase, NVMe format, unlock and chntpw are **refused outright** by the offline assistant (not offered), and denied for OpenCode. Both are told a surface test is `sysmedic-tests start surface` (read-only) and that failed writes on a protected disk are not bad blocks. Rules checked to agree on OpenCode 1.18 and 2.0.
+- **"No installed operating system found" after a rescan** (Windows was there): the scan tried to mount a partition `sysmedic-win` had already mounted. It now reads the existing mount and leaves it mounted.
+
 ## 2026.10.06: build from scratch, tests everywhere, a cleaner OpenCode, AI self-repair
 
 - **Build from scratch:** `build/bootstrap.sh` (kit, fetch, stick-base, caddy) turns the stock Ubuntu 24.04.5 ISO into a stick or caddy, with pinned OpenCode 1.18.34, Ollama 0.23.4 and Qwen models; guide in [BUILDING](BUILDING.md). The ISO build accepts the stock ISO (installer layers left out, EFI image extracted); the stick's initramfs boots casper (`conf.d/default-boot-to-casper.conf`, now in the repo).

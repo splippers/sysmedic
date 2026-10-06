@@ -288,7 +288,17 @@ def check_filesystem(p):
     return "info", "no read-only check available"
 
 
+BORROWED = set()   # mounts made by someone else (e.g. sysmedic-win): read them, never unmount them
+
+
 def mount_ro(p):
+    # Already mounted (sysmedic-win mounts Windows read-only)? A second ntfs-3g mount would fail and the
+    # scan would report "no OS"; read the existing mount instead.
+    rc, existing, _ = run(["findmnt", "-rno", "TARGET", "-S", p["path"]])
+    if rc == 0 and existing.strip():
+        target = existing.split()[0]
+        BORROWED.add(target)
+        return target
     fs = p.get("fstype")
     opts = {"ext2": "ro", "ext3": "ro,noload", "ext4": "ro,noload", "xfs": "ro,norecovery",
             "btrfs": "ro,rescue=nologreplay", "vfat": "ro", "exfat": "ro", "hfsplus": "ro"}
@@ -308,6 +318,8 @@ def mount_ro(p):
 
 
 def unmount(target):
+    if target in BORROWED:
+        return
     run(["umount", target], timeout=60)
     try:
         os.rmdir(target)
