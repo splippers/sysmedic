@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.10.06 (late): fixes from the 3410 test session
+
+- **The offline assistant does what it's asked.** On the 3410 it ignored "test the GPU" four times and kept proposing a broken `mount` command. Plain requests for a test ("test the GPU", "check the battery", "how's the Wi-Fi") now run the matching SysMedic test directly (Enter = yes) and the model only explains the result; every message reminds the model to answer the latest request. New `/tests` and `/feedback TEXT` commands.
+- **Graphics benchmark can't hang.** It ran for over an hour on the 3410 with nothing on screen (output was buffered and there was no time limit). It now runs 8 short scenes at 1280×720 (about 40 s), shows each scene's result as it goes, and stops after 150 s with "FAILED: stalled" plus any GPU driver errors from the kernel log.
+
 ## 2026.10.06 (evening): what the stick's AI found on the 3410
 
 Seven problems in SysMedic's own tools, diagnosed by the AI with evidence, are fixed:

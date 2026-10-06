@@ -51,6 +51,16 @@ nmcli -f IN-USE,SSID,SIGNAL,RATE,SECURITY device wifi list 2>/dev/null | head -8
 
 # id: (category, title, what it does, command, needs, estimate, person)
 #   needs: "" | "disk" | "minutes";  person: what a person must do during the test ("" = nothing)
+GPU = ("echo '== GPU'; lspci | grep -iE 'vga compatible|3d controller|display controller'; "
+       "echo 'Running 8 short 3D scenes (about 1 minute; the screen may go blank while it runs)…'; "
+       "timeout -k 10 150 glmark2-es2-drm --off-screen -s 1280x720 "
+       "-b build:duration=5 -b texture:duration=5 -b shading:shading=phong:duration=5 -b bump:duration=5 "
+       "-b effect2d:duration=5 -b pulsar:duration=5 -b desktop:duration=5 -b terrain:duration=5 2>&1 "
+       "| grep --line-buffered -E 'GL_RENDERER|Score|FPS|rror' | grep --line-buffered -v 'restore original CRTC'; rc=${PIPESTATUS[0]}; "
+       "if [ $rc = 124 ] || [ $rc = 137 ]; then echo 'FAILED: the 3D benchmark stalled and was stopped after 150 s.'; "
+       "echo 'A healthy GPU finishes in about a minute: suspect the graphics driver or GPU. Driver messages:'; "
+       "dmesg 2>/dev/null | grep -iE 'i915|amdgpu|nouveau|gpu hang|drm' | grep -iE 'err|hang|fail|reset|timeout' | tail -8; exit 1; fi")
+
 TESTS = {
     "health":    ("hardware", "Health report", "Temperatures, fans, throttling, battery, SMART of every disk, hardware errors",
                   "sysmedic-hwtest report", "", "30 s", ""),
@@ -63,8 +73,7 @@ TESTS = {
     "surface":   ("hardware", "Disk surface scan", "Reads every sector looking for bad blocks (read-only, slow)",
                   "sysmedic-hwtest surface {disk}", "disk", "1–4 h", ""),
     "gpu":       ("hardware", "Graphics benchmark", "glmark2 off-screen 3D benchmark with a score",
-                  "echo '== GPU'; lspci | grep -iE 'vga|3d|display'; glmark2-es2-drm --off-screen 2>&1 | grep -E 'GL_RENDERER|Score|FPS' | tail -14",
-                  "", "2 min", ""),
+                  GPU, "", "1 min", ""),
     "battery":   ("hardware", "Battery health", "Design vs current capacity, wear, charge cycles, adapter",
                   "sysmedic-hwtest battery", "", "5 s", ""),
     "inventory": ("hardware", "Hardware inventory", "Full component list (serial numbers hidden)",

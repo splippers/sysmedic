@@ -400,6 +400,49 @@ def warm(model):
         sys.exit(1)
 
 
+# Plain requests for a catalogue test are answered directly, not left to the small offline model (on a 3410
+# it ignored "test the GPU" four times while pushing its own plan).
+ASK_TEST = re.compile(r"\b(test|check|run|benchmark|try|diagnose|look at|how is|how's)\b", re.I)
+TEST_WORDS = [("gpu", r"gpu|graphics|video card|3d|display adapter"), ("battery", r"battery|batteries"),
+              ("cpu", r"\bcpu\b|processor|stress"), ("ram", r"\bram\b|memory"),
+              ("network", r"network|wi-?fi|internet|ethernet|connection"), ("audio", r"audio|sound|speakers?|microphone|mic\b"),
+              ("input", r"keyboard|touchpad|trackpad|keys\b"), ("inventory", r"inventory|hardware list|components"),
+              ("malware", r"malware|virus|infect"), ("windows-checkup", r"windows check-?up"),
+              ("windows-events", r"event logs?|evtx"), ("windows-updates", r"windows updates?|\bcbs\b"),
+              ("windows-traces", r"\betl\b|traces?"), ("windows-crashes", r"blue ?screens?|bsod|crash dumps?")]
+
+
+def requested_test(q):
+    if not ASK_TEST.search(q):
+        return ""
+    hits = [t for t, rx in TEST_WORDS if re.search(rx, q, re.I)]
+    return hits[0] if len(hits) == 1 else ""
+
+
+def run_test_directly(model, messages, test, q):
+    cmd = f"sysmedic-tests start {test} && sysmedic-tests wait {test}"
+    try:
+        ans = input(f"\n  {CYAN}That's SysMedic's {test} test:{END} {BOLD}sysmedic-tests start {test}{END}. Run it now? [Y/n] ").strip().lower()
+    except EOFError:
+        ans = "n"
+    if ans not in ("", "y", "yes"):
+        return False
+    out, status = stream_command(cmd)
+    if len(out) > OUTPUT_TO_MODEL:
+        out = out[:4500] + "\n…[output truncated]…\n" + out[-1500:]
+    messages.append({"role": "user", "content": q})
+    messages.append({"role": "assistant", "content": f"Running the {test} test.", "tool_calls": [
+        {"function": {"name": "run_command", "arguments": {"command": cmd, "why": "the engineer asked for it"}}}]})
+    messages.append({"role": "tool", "tool_name": "run_command", "content": f"Command: {cmd}\n{out}\n{status}"})
+    messages.append({"role": "user", "content": "In two or three plain sentences: what does this result mean? Don't run anything else."})
+    safe_turn(model, messages)
+    return True
+
+
+LATEST = ("\n\n[SysMedic: answer this latest message from the engineer. If it changes the subject, drop any earlier plan "
+          "the engineer hasn't agreed to. If they say no or stop, don't repeat the same command.]")
+
+
 def main():
     args = sys.argv[1:]
     model = args[args.index("--model") + 1] if "--model" in args else pick_model()
@@ -414,7 +457,7 @@ def main():
     print(f"\n  {BOLD}SysMedic offline assistant{END} — {model} on this machine's CPU")
     print(f"  {DIM}Read-only checks run straight away; anything else asks you first (Enter = yes). Ctrl-C stops a command.")
     print(f"  Customer disks stay write-protected until you run sysmedic-unlock on Alt+F2.")
-    print(f"  Commands: /scan (re-run triage)  /new (fresh conversation)  /quit{END}")
+    print(f"  Commands: /tests (list tests)  /feedback TEXT (note a SysMedic problem)  /scan  /new  /quit{END}")
     messages = [system_message()]
     log = conversation_path(model)
     if "--explain" in args:
@@ -436,13 +479,28 @@ def main():
             log = conversation_path(model)
             print(f"  {DIM}(fresh conversation){END}")
             continue
+        if q == "/tests":
+            subprocess.run(["/usr/local/bin/sysmedic-tests", "list"])
+            continue
+        if q.startswith("/feedback"):
+            text = q[len("/feedback"):].strip() or input("  What should SysMedic do better? ").strip()
+            if text:
+                subprocess.run(["/usr/local/bin/sysmedic-note", "--feedback", f"(offline AI, {model}) {text}"])
+            continue
+        test = requested_test(q)
+        if test and run_test_directly(model, messages, test, q):
+            save_conversation(messages, log)
+            continue
         if q == "/scan":
             subprocess.run(["/usr/local/bin/sysmedic-scan"])
             messages = [system_message()]
             print(f"  {DIM}(conversation restarted with the new scan){END}")
             continue
-        messages.append({"role": "user", "content": q})
+        messages.append({"role": "user", "content": q + LATEST})
         safe_turn(model, messages)
+        for m in messages:
+            if m["role"] == "user" and m["content"].endswith(LATEST):
+                m["content"] = m["content"][:-len(LATEST)]
         save_conversation(messages, log)
 
 

@@ -30,7 +30,8 @@ At boot, with internet **and** customer consent (`y`), and 4 GB RAM plus an AVX 
   - Commands the model writes in its text (instead of calling the tool) need an explicit `y`, which stops things like `shutdown` running by accident.
   - There's a 180 s limit per command. Ctrl-C stops just that command; `/quit` at a prompt returns to the question.
   - Commands run without a keyboard, so the model is told to use non-interactive forms (`ping -c 4`, `mtr -rwc 5`, `top -bn1`, `tcpdump -c 50`).
-- Its own commands: `/scan` (re-scan and restart the conversation), `/new`, `/quit`.
+- Its own commands: `/tests` (the test catalogue), `/feedback TEXT` (record something SysMedic should do better, for claude-review.md), `/scan` (re-scan and restart the conversation), `/new`, `/quit`.
+- **Plain test requests skip the model:** "test the GPU", "check the battery", "how's the Wi-Fi" offer the matching SysMedic test straight away (Enter = run), then the model explains the result. The small offline model can fixate on its own plan; this makes sure a direct request is always obeyed. Each message also reminds the model to answer the latest request and drop plans the engineer hasn't agreed to.
 - **Limits:** the 3B model sometimes misreads facts (dates, which partition). Tool output on screen is the truth; check it against the summary. The 7B and cloud models are much better.
 - Conversations are saved to the session (`ai/ask-*.jsonl`).
 
