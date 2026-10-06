@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026.10.06 (evening): what the stick's AI found on the 3410
+
+Seven problems in SysMedic's own tools, diagnosed by the AI with evidence, are fixed:
+- `evtx` read only 111 of 429 logs (a wrong "empty log" size rule): it now reads every log and reports empty/unreadable ones by name. The skipped logs held the real root cause (Storport 524 NVMe command timeouts), which now has its own rule, as do ClassPnP 507/509.
+- Storage errors name their **device** (vendor, model, serial's last 4): 732 of 733 "disk errors" were the SanDisk stick, not the laptop's NVMe.
+- Code-integrity events are grouped **by file**; security-product components (FortiClient's AMSI DLL: 17,933 events) are labelled usually benign instead of reading like a compromise.
+- The `cbs` verdict only gives upgrade-failure advice for 0xC19xxxxx codes actually present; 0x80070422 names the usual disabled services including System Restore, which the registry check now reports.
+- The job report never says **fixed** unless a repair happened and the last scan could still see the system; otherwise "no longer detected; not confirmed fixed". It also states when no malware scan ran.
+- A `fsck.vfat` volume-label-only mismatch is reported as cosmetic.
+
+New, as the AI requested:
+- **`sysmedic-win etl`**: Windows Update and other components' ETW traces, decoded with the vendored etl-parser (pure Python, Apache-2.0; with construct, MIT). Also in `checkup`, `/windows-traces`, and the phone Tests card.
+- **More Windows log readers:** libesedb-utils, libscca-utils, libevt-utils, libregf-utils, liblnk-utils; a coverage table in WINDOWS-AND-BITLOCKER (perfmon/WMI repository: unsupported).
+- More error codes decoded (0x8024401C, 0x80072EE6, 0x8024000C, 0x80070057, 0x800704CF).
+- **Battery** on the phone dashboard (charge, health, cycles; worn batteries flagged).
+- **No downloaded code:** the AI had cloned etl-parser from GitHub and fetched a wheel from PyPI to run as root. Both AIs are now blocked from `git clone`, pip and PyPI/GitHub downloads, and told to record missing tools as feedback instead; SysMedic ships vetted code.
+
 ## 2026.10.06 (later): BitLocker from the dashboard
 
 - **One QR code:** the phone dashboard has a BitLocker card (volumes, locked/unlocked) with **Unlock from this phone**, which starts the encrypted unlock page and opens it at the address the phone already used. The key never touches the plain-HTTP dashboard. Verified in QEMU against a real BitLocker test volume: started, unlocked read-only, page closed itself, key in no log. Both AIs are blocked from the dashboard's secret and BitLocker endpoint.

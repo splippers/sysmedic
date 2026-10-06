@@ -14,6 +14,9 @@ Nothing here writes to the Windows volume. Credentials are never extracted: even
 registry values whose names suggest secrets are dropped, and SAM/SECURITY are not read.
 """
 import datetime
+import time
+import sys
+import json
 import os
 import re
 import shutil
@@ -136,6 +139,11 @@ rule(DEF, "defender", [5001, 5010, 5012], "security", "critical", "Defender prot
 rule(DEF, "defender", 5007, "security", "info", "Defender settings changed")
 rule(DEF, "defender", [2001, 2003, 2004], "security", "warning", "Defender couldn't update its definitions")
 rule(DEF, "defender", 3002, "security", "warning", "Defender real-time protection failed")
+SP = "microsoft-windows-storage-storport%4operational"
+rule(SP, "storport", 524, "disk", "critical", "Storage command error or timeout (Storport)")
+CP = "microsoft-windows-storage-classpnp%4operational"
+rule(CP, "classpnp", 507, "disk", "warning", "Storage request failed (ClassPnP)")
+rule(CP, "classpnp", 509, "disk", "info", "Storage device reset or surprise-removed (ClassPnP)")
 CI = "microsoft-windows-codeintegrity%4operational"
 rule(CI, "codeintegrity", [3033, 3063, 3077], "driver", "warning", "Windows blocked a driver or DLL that isn't properly signed")
 TS = "microsoft-windows-taskscheduler%4operational"
@@ -202,18 +210,42 @@ def _parse(block):
 
 
 def read_evtx(path, timeout=300):
-    """Yield parsed events from one .evtx file (evtxexport does the binary parsing)."""
+    """Parsed events from one .evtx file (evtxexport does the binary parsing). Returns (events, problem or "")."""
     try:
         p = subprocess.run(["evtxexport", "-f", "xml", str(path)], capture_output=True, text=True,
                            errors="replace", timeout=timeout)
     except FileNotFoundError:
         raise RuntimeError("evtxexport is not installed (package libevtx-utils)")
     except subprocess.TimeoutExpired:
-        return
-    for block in re.findall(r"<Event [^>]*>.*?</Event>", p.stdout, re.S):
-        ev = _parse(block)
-        if ev:
-            yield ev
+        return [], f"timed out after {timeout} s"
+    evs = [ev for ev in (_parse(b) for b in re.findall(r"<Event [^>]*>.*?</Event>", p.stdout, re.S)) if ev]
+    if p.returncode != 0 and not evs:
+        return [], (p.stderr.strip().splitlines() or ["unreadable"])[-1][:120]
+    return evs, ""
+
+
+STORAGE = re.compile(r"storport|classpnp|stordiag|stornvme|storahci|\bdisk\b|partmgr|volmgr", re.I)
+SECURITY_PRODUCTS = re.compile(r"forti|amsi|crowdstrike|csagent|sentinel|sophos|eset|kaspersky|symantec|norton|mcafee|"
+                               r"trend ?micro|tmamsi|carbon ?black|cylance|bitdefender|malwarebytes|webroot|cisco|cortex|"
+                               r"windows defender|mpoav|mpclient", re.I)
+
+
+def storage_device(data):
+    """'Vendor Model (…1234)' from a storage event's fields, so the internal disk can be told from a USB stick."""
+    pick = lambda *names: next((v.strip() for k, v in data.items() for n in names if k.lower() == n and v.strip()), "")
+    vendor, model = pick("vendor", "vendorid"), pick("model", "productid", "product")
+    serial = pick("serialnumber", "serial")
+    name = " ".join(x for x in (vendor, model) if x and not x.startswith("0x0"))
+    if not name:
+        dev = pick("devicename", "device", "classdeviceguid", "diskid", "disknumber")
+        name = dev and f"device {dev}"
+    return (name + (f" (…{serial[-4:]})" if serial and name else "")).strip()
+
+
+def ci_file(data):
+    """(file name, full path) of the file a code-integrity event is about."""
+    f = next((v for k, v in data.items() if k.lower() in ("filenamebuffer", "file name", "filename", "param1", "processnamebuffer")), "")
+    return (f.split("\\")[-1][:80], f) if f else ("", "")
 
 
 def _match(stem, ev):
@@ -236,22 +268,24 @@ def _example(stem, ev):
 def scan_evtx(target, days=30, sweep=True, progress=None):
     """Group notable events from every log. Returns {"findings": [...], "boot": [...], "logs": n, "errors": [...]}."""
     files, cutoff = evtx_files(target), _cutoff(days)
-    groups, boots, problems, seen = {}, [], [], 0
+    groups, boots, problems, seen, empty, failed, skipped = {}, [], [], 0, 0, [], 0
     for f in files:
         stem = _stem(f)
         curated = stem in CURATED_LOGS
-        try:
-            if f.stat().st_size <= 69632 and not curated:   # an empty log is a 68 KB header + chunk
-                continue
-        except OSError:
-            continue
         if not curated and not sweep:
+            skipped += 1
             continue
         if progress:
             progress(f.name)
-        seen += 1
         try:
-            for ev in read_evtx(f):
+            evs, problem = read_evtx(f)
+            if problem:
+                failed.append(f"{f.name}: {problem}")
+                continue
+            seen += 1
+            if not evs:
+                empty += 1
+            for ev in evs:
                 if cutoff and ev["time"] and ev["time"] < cutoff:
                     continue
                 hit = _match(stem, ev) if curated else None
@@ -274,7 +308,18 @@ def scan_evtx(target, days=30, sweep=True, progress=None):
                         boots.append((ev["time"], int(ev["data"].get("BootTime", "0")) / 1000))
                     except ValueError:
                         pass
-                g = groups.setdefault((f.name, ev["provider"], ev["id"]), {
+                sub = ""
+                if cat == "disk" or STORAGE.search(ev["provider"]) or "storage" in stem:
+                    sub = storage_device(ev["data"])
+                    if sub:
+                        meaning = f"{meaning} — {sub}"
+                if stem == CI or (stem == SEC and ev["id"] == 5038):
+                    sub, full = ci_file(ev["data"])
+                    if sub:
+                        meaning = f"{meaning}: {sub}"
+                        if SECURITY_PRODUCTS.search(full):
+                            sev, meaning = "info", meaning + " (a security product's component: usually benign)"
+                g = groups.setdefault((f.name, ev["provider"], ev["id"], sub), {
                     "log": f.name, "provider": ev["provider"], "id": ev["id"], "category": cat, "severity": sev,
                     "meaning": meaning, "count": 0, "first": ev["time"], "last": ev["time"], "examples": []})
                 g["count"] += 1
@@ -288,7 +333,92 @@ def scan_evtx(target, days=30, sweep=True, progress=None):
             break
     order = {"critical": 0, "warning": 1, "info": 2}
     found = sorted(groups.values(), key=lambda g: (order[g["severity"]], g["category"] == "error", -g["count"]))
-    return {"findings": found, "boot": sorted(boots)[-10:], "logs": seen, "files": len(files), "errors": problems}
+    return {"findings": found, "boot": sorted(boots)[-10:], "logs": seen, "files": len(files), "errors": problems,
+            "empty": empty, "failed": failed, "skipped": skipped}
+
+
+# ═══ ETW traces (.etl) ═════════════════════════════════════════════════════════
+#
+# Windows Update, waasmedic, SIH, NetSetup and other components keep their detailed logs as ETW traces, not
+# event logs. etl_dump.py decodes them with the vendored etl-parser; here failure codes are pulled out of the
+# decoded text and grouped.
+
+ETL_DIRS = ("Windows/Logs", "Windows/System32/LogFiles", "Windows/SoftwareDistribution", "Windows/Panther",
+            "ProgramData/Microsoft/Windows/WER")
+CODE = re.compile(r"(?<![0-9A-Fa-fx])(?:0x)?([89Cc][0-9A-Fa-f]{7})(?![0-9A-Fa-f])")
+FAILWORD = re.compile(r"fail|error|unable|cannot|could not|denied|timeout|timed out", re.I)
+CODEFIELD = re.compile(r"^(hr|hresult|error|errorcode|status|result|win32error|code)$", re.I)
+
+
+def etl_files(target, days):
+    paths = target if isinstance(target, (list, tuple)) else [target]
+    out, cutoff = [], (time.time() - days * 86400) if days else 0
+    for p in map(Path, paths):
+        if p.is_file() and p.suffix.lower() == ".etl":
+            out.append(p)
+            continue
+        bases = [b for b in (ci_path(p, d) for d in ETL_DIRS) if b and b.is_dir()] or ([p] if p.is_dir() else [])
+        for b in bases:
+            for f in b.rglob("*"):
+                try:
+                    if f.suffix.lower() == ".etl" and f.is_file() and f.stat().st_mtime >= cutoff:
+                        out.append(f)
+                except OSError:
+                    continue
+    return sorted(set(out))
+
+
+def scan_etl(target, days=7, per_file_timeout=90, max_mb=64, progress=None):
+    dump = Path(__file__).with_name("etl_dump.py")
+    groups, coverage = {}, []
+    for f in etl_files(target, days):
+        rel = "/".join(f.parts[-3:])
+        size = f.stat().st_size
+        if size > max_mb * 2**20:
+            coverage.append({"file": rel, "events": 0, "note": f"skipped: {size // 2**20} MB (over {max_mb} MB)"})
+            continue
+        if progress:
+            progress(rel)
+        try:
+            p = subprocess.run([sys.executable, str(dump), str(f)], capture_output=True, text=True, errors="replace",
+                               timeout=per_file_timeout)
+            lines = p.stdout.splitlines()
+        except subprocess.TimeoutExpired:
+            coverage.append({"file": rel, "events": 0, "note": f"timed out after {per_file_timeout} s"})
+            continue
+        summary = {}
+        for line in lines:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if "summary" in ev:
+                summary = ev["summary"]
+                continue
+            fields = ev.get("f", {})
+            blob = " ".join(str(v) for v in fields.values())
+            codes = {m.group(1).lower() for k, v in fields.items() if CODEFIELD.match(k) for m in CODE.finditer(str(v))}
+            if FAILWORD.search(blob) or FAILWORD.search(ev.get("p", "")):
+                codes |= {m.group(1).lower() for m in CODE.finditer(blob)}
+            for c in codes:
+                code = "0x" + c
+                if code in ("0x80000000", "0xc0000000"):
+                    continue
+                src = f"{f.parent.name}/{ev.get('p', '')}"[:60]
+                g = groups.setdefault((code, src), {"code": code, "source": src, "count": 0, "first": ev.get("t", ""),
+                                                    "last": ev.get("t", ""), "example": blob[:180], "meaning": HRESULTS.get(code, "")})
+                g["count"] += 1
+                t = ev.get("t", "")
+                if t:
+                    g["first"] = min(g["first"] or t, t)
+                    g["last"] = max(g["last"] or t, t)
+        note = summary.get("error", "") or ("no decodable events (providers without embedded metadata, or kernel-only trace)"
+                                           if not summary.get("events") else "")
+        coverage.append({"file": rel, "events": summary.get("events", 0), "undecoded": summary.get("undecoded", 0), "note": note})
+    found = sorted(groups.values(), key=lambda g: (-g["count"], g["code"]))
+    return {"findings": found, "coverage": coverage,
+            "events": sum(c["events"] for c in coverage), "files": len(coverage),
+            "decoded_files": sum(1 for c in coverage if c["events"])}
 
 
 # ═══ Registry ══════════════════════════════════════════════════════════════════
@@ -301,6 +431,7 @@ CORE_SERVICES = {   # service: what breaks if it's disabled (Start=4)
     "nlasvc": "network detection", "schedule": "scheduled tasks", "audiosrv": "sound", "rpcss": "almost everything (RPC)",
     "lanmanworkstation": "file sharing / mapped drives", "wlansvc": "Wi-Fi", "netman": "network connections",
     "usosvc": "Windows Update orchestration", "appxsvc": "Store apps", "spooler": "printing",
+    "vss": "Volume Shadow Copy (restore points, backups, some updates)",
 }
 LSA_DEFAULTS = {"msv1_0", "scecli", "rassfm", "kerberos", "schannel", "wdigest", "tspkg", "pku2u", "cloudap",
                 "negoexts", "livessp", "", '""'}
@@ -464,6 +595,10 @@ def scan_registry(root, days=30):
         if sw.get(au, "DisableWindowsUpdateAccess") == 1 or sw.get(au, "DoNotConnectToWindowsUpdateInternetLocations") == 1:
             add("warning", "update", "Windows Update access is restricted by policy")
         sysp = r"Microsoft\Windows\CurrentVersion\Policies\System"
+        sr = r"Microsoft\Windows NT\CurrentVersion\SystemRestore"
+        if sw.get(sr, "RPSessionInterval") == 0 or sw.get(sr, "DisableSR") == 1 or \
+                sw.get(r"Policies\Microsoft\Windows NT\SystemRestore", "DisableSR") == 1:
+            add("info", "update", "System Restore is off", "No restore points; some installers and updates report 0x80070422 because of it.")
         if sw.get(sysp, "EnableLUA") == 0:
             add("warning", "security", "User Account Control is off (EnableLUA=0)")
         # Pending servicing
@@ -561,7 +696,12 @@ HRESULTS = {
     "0x8007371b": "ERROR_SXS_TRANSACTION_CLOSURE_INCOMPLETE: a dependency is missing",
     "0x80073701": "ERROR_SXS_ASSEMBLY_MISSING: a component is missing (often a language pack)",
     "0x80070643": "ERROR_INSTALL_FAILURE: an installer failed (KB5034441 does this when the recovery partition is too small)",
-    "0x80070422": "ERROR_SERVICE_DISABLED: a needed service (e.g. Windows Update) is disabled",
+    "0x80070422": "ERROR_SERVICE_DISABLED: a service the operation needed is disabled",
+    "0x8024401c": "WU_E_PT_HTTP_STATUS_REQUEST_TIMEOUT: the update server didn't answer in time (network; usually transient)",
+    "0x80072ee6": "WinHTTP 12006: the update address or proxy setting isn't usable (often a proxy/policy problem)",
+    "0x8024000c": "WU_E_NOOP: nothing needed doing (harmless)",
+    "0x80070057": "E_INVALIDARG: an invalid parameter (often a damaged setting or registry value)",
+    "0x800704cf": "ERROR_NETWORK_UNREACHABLE: the network couldn't be reached",
     "0x80070652": "ERROR_INSTALL_ALREADY_RUNNING: another installation was running",
     "0x8007001f": "ERROR_GEN_FAILURE: a device isn't working",
     "0x80240017": "WU_E_NOT_APPLICABLE: the update doesn't apply to this machine",
@@ -749,11 +889,21 @@ def servicing_verdict(s):
         out.append(("warning", "Servicing was blocked (access denied, file in use, or a hang)",
                     "Usually third-party antivirus or a failing disk: check the disk's SMART health and retry with AV paused."))
     if "0x80070422" in codes:
-        out.append(("warning", "A service updates need is disabled", "See sysmedic-win registry for which one."))
+        out.append(("warning", "Something needed a service that is disabled (0x80070422)",
+                    "Usually Windows Update, BITS or Cryptographic Services (sysmedic-win registry lists disabled core services), "
+                    "or System Restore / Volume Shadow Copy being off."))
     if s["panther"]:
         pc = sorted({c for p in s["panther"] for c in p["codes"]})
-        out.append(("warning", "A feature update (Windows upgrade) logged errors" + (f": {', '.join(pc)}" if pc else ""),
-                    "0xC1900101 means a driver: update or remove the driver named in setuperr.log, then retry."))
+        upg = {"0xc1900101": "a driver failed during the upgrade: update or remove the driver named in setuperr.log, then retry",
+               "0xc1900208": "an incompatible app blocked the upgrade: uninstall it (named in setuperr.log)",
+               "0xc190020e": "not enough free space for the upgrade",
+               "0xc1900200": "the PC doesn't meet the upgrade's requirements", "0xc1900202": "the PC doesn't meet the upgrade's requirements"}
+        hit = [c for c in pc if c in upg]
+        if hit:
+            out.append(("warning", "A Windows upgrade failed: " + ", ".join(hit), "; ".join(upg[c] for c in hit) + "."))
+        else:
+            out.append(("info", "Windows Setup logged errors" + (f" ({', '.join(pc)})" if pc else "") + ", but no upgrade failure code",
+                        "; ".join(f"{c}: {HRESULTS[c]}" for c in pc if c in HRESULTS) or "Details in setuperr.log (sysmedic-win cbs shows the last line)."))
     repeat = [(t, g) for t, g in s["wu"]["failed"].items() if g["count"] >= 2]
     for t, g in repeat[:3]:
         out.append(("warning", f"Keeps failing: {t} ({g['count']}×, {', '.join(g['codes'])})",

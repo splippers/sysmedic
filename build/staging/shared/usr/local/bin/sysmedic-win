@@ -19,6 +19,9 @@ Deep troubleshooting (read-only; PART can also be files or a folder handed over,
   sysmedic-win cbs      [PART|CBS.log|FOLDER] [--days N]
                                     servicing: CBS/CbsPersist, dism.log, Windows Update results, upgrade
                                     (Panther) logs: failing updates, error meanings, corruption, SFC
+  sysmedic-win etl      [PART|FILES|FOLDER] [--days N]
+                                    ETW traces (.etl: Windows Update, waasmedic, SIH, NetSetup…): failure codes
+                                    with meanings, when they happened, and decode coverage per file (default 7 days)
   sysmedic-win checkup  [PART] [--days N]
                                     all of the above plus info/crashes/autoruns, saved as a report in the
                                     session folder (windows-checkup-*.md)
@@ -526,7 +529,11 @@ def targets(args):
 
 
 def print_evtx(r, days):
-    print(f"  Read {r['logs']} of {r['files']} event logs" + (f" (last {days} days)" if days else "") + ".")
+    print(f"  Read {r['logs']} of {r['files']} event logs" + (f" (last {days} days)" if days else "")
+          + (f"; {r['empty']} were empty" if r.get("empty") else "")
+          + (f"; {r['skipped']} skipped (--curated: only the problem-explaining logs)" if r.get("skipped") else "") + ".")
+    for x in r.get("failed", [])[:10]:
+        print(f"  {C['yel']}Couldn't read {x}{C['end']}")
     for e in r["errors"]:
         print(f"  {C['yel']}{e}{C['end']}")
     main_f = [f for f in r["findings"] if f["category"] != "error"]
@@ -630,6 +637,32 @@ def cmd_cbs(args):
         print_servicing(winevidence.scan_servicing(path, days=days))
 
 
+def print_etl(r, days):
+    print(f"  Decoded {r['decoded_files']} of {r['files']} trace files ({r['events']} events)" + (f", last {days} days" if days else "") + ".")
+    for c in r["coverage"]:
+        if c.get("note"):
+            print(f"  {C['dim']}{c['file']}: {c['note']}{C['end']}")
+    if not r["findings"]:
+        print(f"  {C['grn']}No failure codes in the traces.{C['end']}")
+    for g in r["findings"][:25]:
+        span = g["first"][:16].replace("T", " ") + ("" if g["first"][:16] == g["last"][:16] else f" → {g['last'][11:16]}")
+        print(f"  {g['count']:5}× {C['yel']}{g['code']}{C['end']} {g['source']}  {C['dim']}{span}{C['end']}")
+        if g["meaning"]:
+            print(f"         {C['cyan']}{g['meaning']}{C['end']}")
+        else:
+            print(f"         {C['dim']}{g['example'][:120]}{C['end']}")
+
+
+def cmd_etl(args):
+    days = opt(args, "--days", 7)
+    for label, path in targets(args):
+        prog = (lambda n: print(f"\r\033[K  {C['dim']}decoding {n[:90]}{C['end']}", end="", flush=True)) if COLOR else None
+        r = winevidence.scan_etl(path, days=days, progress=prog)
+        if COLOR:
+            print("\r\033[K", end="")
+        print_etl(r, days)
+
+
 def cmd_checkup(args):
     """Everything, on screen and as a markdown report in the session folder."""
     import contextlib
@@ -642,6 +675,7 @@ def cmd_checkup(args):
                     ("Event logs", lambda: print_evtx(winevidence.scan_evtx(mp, days=days), days)),
                     ("Registry evidence", lambda: print_registry(winevidence.scan_registry(mp, days=days), days)),
                     ("Servicing (CBS, DISM, Windows Update)", lambda: print_servicing(winevidence.scan_servicing(mp, days=max(days, 90)))),
+                    ("Traces (ETL: Windows Update and other components)", lambda: print_etl(winevidence.scan_etl(mp, days=min(days, 14)), min(days, 14))),
                     ("Autostart", lambda: cmd_autoruns([dev]))]
         for title, fn in sections:
             print(f"\n{C['bold']}━━ {title} ━━{C['end']}", flush=True)
@@ -666,7 +700,7 @@ def cmd_checkup(args):
 
 
 COMMANDS = {"info": cmd_info, "crashes": cmd_crashes, "events": cmd_events, "autoruns": cmd_autoruns,
-            "malware": cmd_malware, "evtx": cmd_evtx, "registry": cmd_registry, "cbs": cmd_cbs,
+            "malware": cmd_malware, "evtx": cmd_evtx, "registry": cmd_registry, "cbs": cmd_cbs, "etl": cmd_etl,
             "checkup": cmd_checkup, "bitlocker": cmd_bitlocker, "bitlocker-web": cmd_bitlocker_web, "fix-update": cmd_fix_update,
             "fix-hibernation": cmd_fix_hibernation, "reset-password": cmd_reset_password}
 

@@ -30,6 +30,8 @@ SysMedic works as root on other people's computers, with an AI assistant. This i
 | Chains (`&&`, `\|\|`, `;`, `\|`) | Auto-run only if every part is read-only | Pattern rules |
 | Unlock / blockdev / hdparm / BitLocker / repairs / chntpw / nwipe / mkfs | Refused by the tools themselves | Denied in config, and refused by the tools |
 | Reboot / power off / suspend the rescue machine, `dislocker`, `pip install`, the SAM/SECURITY hives | Refused outright (not offered for approval) | Denied in config |
+| Write-mode disk tests and repairs (`badblocks -w/-n`, fsck without `-n`, mkfs, `dd` to a disk, partitioning, secure erase) | Refused outright | Denied in config |
+| Downloading and running code (`git clone`, pip, wheels/scripts from PyPI or GitHub) | Refused outright | Denied in config |
 | Reading customer files | Allowed (stays on the machine) | Asks outside SysMedic's folders |
 
 The AI is also instructed **never to reproduce credentials** it finds (passwords, hashes, security-question answers, keys, tokens, including remnants in deleted/slack space). It reports them as "found, redacted". It saves its written reports in the session folder, keeps customer identifiers to what a report needs, and flags company-managed machines (Entra ID/Intune/domain), where you need the organisation's authorisation.

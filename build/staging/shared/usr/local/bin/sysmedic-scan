@@ -274,8 +274,16 @@ def check_filesystem(p):
             return "warning", f"state '{state}' (not cleanly unmounted)"
         return "ok", "clean"
     if fs == "vfat":
-        rc, out, _ = run(["fsck.vfat", "-n", dev], timeout=120)
-        return ("ok", "clean") if rc == 0 else ("warning", "fsck.vfat -n reports problems")
+        rc, out, err = run(["fsck.vfat", "-n", dev], timeout=120)
+        if rc == 0:
+            return "ok", "clean"
+        # Only a volume-label mismatch (boot sector vs root directory) is cosmetic; anything else is a real problem
+        noise = re.compile(r"^(fsck\.fat|Checking|.*: [0-9]+ files, |Leaving filesystem unchanged|\*|Not automatically|"
+                           r"[0-9]+\)|There are differences between boot sector and its backup|.*\blabel\b|Auto-copying|$)", re.I)
+        rest = [l.strip() for l in (out + err).splitlines() if not noise.match(l.strip())]
+        if not rest and re.search(r"label", out + err, re.I):
+            return "info", "volume label differs between boot sector and root directory (cosmetic)"
+        return "warning", "fsck.vfat -n reports problems: " + (rest[0][:80] if rest else "see fsck.vfat -n output")
     if fs == "exfat":
         rc, out, _ = run(["fsck.exfat", "-n", dev], timeout=120)
         return ("ok", "clean") if rc == 0 else ("warning", "fsck.exfat -n reports problems")

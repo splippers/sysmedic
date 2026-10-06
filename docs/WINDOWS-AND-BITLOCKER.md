@@ -25,7 +25,25 @@ For "what's wrong with this Windows", start with **`sysmedic-win checkup`** (men
 | `sysmedic-win registry [PART] [--days N]` | SYSTEM, SOFTWARE, each user's NTUSER.DAT, the hosts file | Services and drivers set to start whose file is **missing** (a missing boot driver means INACCESSIBLE_BOOT_DEVICE), **device-class filter drivers that aren't installed** (no keyboard, disk or DVD after uninstalling software), core services disabled (Windows Update, BITS, Defender, firewall…), Winlogon Shell/Userinit and IFEO hijacks (including the `sethc`/`utilman` logon backdoor), AppInit DLLs, non-standard LSA packages, WDigest clear-text logons, Defender off by policy and broad exclusions, updates off or pointed at WSUS, UAC off, servicing reboots/exclusive sessions pending, crash dumps off, no paging file, Intel RST boot mode, per-user proxies and lockdown policies, hosts redirects. Also **what changed recently** (software installed, third-party services/drivers, Run keys) to line up with when the trouble started |
 | `sysmedic-win cbs [PART\|CBS.log\|FOLDER] [--days N]` | `Logs\CBS\CBS.log` + the newest archived `CbsPersist_*.log/.cab`, `Logs\DISM\dism.log`, `SoftwareDistribution\ReportingEvents.log`, Panther `setuperr.log` (feature upgrades) | A **verdict with next steps**, failing updates (KB, how many times, error code), servicing errors grouped by HRESULT **with their meaning** (0x800f081f, 0x800f0831, 0x80073712, 0x800f0922, 0x80070643, 0xC1900101 …), component-store corruption lines, SFC results (repaired / couldn't repair) and DISM's detected/repaired counts, failed servicing sessions |
 
-`evtx` and `cbs` also take files: `.evtx` files or a folder of them, or a `CBS.log`/`dism.log`. That covers logs exported from a machine that's still running, or from a backup.
+| `sysmedic-win etl [PART\|FILES\|FOLDER] [--days N]` | ETW traces (`.etl`) under `Windows\Logs`, `System32\LogFiles`, `SoftwareDistribution`, `Panther` (default: last 7 days) | Failure codes from Windows Update, waasmedic, SIH, NetSetup and other components, **with timestamps** (e.g. a network outage window) and meanings, plus per-file decode coverage. Uses the vendored, pure-Python etl-parser (Apache-2.0); traces from providers without embedded metadata can't be decoded and are listed as such |
+
+`evtx` reads **every** event log (it says how many were empty or unreadable), names the **device** behind each storage error (vendor, model, last 4 digits of the serial: so a USB stick isn't mistaken for the internal disk), and groups code-integrity events **by file**, labelling known security-product components (e.g. FortiClient's AMSI DLL) as usually benign.
+
+### Which Windows logs SysMedic reads
+
+| Format | Reader | Status |
+|---|---|---|
+| Event logs `.evtx` | `sysmedic-win evtx` (evtxexport) | Full |
+| ETW traces `.etl` | `sysmedic-win etl` (etl-parser) | Most; providers without embedded metadata are listed as undecodable |
+| Text logs (CBS, DISM, Panther, ReportingEvents) | `sysmedic-win cbs` | Full |
+| Registry hives | `sysmedic-win registry` (hivex); SAM/SECURITY deliberately never read | Full |
+| ESE databases `.edb` (Windows Update DataStore, search index) | `esedbexport`, `esedbinfo` (libesedb-utils) | Tools available, no SysMedic report yet |
+| Prefetch `.pf` | `sccainfo` (libscca-utils) | Tools available, no SysMedic report yet |
+| Classic `.evt`, shortcuts `.lnk`, raw registry | libevt-utils, liblnk-utils, libregf-utils | Tools available |
+| Crash dumps `.dmp` | `sysmedic-win crashes` (stop code from the header) | Partial: no full dump analysis |
+| Perfmon `.blg`, WMI repository | — | **Unsupported**: no Linux reader exists |
+
+`evtx`, `etl` and `cbs` also take files: `.evtx` files or a folder of them, or a `CBS.log`/`dism.log`. That covers logs exported from a machine that's still running, or from a backup.
 
 **Privacy:** event fields and registry values whose names suggest secrets are dropped. SAM and SECURITY are never read. For the Security log, only who/where/what is shown (account names, logon type, source address), never anything credential-like.
 

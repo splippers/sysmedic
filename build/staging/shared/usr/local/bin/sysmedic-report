@@ -25,14 +25,26 @@ def key(f):
     return (f["area"], re.sub(r"\(\d+ devices\)|\d+ (GB|MB) free|latest [\d: -]+", "", f["title"]).strip())
 
 
-def compare(first, last):
+REPAIR = re.compile(r"UNLOCK |sysmedic-win: (fix-update|fix-hibernation|reset-password)|BitLocker volume \S+ unlocked read-write")
+
+
+def compare(first, last, audit):
+    """A problem missing from the last scan only counts as fixed if something was actually repaired during the
+    visit and the last scan could still see the system it was about. Otherwise it's 'not confirmed'."""
     problems = lambda s: {key(f): f for f in s.get("findings", []) if f["severity"] in ("critical", "warning")}
     a, b = problems(first), problems(last)
-    fixed = [a[k] for k in a if k not in b]
+    repaired = any(REPAIR.search(l) for l in audit)
+    oses = lambda s: {f.get("device") for f in s.get("filesystems", []) if f.get("os")}
+    lost = oses(first) - oses(last)            # an OS the last scan couldn't see any more (e.g. a failed mount)
+    gone = [a[k] for k in a if k not in b]
+    def confirmable(f):
+        return repaired and not (lost and f["area"] in ("windows", "linux", "macos", "boot"))
+    fixed = [f for f in gone if confirmable(f)]
+    unconfirmed = [dict(f, title=f["title"] + " (no longer detected; not confirmed fixed)") for f in gone if not confirmable(f)]
     remaining = [b[k] for k in b if k in a]
     new = [b[k] for k in b if k not in a]
     srt = lambda l: sorted(l, key=lambda f: SEV_ORDER[f["severity"]])
-    return srt(fixed), srt(remaining), srt(new)
+    return srt(fixed), srt(remaining + unconfirmed), srt(new)
 
 
 def work_done(lines):
@@ -89,10 +101,14 @@ def build():
     if not scans:
         sys.exit("No scan in this session yet — run sysmedic-scan first.")
     first, last = scans[0], scans[-1]
-    fixed, remaining, new = compare(first, last)
+    audit = session.audit_lines()
+    fixed, remaining, new = compare(first, last, audit)
     job = session.load_job()
     ids = session.private_ids()
-    acts, ai_cmds, console_cmds, refused, consent = work_done(session.audit_lines())
+    acts, ai_cmds, console_cmds, refused, consent = work_done(audit)
+    if any(f.get("os", "").lower().startswith("windows") for f in first.get("filesystems", [])) and \
+            not any("malware scan of" in l for l in audit):
+        acts.append(("—", "Malware scan: not run. Malware status is unverified (any suspicious autostarts were judged from evidence only)."))
     s = last["system"]
     oses = sorted({f["os"] for f in last.get("filesystems", []) if f.get("os")})
     found = len(fixed) + len(remaining)

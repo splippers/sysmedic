@@ -67,7 +67,20 @@ def status():
             "online": last.get("network", {}).get("online"), "ai": ai,
             "audit": lines[-40:], "backups": session.backups(), "job": job,
             "report": (d / "report.html").exists(), "session": d.name,
-            "bitlocker": bitlocker_state()}
+            "bitlocker": bitlocker_state(), "battery": battery()}
+
+
+def battery():
+    """Charge, state and health of each battery, from the kernel (no tools needed)."""
+    out = []
+    for b in sorted(Path("/sys/class/power_supply").glob("BAT*")):
+        rd = lambda n: (b / n).read_text().strip() if (b / n).exists() else ""  # noqa: E731
+        full = rd("energy_full") or rd("charge_full")
+        design = rd("energy_full_design") or rd("charge_full_design")
+        health = round(int(full) * 100 / int(design)) if full.isdigit() and design.isdigit() and int(design) else None
+        out.append({"name": b.name, "percent": int(rd("capacity")) if rd("capacity").isdigit() else None,
+                    "state": rd("status").lower(), "health": health, "cycles": int(rd("cycle_count")) if rd("cycle_count").isdigit() else None})
+    return out
 
 
 BLWEB = Path("/run/sysmedic/blweb.json")
@@ -128,6 +141,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px}#toast{position
 </style>
 <header><h1 id=machine>SysMedic</h1><div class=sub id=sub>connecting…</div></header>
 <main>
+<div class=card id=batcard style="display:none"><h2>Battery</h2><div id=bat></div></div>
 <div class=card><div class=stats>
  <div class=stat><b id=nc>–</b><span>critical</span></div><div class=stat><b id=nw>–</b><span>warnings</span></div>
  <div class=stat><b id=nb>–</b><span>backups</span></div><div class=stat><b id=ng>–</b><span>unlocked</span></div></div></div>
@@ -168,6 +182,9 @@ async function refresh(){
  if(!jobLoaded){for(const k of ['customer','contact','complaint','engineer','job_ref'])$(k).value=s.job[k]||'';jobLoaded=true}
  const B=$('backups');B.replaceChildren();for(const b of s.backups)B.append(el('div','',b.path+' · '+size(b.bytes)));if(!s.backups.length)B.textContent='none';
  $('audit').textContent=s.audit.join('\n');blShow(s.bitlocker);
+ const bt=s.battery||[];$('batcard').style.display=bt.length?'block':'none';const BT=$('bat');BT.replaceChildren();
+ for(const b of bt){const d=el('div','f '+(b.health!==null&&b.health<70?'warning':'ok'),(b.percent!==null?b.percent+'% · ':'')+(b.state||'')+(b.health!==null?' · health '+b.health+'%':'')+(b.cycles?' · '+b.cycles+' cycles':''));
+  if(b.health!==null&&b.health<70)d.append(el('small','','Worn: holds '+b.health+'% of its design capacity. Consider a replacement.'));BT.append(d)}
  $('ropen').href='report?t='+encodeURIComponent(T);if(s.report){$('ropen').style.display='inline-block';$('rstate').textContent='Report ready.';}
 }
 async function post(path,body){const r=await fetch(path+'?t='+T,{method:'POST',headers:H,body:JSON.stringify(body)});if(!r.ok)throw new Error(await r.text());return r.json()}

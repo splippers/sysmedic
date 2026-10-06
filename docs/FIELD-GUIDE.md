@@ -99,7 +99,7 @@ The first screen at boot offers Wi-Fi. Later, `wifi` (menu 2) opens NetworkManag
 
 ## 9. Phone dashboard
 
-Scan the QR code on console 2 (or run `sysmedic-dash`). The phone must be on the same network (the same Wi-Fi, or USB tethering). It shows live findings, which disks are locked, the job form, notes and the report, and its **Tests** card runs every hardware and software test with live output (see [HARDWARE-TESTING](HARDWARE-TESTING.md)). It can't repair or unlock anything, and tests never write to the customer's disks. Anyone with the link can see the visit's findings, so don't share it.
+Scan the QR code on console 2 (or run `sysmedic-dash`). The phone must be on the same network (the same Wi-Fi, or USB tethering). It shows live findings, which disks are locked, the job form, notes and the report, its **Battery** card shows charge and health (worn batteries flagged), and its **Tests** card runs every hardware and software test with live output (see [HARDWARE-TESTING](HARDWARE-TESTING.md)). It can't repair or unlock anything, and tests never write to the customer's disks. Anyone with the link can see the visit's findings, so don't share it.
 
 ## 10. Troubleshooting
 

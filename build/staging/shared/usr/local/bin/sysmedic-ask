@@ -40,7 +40,7 @@ READ_ONLY = re.compile(r"""^\s*(lsblk|blkid|findmnt|df|du|free|uname|uptime|lscp
     |ss|netstat|arp|arp-scan|nmap|curl\s+(-\w+\s+)*-[sIL]*I|speedtest-cli|iperf3\s+-c
     |smartctl\s+(-[aHiAxlc]|--(all|health|info|xall))|nvme\s+(list|smart-log|id-ctrl)|hdparm\s+-I|sensors|journalctl|dmesg
     |sysmedic-hwtest\s+(report|battery|inventory)\s*$|sysmedic-tests\s+(list|status|log|disks|wait)\b|upower\s+(-e|-i\s+\S+|--dump)|acpi(\s+-\w+)*\s*$|sensors(\s+-\w+)*\s*$|inxi(\s+-[\w]+)*\s*$
-    |cat\s+/(proc|sys|run/sysmedic|etc)/|ls|stat|file|head|tail|wc|grep|sysmedic-(scan|win\s+(info|crashes|events|autoruns|evtx|registry|cbs|checkup)|guard\s+status|net)
+    |cat\s+/(proc|sys|run/sysmedic|etc)/|ls|stat|file|head|tail|wc|grep|sysmedic-(scan|win\s+(info|crashes|events|autoruns|evtx|registry|cbs|checkup|etl)|guard\s+status|net)
     |efibootmgr\s*(-v)?\s*$|sfdisk\s+(-d|-l)|fdisk\s+-l|dumpe2fs\s+-h|ntfsinfo|mount\s+-o\s+ro\b|systemctl\s+(status|is-active|list-units))\b""", re.X)
 SHELL_META_WRITE = re.compile(r"(>|\btee\b|;\s*(rm|dd|mkfs)|\|\s*(sh|bash)\b|`|\$\()")
 
@@ -249,7 +249,9 @@ FORBIDDEN = [
      "A surface test is read-only: sysmedic-tests start surface --disk /dev/X"),
     (re.compile(r"\bdislocker"), "Refused: BitLocker is unlocked by the engineer with sysmedic-win bitlocker (or bitlocker-web)."),
     (re.compile(r"dash\.token|blweb\.json|api/bitlocker"), "Refused: the phone dashboard's secret and BitLocker unlock are the engineer's."),
-    (re.compile(r"\bpip3?\s+install\b|-m\s+pip\b|\bpipx\b"), "Refused: nothing is installed onto the rescue system; use SysMedic's tools."),
+    (re.compile(r"\bpip3?\s+(install|download)\b|-m\s+pip\b|\bpipx\b|\bgit\s+clone\b|pypi\.org|pythonhosted\.org|"
+                r"raw\.githubusercontent\.com|codeload\.github\.com|github\.com/[^ ]*/releases/download"),
+     "Refused: SysMedic never downloads and runs code during a visit. If a tool is missing, say so with sysmedic-note --feedback."),
     (re.compile(r"(^|[/\s,{])(SAM|SECURITY)(\.LOG\d?)?($|[\s,}'\"])"),
      "Refused: the SAM and SECURITY hives hold password hashes and secrets; SysMedic never reads them."),
 ]
