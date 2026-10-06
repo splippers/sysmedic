@@ -10,6 +10,8 @@ gddrescue testdisk hfsprogs smartmontools efibootmgr nvme-cli exfatprogs ntfs-3g
 python3-hivex qrencode cryptsetup zstd rsync cabextract
 # Windows log readers: ESE databases (Windows Update DataStore.edb, search index), Prefetch, classic .evt, registry, shortcuts
 libesedb-utils libscca-utils libevt-utils libregf-utils liblnk-utils
+# Memory testing; memtester, memtest86+, stress-ng, sysbench, edac-utils, rasdaemon, i2c-tools are in the hardware list below
+stressapptest mbw tinymembench lmbench numactl pcm
 # --- hardware testing ---
 stress-ng s-tui stress sysbench memtester memtest86+ edac-utils rasdaemon lm-sensors i2c-tools cpuid msr-tools
 linux-tools-generic-hwe-24.04 fio e2fsprogs f3 hdparm sdparm sg3-utils lsscsi bonnie++ ioping

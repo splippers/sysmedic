@@ -15,6 +15,8 @@ import json
 import os
 import queue
 import re
+import shutil
+import shlex
 import readline  # noqa: F401  (line editing for input())
 import select
 import signal
@@ -39,7 +41,7 @@ READ_ONLY = re.compile(r"""^\s*(lsblk|blkid|findmnt|df|du|free|uname|uptime|lscp
     |nmcli\s+(-\w+\s+)*(dev|device|con|connection|general|radio)\s*(status|show|list|wifi\s+list)?\s*$|iw\s+(dev|list|phy)|iwconfig|ethtool(?!\s+-[sKAGLE])
     |ss|netstat|arp|arp-scan|nmap|curl\s+(-\w+\s+)*-[sIL]*I|speedtest-cli|iperf3\s+-c
     |smartctl\s+(-[aHiAxlc]|--(all|health|info|xall))|nvme\s+(list|smart-log|id-ctrl)|hdparm\s+-I|sensors|journalctl|dmesg
-    |sysmedic-hwtest\s+(report|battery|inventory)\s*$|sysmedic-tests\s+(list|status|log|disks|wait)\b|upower\s+(-e|-i\s+\S+|--dump)|acpi(\s+-\w+)*\s*$|sensors(\s+-\w+)*\s*$|inxi(\s+-[\w]+)*\s*$
+    |sysmedic-hwtest\s+(report|battery|inventory|ram-modules)\s*$|sysmedic-tests\s+(list|status|log|disks|wait|watch)\b|upower\s+(-e|-i\s+\S+|--dump)|acpi(\s+-\w+)*\s*$|sensors(\s+-\w+)*\s*$|inxi(\s+-[\w]+)*\s*$
     |cat\s+/(proc|sys|run/sysmedic|etc)/|ls|stat|file|head|tail|wc|grep|sysmedic-(scan|win\s+(info|crashes|events|autoruns|evtx|registry|cbs|checkup|etl)|guard\s+status|net)
     |efibootmgr\s*(-v)?\s*$|sfdisk\s+(-d|-l)|fdisk\s+-l|dumpe2fs\s+-h|ntfsinfo|mount\s+-o\s+ro\b|systemctl\s+(status|is-active|list-units))\b""", re.X)
 SHELL_META_WRITE = re.compile(r"(>|\btee\b|;\s*(rm|dd|mkfs)|\|\s*(sh|bash)\b|`|\$\()")
@@ -59,6 +61,10 @@ Rules:
 - Read-only diagnostics run straight away; anything else is shown to the engineer first.
 - Only discuss problems that appear in the scan or in output you have seen. Do not invent partitions, swap, files or problems.
 - Be brief and practical, in plain English. Plans: at most 6 numbered steps, most urgent first, each naming the exact device. After a repair, suggest re-running sysmedic-scan to confirm it worked.
+- Only suggest tests and tools that really exist. SysMedic's tests are exactly the list below: never make up a test name, a sysmedic-* command or an option. If no test fits, say so plainly. Every command is checked before it runs, and made-up ones are rejected.
+
+SysMedic's tests (sysmedic-tests start NAME [--disk /dev/X] [--minutes N], then sysmedic-tests wait NAME):
+{tests}
 
 Triage scan of this machine:
 {scan}"""
@@ -114,7 +120,7 @@ def system_message():
         scan = open(SUMMARY).read()
     except OSError:
         scan = "(No scan available yet. Suggest running sysmedic-scan.)"
-    return {"role": "system", "content": SYSTEM.format(scan=scan) + edition_note()}
+    return {"role": "system", "content": SYSTEM.format(scan=scan, tests=catalogue_text()) + edition_note()}
 
 
 def ollama_chat(model, messages, stream=True, num_predict=None):
@@ -257,6 +263,124 @@ FORBIDDEN = [
 ]
 
 
+# ── Real tools only ─────────────────────────────────────────────────────────────
+# The small offline model invents tools ("sysmedic-tests start memslot"). Every command it proposes is checked
+# against what is really installed and SysMedic's real test catalogue; made-up ones go back to the model, never
+# to the engineer.
+
+def _load_tests():
+    import importlib.machinery
+    import importlib.util
+    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "sysmedic-tests"), "/usr/local/bin/sysmedic-tests"):
+        if os.path.exists(path):
+            try:
+                loader = importlib.machinery.SourceFileLoader("sysmedic_tests", path)
+                mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("sysmedic_tests", loader))
+                loader.exec_module(mod)
+                return mod
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
+ST = _load_tests()
+
+
+def catalogue_text():
+    if not ST:
+        return "(run sysmedic-tests list)"
+    return "\n".join(f"- {t}: {v[1]} ({v[5]})" + (" needs --disk /dev/X (a whole disk from sysmedic-tests disks)" if v[4] == "disk" else "")
+                     for t, v in ST.TESTS.items())
+
+
+def _subcommands(tool):
+    """The real subcommands of SysMedic's own multi-command tools, read from the tools themselves."""
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), tool)
+    path = here if os.path.exists(here) else shutil.which(tool)
+    try:
+        src = open(path).read()
+    except OSError:
+        return None
+    if tool == "sysmedic-hwtest":
+        block = src[src.rfind('case "${1:-menu}" in'):]
+        return set(re.findall(r"(?:^|;;|\s)([a-z][a-z-]*)\)", block[:block.find("esac")]))
+    return set(re.findall(r'"([a-z][a-z-]*)": cmd_', src)) or None
+
+
+SUBCOMMANDS = {}
+BUILTINS = set("""cd echo printf for in do done if then else elif fi while until case esac test [ [[ ] ]] { } ( ) true false
+export local read set unset source . exit return break continue shift type command hash wait time let declare eval ulimit umask""".split())
+WRAPPERS = {"sudo", "timeout", "nice", "ionice", "env", "stdbuf", "nohup", "xargs", "watch"}
+
+
+def _segments(cmd):
+    return [x.strip() for x in re.split(r"&&|\|\||[;|\n]", cmd) if x.strip()]
+
+
+def unreal(cmd):
+    """Problems with the parts of cmd that don't exist on this system ([] if everything is real)."""
+    problems = []
+    for seg in _segments(cmd):
+        try:
+            words = shlex.split(seg)
+        except ValueError:
+            words = seg.split()
+        while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or words[0] in WRAPPERS
+                         or (words[0].startswith("-") or re.fullmatch(r"[0-9.]+[smh]?", words[0]))):
+            words = words[1:]
+        if not words or words[0] in BUILTINS or words[0].startswith(("$", "#", "/dev/", "<", ">")):
+            continue
+        tool = words[0]
+        if not (shutil.which(tool) or (os.path.isabs(tool) and os.access(tool, os.X_OK))):
+            problems.append(f"'{tool}' is not installed on SysMedic")
+            continue
+        base = os.path.basename(tool)
+        args = words[1:]
+        if base == "sysmedic-tests" and ST and args:
+            sub = args[0]
+            if sub in ("start", "wait", "watch", "log", "stop") and len(args) > 1 and args[1] != "all":
+                name = ST.real_test(args[1])
+                if not name and not re.fullmatch(r"[a-z-]+-\d{6}", args[1]):
+                    problems.append(ST.unknown_test(args[1]))
+                elif sub == "start" and name and ST.TESTS[name][4] == "disk":
+                    disk = args[args.index("--disk") + 1] if "--disk" in args and args.index("--disk") + 1 < len(args) else ""
+                    try:
+                        ok = {d["dev"] for d in ST.disks()}
+                    except Exception:  # noqa: BLE001
+                        ok = set()
+                    if disk not in ok:
+                        problems.append(f"'{name}' needs --disk with a whole disk ({', '.join(sorted(ok)) or 'see sysmedic-tests disks'}), "
+                                        f"not {disk or 'no --disk'}: e.g. sysmedic-tests start {name} --disk {min(ok) if ok else '/dev/X'}")
+            elif sub not in ("menu", "list", "start", "status", "watch", "wait", "log", "stop", "disks", "--json", "-h", "--help", "help"):
+                problems.append(f"'sysmedic-tests {sub}' doesn't exist (start, status, watch, wait, log, stop, list, disks)")
+        elif base in ("sysmedic-hwtest", "sysmedic-win") and args and not args[0].startswith("-"):
+            subs = SUBCOMMANDS.setdefault(base, _subcommands(base))
+            if subs and args[0] not in subs:
+                problems.append(f"'{base} {args[0]}' doesn't exist ({', '.join(sorted(subs))})")
+    return problems
+
+
+def unreal_reply(problems):
+    return ("Not run: it doesn't exist. " + " ".join(problems) +
+            " Use only SysMedic's real tests and tools; if none fits, tell the engineer there isn't one.")
+
+
+INLINE_CMD = re.compile(r"`([^`\n]{3,200})`")
+
+
+def unreal_in_text(content):
+    """Made-up commands the model suggested in its prose (only clear command-shaped spans)."""
+    found = []
+    for span in INLINE_CMD.findall(content):
+        first = span.split()[0] if span.split() else ""
+        if not re.fullmatch(r"[a-z][a-z0-9._+-]*", first) or (" " not in span and not first.startswith("sysmedic")):
+            continue
+        p = unreal(span)
+        if p:
+            found.append((span, p))
+    return found
+
+
 def forbidden(cmd):
     return next((why for rx, why in FORBIDDEN if rx.search(cmd)), "")
 
@@ -276,6 +400,10 @@ def run_approved(call):
     if refusal:
         print(f"\n  {YELLOW}{refusal}{END}  {DIM}({cmd[:80]}){END}")
         return refusal
+    problems = unreal(cmd)
+    if problems:
+        print(f"\n  {DIM}(SysMedic blocked a made-up command: {cmd[:90]}){END}")
+        return unreal_reply(problems)
     if is_read_only(cmd):
         print(f"\n  {CYAN}▶ running (read-only):{END} {BOLD}{cmd}{END}" + (f"  {DIM}— {why}{END}" if why else ""))
     else:
@@ -344,6 +472,7 @@ def safe_turn(model, messages):
 
 def assistant_turn(model, messages):
     """Stream the model's reply, executing approved tool calls, until it answers in text."""
+    corrected = False
     for _ in range(MAX_TOOL_ROUNDS):
         print(f"\n{CYAN}SysMedic:{END} ", end="", flush=True)
         t0 = time.time()
@@ -361,6 +490,17 @@ def assistant_turn(model, messages):
             messages.append({"role": "assistant", "content": content + " [interrupted by engineer]"})
             return
         print(f"  {DIM}({time.time() - t0:.0f}s){END}")
+        bad = [] if calls else unreal_in_text(content)
+        if bad:
+            print(f"  {YELLOW}⚠ SysMedic check: " + "; ".join(f"`{c}` doesn't exist" for c, _ in bad) + f". Ignore that; correcting…{END}")
+            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user", "content": "[SysMedic check] " + " ".join(p[0] for _, p in bad) +
+                             " Rewrite your answer using only real SysMedic tests and tools from the list in your instructions, "
+                             "or say plainly that there isn't one."})
+            if corrected:
+                return
+            corrected = True
+            continue
         if not calls:
             calls = calls_from_text(content)
         messages.append({"role": "assistant", "content": content, **({"tool_calls": calls} if calls else {})})
@@ -402,9 +542,11 @@ def warm(model):
 
 # Plain requests for a catalogue test are answered directly, not left to the small offline model (on a 3410
 # it ignored "test the GPU" four times while pushing its own plan).
-ASK_TEST = re.compile(r"\b(test|check|run|benchmark|try|diagnose|look at|how is|how's)\b", re.I)
+ASK_TEST = re.compile(r"\b(test|check|run|benchmark|try|diagnose|look at|how is|how's|bad|faulty|failing|broken|dead|suspect|stress)\b", re.I)
 TEST_WORDS = [("gpu", r"gpu|graphics|video card|3d|display adapter"), ("battery", r"battery|batteries"),
-              ("cpu", r"\bcpu\b|processor|stress"), ("ram", r"\bram\b|memory"),
+              ("cpu", r"\bcpu\b|processor|cpu stress"), ("ram-modules", r"sodimms?|\bdimms?\b|memory (modules?|slots?|sticks?)|ram (modules?|slots?|sticks?)"),
+              ("ram-stress", r"stressapptest|memory stress|stress the (ram|memory)"), ("ram-speed", r"memory (bandwidth|speed)|ram speed|single.channel"),
+              ("ram", r"\bram\b(?! (modules?|slots?|sticks?|speed))|memory(?! (modules?|slots?|sticks?|stress|bandwidth|speed))"),
               ("network", r"network|wi-?fi|internet|ethernet|connection"), ("audio", r"audio|sound|speakers?|microphone|mic\b"),
               ("input", r"keyboard|touchpad|trackpad|keys\b"), ("inventory", r"inventory|hardware list|components"),
               ("malware", r"malware|virus|infect"), ("windows-checkup", r"windows check-?up"),
@@ -416,11 +558,15 @@ def requested_test(q):
     if not ASK_TEST.search(q):
         return ""
     hits = [t for t, rx in TEST_WORDS if re.search(rx, q, re.I)]
+    hits = [h for h in hits if not (h == "ram" and any(x.startswith("ram-") for x in hits))]
     return hits[0] if len(hits) == 1 else ""
 
 
+FEEDBACK = re.compile(r"\b(record|report|log|note|flag|highlight|remember)\b.{0,40}\b(this|session|habit|problem|issue|bug|behaviou?r)\b", re.I)
+
+
 def run_test_directly(model, messages, test, q):
-    cmd = f"sysmedic-tests start {test} && sysmedic-tests wait {test}"
+    cmd = f"sysmedic-tests start {test} && sysmedic-tests watch {test}"
     try:
         ans = input(f"\n  {CYAN}That's SysMedic's {test} test:{END} {BOLD}sysmedic-tests start {test}{END}. Run it now? [Y/n] ").strip().lower()
     except EOFError:
@@ -487,6 +633,18 @@ def main():
             if text:
                 subprocess.run(["/usr/local/bin/sysmedic-note", "--feedback", f"(offline AI, {model}) {text}"])
             continue
+        if FEEDBACK.search(q):
+            try:
+                ans = input(f"\n  {CYAN}Save this as SysMedic feedback for review (claude-review.md)?{END} [Y/n] ").strip().lower()
+            except EOFError:
+                ans = "n"
+            if ans in ("", "y", "yes"):
+                subprocess.run(["/usr/local/bin/sysmedic-note", "--feedback", f"(offline AI, {model}) {q}"])
+                messages.append({"role": "user", "content": q})
+                messages.append({"role": "assistant", "content": "Saved as SysMedic feedback for review."})
+                print(f"  {DIM}Saved. The whole conversation is in the session folder too.{END}")
+                save_conversation(messages, log)
+                continue
         test = requested_test(q)
         if test and run_test_directly(model, messages, test, q):
             save_conversation(messages, log)

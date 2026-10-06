@@ -61,6 +61,14 @@ import sys
 core, ed = open(sys.argv[1]).read(), open(sys.argv[2]).read()
 print(core.replace("<!-- SYSMEDIC EDITION SECTION -->", ed.strip() + "\n\n---"), end="")
 EOF
+    python3 "$ST/shared/usr/local/bin/sysmedic-tests" catalogue > "$WORK/tests.md"
+    python3 - "$WORK/agent.md" "$WORK/tests.md" <<'EOF'
+import sys
+p, t = sys.argv[1], open(sys.argv[2]).read().strip()
+s = open(p).read()
+assert "<!-- SYSMEDIC TESTS -->" in s, "core.md lost its <!-- SYSMEDIC TESTS --> marker"
+open(p, "w").write(s.replace("<!-- SYSMEDIC TESTS -->", t))
+EOF
     sudo install -D -o root -g root -m 644 "$WORK/agent.md" "$root/opt/sysmedic/SYSMEDIC-AGENT.md"
     # The documentation (repo docs/ + README) goes on the drive for offline reading: sysmedic-help
     local repo; repo=$(cd "$(realpath "$ST")/../.." && pwd)

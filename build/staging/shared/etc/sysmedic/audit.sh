@@ -13,6 +13,15 @@ if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ]; then
         >> "$(_sysmedic_audit_file)" 2>/dev/null
 fi
 
+# AI shells: a command that doesn't exist says so plainly, so a made-up tool is never mistaken for a result.
+if [ -n "${SYSMEDIC_AI:-}" ]; then
+    command_not_found_handle() {
+        printf "SysMedic: '%s' does not exist on this rescue system. Don't invent tools: use 'sysmedic-tests list' for the real tests, or tell the engineer there isn't one.\n" "$1" >&2
+        printf '%s [ai:%s] NOT FOUND: %s\n' "$(date -Is)" "$SYSMEDIC_AI" "$1" >> "$(_sysmedic_audit_file)" 2>/dev/null
+        return 127
+    }
+fi
+
 if [[ $- == *i* ]] && [ -z "${SYSMEDIC_AI:-}" ]; then
     _sysmedic_log_cmd() {
         local c

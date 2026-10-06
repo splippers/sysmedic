@@ -10,6 +10,7 @@ read-only mount.
   sysmedic-tests start TEST [--disk /dev/X] [--minutes N]
                                                start a test in the background; prints its run id
   sysmedic-tests status [RUN] [--json]         running and finished tests (latest first)
+  sysmedic-tests watch RUN|TEST                show its output live until it finishes
   sysmedic-tests wait RUN|TEST [--timeout S]   wait for it to finish (default 540 s), then show the result
   sysmedic-tests log RUN|TEST [-n LINES]       the output so far
   sysmedic-tests stop RUN|TEST|all             stop a running test
@@ -19,6 +20,7 @@ Runs and their output are kept in the visit's session folder (tests/), so they'r
 job report and the review bundle.
 """
 import datetime
+import difflib
 import json
 import os
 import re
@@ -70,6 +72,12 @@ TESTS = {
                   "sysmedic-hwtest cpu {minutes}", "minutes", "5 min", ""),
     "ram":       ("hardware", "RAM test", "memtester on all free memory, one pass (for a full test use MemTest86+ from the boot menu)",
                   "sysmedic-hwtest ram", "", "20–60 min", ""),
+    "ram-modules": ("hardware", "Memory modules & errors", "Each slot's module (size, speed, maker, part number), ECC/EDAC error counts per slot, SPD details; how to find a bad SODIMM",
+                  "sysmedic-hwtest ram-modules", "", "10 s", ""),
+    "ram-stress": ("hardware", "Memory stress (stressapptest)", "Heavy memory traffic from every core; finds marginal RAM memtester can miss",
+                  "sysmedic-hwtest ram-stress {minutes}", "minutes", "5 min", ""),
+    "ram-speed": ("hardware", "Memory bandwidth", "mbw and tinymembench: a dead or missing module shows as single-channel speed",
+                  "sysmedic-hwtest ram-speed", "", "1 min", ""),
     "disk":      ("hardware", "Disk self-test & speed", "SMART short self-test plus read-only speed and latency tests",
                   "sysmedic-hwtest disk {disk}", "disk", "3 min", ""),
     "surface":   ("hardware", "Disk surface scan", "Reads every sector looking for bad blocks (read-only, slow)",
@@ -108,7 +116,8 @@ TESTS = {
 }
 SUITES = {"full-check": ["health", "scan", "battery", "network", "windows-checkup"]}
 # OpenCode slash command for each test
-SLASH = {"health": "health", "cpu": "cpu-stress", "ram": "ram-test", "disk": "disk-test", "surface": "surface-scan",
+SLASH = {"health": "health", "cpu": "cpu-stress", "ram": "ram-test", "ram-modules": "ram-modules", "ram-stress": "ram-stress",
+         "ram-speed": "ram-speed", "disk": "disk-test", "surface": "surface-scan",
          "gpu": "gpu-test", "battery": "battery", "inventory": "inventory", "input": "input-test", "audio": "audio-test",
          "scan": "scan", "network": "network-check", "windows-checkup": "windows-checkup", "windows-events": "windows-events",
          "windows-registry": "windows-registry", "windows-updates": "windows-updates", "windows-traces": "windows-traces", "windows-crashes": "windows-crashes",
@@ -177,12 +186,37 @@ def find_run(key):
     rs = runs()
     if key in ("latest", None) and rs:
         return rs[0]
+    key = real_test(key) or key
     return next((r for r in rs if r["run"] == key), None) or next((r for r in rs if r["test"] == key), None)
 
 
+# Names people and AIs reach for; each maps to a real test.
+ALIASES = {"mem": "ram", "memory": "ram", "memtest": "ram", "memtester": "ram", "ram-test": "ram",
+           "memslot": "ram-modules", "memslots": "ram-modules", "dimm": "ram-modules", "dimms": "ram-modules", "sodimm": "ram-modules",
+           "memory-modules": "ram-modules", "stressapptest": "ram-stress", "memory-stress": "ram-stress", "bandwidth": "ram-speed",
+           "graphics": "gpu", "glmark2": "gpu", "smart": "disk", "badblocks": "surface", "wifi": "network", "net": "network",
+           "keyboard": "input", "touchpad": "input", "sound": "audio", "speakers": "audio", "virus": "malware", "clamav": "malware"}
+
+
+def real_test(name):
+    """The catalogue name for a test name or alias, or ''."""
+    name = (name or "").strip().lower().lstrip("/")
+    name = {v: k for k, v in SLASH.items()}.get(name, name)
+    name = ALIASES.get(name, name)
+    return name if name in TESTS else ""
+
+
+def unknown_test(name):
+    close = difflib.get_close_matches(name.lower(), list(TESTS) + list(ALIASES), n=3, cutoff=0.5)
+    close = list(dict.fromkeys(real_test(c) for c in close))
+    return (f"unknown test '{name}': no such SysMedic test." + (f" Did you mean: {', '.join(close)}?" if close else "")
+            + f" Real tests: {', '.join(TESTS)}")
+
+
 def start(test, disk="", minutes=None, via="console"):
+    test = real_test(test) or test
     if test not in TESTS:
-        raise ValueError(f"unknown test '{test}' (sysmedic-tests list)")
+        raise ValueError(unknown_test(test))
     cat, title, _what, cmd, needs, _est, _person = TESTS[test]
     if any(r["test"] == test and r["state"] == "running" for r in runs()):
         raise ValueError(f"{title} is already running (sysmedic-tests status)")
@@ -330,6 +364,10 @@ def main():
     if cmd in ("-h", "--help", "help"):
         print(__doc__)
         return
+    if cmd == "catalogue":   # markdown, for the AI instructions (sysmedic-deploy)
+        print("\n".join(f"- `{t}`: {v[1]} ({v[5]}): {v[2].rstrip('.')}." + (" Needs `--disk /dev/X` (a whole disk, never a partition)." if v[4] == "disk" else "")
+                         + (" Optional `--minutes N`." if v[4] == "minutes" else "") for t, v in TESTS.items()))
+        return
     if cmd == "opencode-commands":
         print(json.dumps(opencode_commands(), indent=2))
         return
@@ -362,6 +400,20 @@ def main():
         except (ValueError, IndexError) as e:
             sys.exit(f"  {e}")
         print(json.dumps(r) if js else f"  Started {r['title']} ({r['run']}). Watch: sysmedic-tests log {r['test']}")
+    elif cmd == "watch":
+        r = find_run(a[1] if len(a) > 1 else "latest")
+        if not r:
+            sys.exit("  no such test run (sysmedic-tests status)")
+        rc = Path(r["log"]).with_suffix(".rc")
+        try:
+            subprocess.run(["bash", "-c", f"tail -n +1 -f {shlex.quote(r['log'])} & t=$!; "
+                            f"while [ ! -e {shlex.quote(str(rc))} ]; do sleep 1; done; sleep 1; kill $t"])
+        except KeyboardInterrupt:
+            print("\n  (stopped watching; the test keeps running: sysmedic-tests status)")
+            sys.exit(130)
+        code = rc.read_text().strip()
+        print(f"\n  [{r['title']}: {'passed' if code == '0' else 'FAILED (exit ' + code + ')'}]")
+        sys.exit(0 if code == "0" else 1)
     elif cmd == "status":
         rs = runs()
         if len(a) > 1:
