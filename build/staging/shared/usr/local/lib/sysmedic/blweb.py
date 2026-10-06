@@ -90,7 +90,21 @@ def key_id(dev):
     return ""
 
 
-def serve(volumes, unlock, mount, audit, machine="", color=None):
+STATE = "/run/sysmedic/blweb.json"   # for the phone dashboard: where the page is, whether it's running (root only)
+
+
+def write_state(**kw):
+    try:
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        tmp = STATE + ".tmp"
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+            json.dump(kw, f)
+        os.replace(tmp, STATE)
+    except OSError:
+        pass
+
+
+def serve(volumes, unlock, mount, audit, machine="", color=None, via="console"):
     """volumes(): [(dev, size, label)]; unlock(dev, key) -> (ok, msg, mapped); mount(name) -> (mp, err)."""
     C = color or {k: "" for k in ("red", "yel", "grn", "cyan", "bold", "dim", "end")}
     ips = lan_addresses()
@@ -220,7 +234,8 @@ def serve(volumes, unlock, mount, audit, machine="", color=None):
     for dev, size, label in vols:
         print(f"  {dev} ({size}{', ' + label if label else ''})" + (f"  Key ID {ids[dev][:8]}…" if ids.get(dev) else ""))
     print(f"\n  {C['dim']}Waiting. It stops after unlocking, 5 wrong keys or 15 minutes; Ctrl-C to stop now.{C['end']}")
-    audit(f"BitLocker web unlock started on port {port} (HTTPS, secret link, read-only)")
+    audit(f"BitLocker web unlock started on port {port} via {via} (HTTPS, secret link, read-only)")
+    write_state(running=True, pid=os.getpid(), port=port, path=token, fingerprint=fingerprint, started=time.time(), via=via)
 
     def stopper():
         while not state["stop"]:
@@ -238,5 +253,6 @@ def serve(volumes, unlock, mount, audit, machine="", color=None):
     finally:
         httpd.server_close()
     audit(f"BitLocker web unlock stopped: {state['stop']} ({len(state['done'])} unlocked)")
+    write_state(running=False, stopped=state["stop"], unlocked=len(state["done"]), ended=time.time())
     print(f"\n  Web unlock stopped: {state['stop']}.")
     return 0 if state["done"] else 1

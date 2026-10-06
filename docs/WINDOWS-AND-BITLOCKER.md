@@ -44,7 +44,11 @@ For "what's wrong with this Windows", start with **`sysmedic-win checkup`** (men
 
 All repairs need the partition unlocked first (`sysmedic-unlock`), and they say so if you forget. A hibernated volume silently mounts read-only under ntfs-3g; SysMedic detects this and tells you to run `fix-hibernation` first.
 
-## BitLocker from a phone or laptop (`sysmedic-win bitlocker-web`, menu 6 → w)
+## BitLocker from a phone or laptop (`sysmedic-win bitlocker-web`, menu 6 → w, or the phone dashboard)
+
+**From the phone dashboard (one QR code for everything):** when the machine has BitLocker volumes, the dashboard shows a **BitLocker** card with each volume locked or unlocked and an **Unlock from this phone** button. It starts the encrypted unlock page and opens it on the phone; the key is typed there, never on the dashboard (which is plain HTTP). The AI can't use this: it's blocked from the dashboard's secret and its BitLocker endpoint.
+
+**From the console:**
 
 For when the recovery key is with someone else (the customer, their IT admin) or on your phone. You start it on the console; it shows a QR code and a link. Whoever has the key opens it on a phone or laptop **on the same network**, picks the drive (its **Key ID** is shown, to match the right key at aka.ms/myrecoverykey) and types the key.
 

@@ -250,7 +250,10 @@
       "sgdisk *-g*": "deny",
       "sgdisk *-t*": "deny",
       "sgdisk *-c*": "deny",
-      "sgdisk *-N*": "deny"
+      "sgdisk *-N*": "deny",
+      "*dash.token*": "deny",
+      "*blweb.json*": "deny",
+      "*api/bitlocker*": "deny"
     },
     "edit": "ask",
     "webfetch": "allow",

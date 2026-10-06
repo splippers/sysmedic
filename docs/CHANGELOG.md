@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.10.06 (later): BitLocker from the dashboard
+
+- **One QR code:** the phone dashboard has a BitLocker card (volumes, locked/unlocked) with **Unlock from this phone**, which starts the encrypted unlock page and opens it at the address the phone already used. The key never touches the plain-HTTP dashboard. Verified in QEMU against a real BitLocker test volume: started, unlocked read-only, page closed itself, key in no log. Both AIs are blocked from the dashboard's secret and BitLocker endpoint.
+
 ## 2026.10.06 (later): lessons from the new caddy's first two 3410 visits
 
 - **The offline AI ran a destructive disk test.** Qwen 7B proposed `badblocks -w` (overwrite test) on the customer's Windows partition, and `fsck -f`; both were approved at the prompt. The kernel write-protection refused every write, so **no data was touched**, but the AI then misread the refused writes as "multiple bad blocks". Now: write-mode badblocks, fsck-family repairs (anything without `-n`), mkfs, wipefs, shred, discard, `dd` to a disk, partitioning, secure erase, NVMe format, unlock and chntpw are **refused outright** by the offline assistant (not offered), and denied for OpenCode. Both are told a surface test is `sysmedic-tests start surface` (read-only) and that failed writes on a protected disk are not bad blocks. Rules checked to agree on OpenCode 1.18 and 2.0.

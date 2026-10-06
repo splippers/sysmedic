@@ -389,9 +389,22 @@ def cmd_bitlocker(args):
     print(f"  Lock it again with: cryptsetup close {name}")
 
 
-def cmd_bitlocker_web(_args):
-    human_only("bitlocker web unlock")
+def cmd_bitlocker_web(args):
+    # From a console, or started by the phone dashboard (--background, SYSMEDIC_VIA_PHONE=1); never by the AI
+    phone = "--background" in args and os.environ.get("SYSMEDIC_VIA_PHONE") == "1"
+    if phone:
+        if called_by_ai():
+            audit("REFUSED bitlocker web unlock: requested by the AI assistant")
+            sys.exit("REFUSED: the AI can't start the BitLocker unlock.")
+    else:
+        human_only("bitlocker web unlock")
     import blweb
+    try:
+        st = json.loads(Path(blweb.STATE).read_text())
+        if st.get("running") and Path(f"/proc/{st['pid']}").exists():
+            print(f"  Already running (port {st['port']})."); return
+    except (OSError, ValueError, KeyError):
+        pass
 
     def volumes():
         return [(d, run(["lsblk", "-dno", "SIZE", d]).stdout.strip(), run(["lsblk", "-dno", "PARTLABEL", d]).stdout.strip())
@@ -399,7 +412,8 @@ def cmd_bitlocker_web(_args):
 
     machine = run(["cat", "/sys/class/dmi/id/sys_vendor", "/sys/class/dmi/id/product_name"]).stdout.split("\n")
     machine = " ".join(x.strip() for x in machine if x.strip())
-    sys.exit(blweb.serve(volumes, lambda dev, key: bitlocker_open(dev, key, via="web"), mount_unlocked, audit, machine, C))
+    sys.exit(blweb.serve(volumes, lambda dev, key: bitlocker_open(dev, key, via="phone" if phone else "web"), mount_unlocked, audit,
+                         machine, C, via="phone dashboard" if phone else "console"))
 
 
 def confirm(prompt):

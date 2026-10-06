@@ -53,8 +53,8 @@ install_tree() {
         [ -e "$root/$f" ] && { sudo rm -f "$root/$f"; say "Removed obsolete /$f"; }
         sudo rmdir "$(dirname "$root/$f")" 2>/dev/null || true
     done
-    sudo rsync -rlpt --chown=root:root "$ST/shared/" "$root/"
-    [ -d "$ST/editions/$ed" ] && sudo rsync -rlpt --chown=root:root "$ST/editions/$ed/" "$root/"
+    sudo rsync -rlpt --chown=root:root --exclude=__pycache__ "$ST/shared/" "$root/"
+    [ -d "$ST/editions/$ed" ] && sudo rsync -rlpt --chown=root:root --exclude=__pycache__ "$ST/editions/$ed/" "$root/"
     # AI instructions: shared core with this edition's toolkit section
     python3 - "$ST/agent/core.md" "$ST/agent/$ed.md" > "$WORK/agent.md" <<'EOF'
 import sys

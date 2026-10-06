@@ -248,6 +248,7 @@ FORBIDDEN = [
      "Refused: that writes to or erases a disk. Repairs are the engineer's, on console 2 after sysmedic-unlock. "
      "A surface test is read-only: sysmedic-tests start surface --disk /dev/X"),
     (re.compile(r"\bdislocker"), "Refused: BitLocker is unlocked by the engineer with sysmedic-win bitlocker (or bitlocker-web)."),
+    (re.compile(r"dash\.token|blweb\.json|api/bitlocker"), "Refused: the phone dashboard's secret and BitLocker unlock are the engineer's."),
     (re.compile(r"\bpip3?\s+install\b|-m\s+pip\b|\bpipx\b"), "Refused: nothing is installed onto the rescue system; use SysMedic's tools."),
     (re.compile(r"(^|[/\s,{])(SAM|SECURITY)(\.LOG\d?)?($|[\s,}'\"])"),
      "Refused: the SAM and SECURITY hives hold password hashes and secrets; SysMedic never reads them."),

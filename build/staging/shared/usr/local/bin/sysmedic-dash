@@ -19,6 +19,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -65,7 +66,38 @@ def status():
             "findings": last.get("findings", []), "guard": session.guard_state(),
             "online": last.get("network", {}).get("online"), "ai": ai,
             "audit": lines[-40:], "backups": session.backups(), "job": job,
-            "report": (d / "report.html").exists(), "session": d.name}
+            "report": (d / "report.html").exists(), "session": d.name,
+            "bitlocker": bitlocker_state()}
+
+
+BLWEB = Path("/run/sysmedic/blweb.json")
+
+
+def blweb_state():
+    try:
+        st = json.loads(BLWEB.read_text())
+    except (OSError, ValueError):
+        return {}
+    if st.get("running") and not Path(f"/proc/{st.get('pid', 0)}").exists():
+        st["running"] = False
+    return st
+
+
+def bitlocker_state():
+    out = subprocess.run(["lsblk", "-J", "-p", "-o", "NAME,FSTYPE,SIZE,PARTLABEL"], capture_output=True, text=True).stdout
+    vols = []
+    def walk(ns):
+        for n in ns:
+            if n.get("fstype") == "BitLocker":
+                vols.append({"dev": n["name"], "size": n.get("size") or "", "label": n.get("partlabel") or "",
+                             "unlocked": Path(f"/dev/mapper/bitlocker-{os.path.basename(n['name'])}").exists()})
+            walk(n.get("children") or [])
+    try:
+        walk(json.loads(out or "{}").get("blockdevices", []))
+    except ValueError:
+        pass
+    st = blweb_state()
+    return {"volumes": vols, "page": bool(st.get("running"))}
 
 
 PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
@@ -100,6 +132,9 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px}#toast{position
  <div class=stat><b id=nc>–</b><span>critical</span></div><div class=stat><b id=nw>–</b><span>warnings</span></div>
  <div class=stat><b id=nb>–</b><span>backups</span></div><div class=stat><b id=ng>–</b><span>unlocked</span></div></div></div>
 <div class=card><h2>Findings</h2><div id=findings></div></div>
+<div class=card id=blcard style="display:none"><h2>BitLocker</h2><div id=blvols></div>
+ <p class=muted style="font-size:13px;margin:8px 0">The recovery key is typed on a separate <b>encrypted</b> page (never on this one). Your browser will warn about its certificate: it's made for this visit only, so continue. Read-only; it closes by itself after unlocking, 5 wrong keys or 15 minutes.</p>
+ <button id=blbtn onclick=blUnlock()>Unlock from this phone</button></div>
 <div class=card><h2>Tests</h2><p class=muted style="font-size:13px;margin:0 0 6px">Read-only: nothing is written to the customer's disks. Results go into the job report.</p>
  <div id=runs></div><details style="margin-top:8px"><summary>Hardware tests</summary><div id=thw></div></details>
  <details><summary>Software tests</summary><div id=tsw></div></details></div>
@@ -132,7 +167,7 @@ async function refresh(){
  const N=$('notes');N.replaceChildren();for(const n of (s.job.notes||[])){const d=el('div','f',n.text);d.prepend(el('small','',n.time.slice(11,16)+' · '+n.author));N.append(d)}
  if(!jobLoaded){for(const k of ['customer','contact','complaint','engineer','job_ref'])$(k).value=s.job[k]||'';jobLoaded=true}
  const B=$('backups');B.replaceChildren();for(const b of s.backups)B.append(el('div','',b.path+' · '+size(b.bytes)));if(!s.backups.length)B.textContent='none';
- $('audit').textContent=s.audit.join('\n');
+ $('audit').textContent=s.audit.join('\n');blShow(s.bitlocker);
  $('ropen').href='report?t='+encodeURIComponent(T);if(s.report){$('ropen').style.display='inline-block';$('rstate').textContent='Report ready.';}
 }
 async function post(path,body){const r=await fetch(path+'?t='+T,{method:'POST',headers:H,body:JSON.stringify(body)});if(!r.ok)throw new Error(await r.text());return r.json()}
@@ -141,6 +176,11 @@ async function addNote(){const t=$('note').value.trim();if(!t)return;await post(
 async function makeReport(){$('rbtn').disabled=true;$('rstate').textContent='Re-scanning and building the report (about 30 s)…';
  try{const r=await post('api/report',{});$('rstate').textContent=r.summary;$('ropen').style.display='inline-block'}catch(e){$('rstate').textContent='Failed: '+e.message}
  $('rbtn').disabled=false;refresh()}
+async function blUnlock(){$('blbtn').disabled=true;$('blbtn').textContent='Starting the secure page…';
+ try{const r=await post('api/bitlocker/start',{});location.href=r.url}catch(e){toast('Could not start: '+e.message);$('blbtn').disabled=false;$('blbtn').textContent='Unlock from this phone'}}
+function blShow(b){if(!b||!b.volumes.length){$('blcard').style.display='none';return}$('blcard').style.display='block';
+ const V=$('blvols');V.replaceChildren();let locked=0;for(const v of b.volumes){if(!v.unlocked)locked++;V.append(el('span','pill '+(v.unlocked?'locked':'WRITABLE'),v.dev.replace('/dev/','')+' '+v.size+(v.unlocked?' unlocked':' locked')))}
+ $('blbtn').style.display=locked?'block':'none';if(b.page&&!$('blbtn').disabled)$('blbtn').textContent='Open the unlock page'}
 let openLog=null,testsBuilt=false;
 async function tests(){
  let d;try{const r=await fetch('api/tests?t='+T);if(!r.ok)return;d=await r.json()}catch(e){return}
@@ -246,6 +286,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             subprocess.run(["/usr/local/bin/sysmedic-tests", "stop", str(body.get("run", "all"))], capture_output=True, timeout=30)
             session.audit("phone", f"test stopped: {body.get('run', 'all')}")
             return self.send(200, {"ok": True})
+        if path == "/api/bitlocker/start":
+            # The key is never typed here (plain HTTP): this starts the HTTPS unlock page and sends the phone to it,
+            # at the same address the phone used to reach this dashboard
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
+            st = blweb_state()
+            if not st.get("running"):
+                session.audit("phone", "BitLocker unlock page requested from the dashboard")
+                subprocess.Popen(["/usr/local/bin/sysmedic-win", "bitlocker-web", "--background"], start_new_session=True,
+                                 stdin=subprocess.DEVNULL, stdout=open("/run/sysmedic/blweb.log", "a"), stderr=subprocess.STDOUT,
+                                 env=dict(os.environ, SYSMEDIC_VIA_PHONE="1", TERM="dumb"))
+                for _ in range(40):
+                    time.sleep(0.5)
+                    st = blweb_state()
+                    if st.get("running"):
+                        break
+            if not st.get("running"):
+                why = Path("/run/sysmedic/blweb.log").read_text(errors="replace").strip().splitlines()[-1:] if Path("/run/sysmedic/blweb.log").exists() else []
+                return self.send(500, "The unlock page didn't start" + (f": {why[0].strip()}" if why else ""), "text/plain")
+            return self.send(200, {"ok": True, "url": f"https://{host}:{st['port']}{st['path']}",
+                                   "fingerprint": st.get("fingerprint", "")[:23]})
         if path == "/api/report":
             with report_lock:
                 p = subprocess.run(["/usr/local/bin/sysmedic-report"], capture_output=True, text=True, timeout=300)

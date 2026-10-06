@@ -89,6 +89,8 @@ sysmedic-win bitlocker /dev/nvme0n1p3      (237G, Basic data partition)
 ```
 Type that line, then the **48-digit recovery key** (8 groups of 6 digits; dashes and spaces optional) at the hidden prompt. It's never shown, stored, logged or recorded. The owner finds it at **aka.ms/myrecoverykey** or from their IT admin. The volume opens **read-only**; for repairs, run `sysmedic-unlock` on the partition first and add `--rw`. More: [WINDOWS-AND-BITLOCKER](WINDOWS-AND-BITLOCKER.md).
 
+**From your phone:** the dashboard (QR code on console 2) has a **BitLocker** card: tap **Unlock from this phone** and type the key on the secure page it opens.
+
 **Key with someone else?** Run `sysmedic-win bitlocker-web` (menu 6 → w). The customer or their IT admin scans the QR code with a phone or laptop on the same network and types the key there. It's HTTPS with a secret link, unlocks read-only, and stops by itself after unlocking, 5 wrong keys or 15 minutes.
 
 ## 8. Wi-Fi
