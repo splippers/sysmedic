@@ -58,7 +58,7 @@ Common guesses map to real tests (`mem` → `ram`, `memslot`/`sodimm` → `ram-m
 - `sysmedic-hwtest cpu [min]`: CPU and cooling stress (stress-ng, temperatures logged). Throttling or >95°C points to cooling: dust, thermal paste, fan.
 - `sysmedic-hwtest ram-modules`: each memory slot's module (size, speed, maker, part number), ECC/EDAC error counts per slot, SPD details. First step for "bad SODIMM?". Without ECC a bad module is found by testing **one module at a time**.
 - `sysmedic-hwtest ram-stress [min]`: stressapptest, heavy memory traffic; finds marginal RAM that memtester misses.
-- `sysmedic-hwtest ram-speed`: memory bandwidth (mbw, tinymembench); two modules fitted but single-channel speed means one isn't working.
+- `sysmedic-hwtest ram-speed`: memory bandwidth (mbw); two modules fitted but single-channel speed means one isn't working.
 - `sysmedic-hwtest ram`: memtester on free RAM. For a full RAM test the engineer reboots into **MemTest86+** from the boot menu ("Memory test"; Secure Boot must be off on UEFI).
 - `sysmedic-hwtest disk DEV` (SMART short self-test + read-only speed/latency) and `surface DEV` (read-only badblocks scan). Neither ever writes.
 - `gpu` (glmark2), `input` (keyboard/touchpad), `audio` (speakers/mic), `battery`, `inventory` (inxi, serials hidden).

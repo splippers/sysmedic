@@ -360,8 +360,15 @@ def unreal(cmd):
     return problems
 
 
+def _is_usage(p):
+    return "needs --disk" in p
+
+
 def unreal_reply(problems):
-    return ("Not run: it doesn't exist. " + " ".join(problems) +
+    if all(_is_usage(p) for p in problems):
+        return ("Not run: the test is real but the disk is wrong. " + " ".join(problems) +
+                " Use a disk from that list exactly (never a partition or a made-up name).")
+    return ("Not run: part of it doesn't exist. " + " ".join(problems) +
             " Use only SysMedic's real tests and tools; if none fits, tell the engineer there isn't one.")
 
 
@@ -402,7 +409,8 @@ def run_approved(call):
         return refusal
     problems = unreal(cmd)
     if problems:
-        print(f"\n  {DIM}(SysMedic blocked a made-up command: {cmd[:90]}){END}")
+        what = "a command with a wrong disk" if all(_is_usage(p) for p in problems) else "a made-up command"
+        print(f"\n  {DIM}(SysMedic blocked {what}: {cmd[:90]}){END}")
         return unreal_reply(problems)
     if is_read_only(cmd):
         print(f"\n  {CYAN}▶ running (read-only):{END} {BOLD}{cmd}{END}" + (f"  {DIM}— {why}{END}" if why else ""))
@@ -580,7 +588,9 @@ def run_test_directly(model, messages, test, q):
     messages.append({"role": "assistant", "content": f"Running the {test} test.", "tool_calls": [
         {"function": {"name": "run_command", "arguments": {"command": cmd, "why": "the engineer asked for it"}}}]})
     messages.append({"role": "tool", "tool_name": "run_command", "content": f"Command: {cmd}\n{out}\n{status}"})
-    messages.append({"role": "user", "content": "In two or three plain sentences: what does this result mean? Don't run anything else."})
+    messages.append({"role": "user", "content": "In two or three plain sentences: what does this result mean? State only what the output "
+                     "above shows, with its exact numbers (e.g. how many slots are populated); don't add anything it doesn't say. "
+                     "Don't run anything else."})
     safe_turn(model, messages)
     return True
 

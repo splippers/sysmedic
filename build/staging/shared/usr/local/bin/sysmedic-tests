@@ -76,7 +76,7 @@ TESTS = {
                   "sysmedic-hwtest ram-modules", "", "10 s", ""),
     "ram-stress": ("hardware", "Memory stress (stressapptest)", "Heavy memory traffic from every core; finds marginal RAM memtester can miss",
                   "sysmedic-hwtest ram-stress {minutes}", "minutes", "5 min", ""),
-    "ram-speed": ("hardware", "Memory bandwidth", "mbw and tinymembench: a dead or missing module shows as single-channel speed",
+    "ram-speed": ("hardware", "Memory bandwidth", "mbw: a dead or missing module shows as single-channel speed",
                   "sysmedic-hwtest ram-speed", "", "1 min", ""),
     "disk":      ("hardware", "Disk self-test & speed", "SMART short self-test plus read-only speed and latency tests",
                   "sysmedic-hwtest disk {disk}", "disk", "3 min", ""),

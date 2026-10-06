@@ -7,7 +7,7 @@
 #   sysmedic-hwtest ram             RAM test of free memory (memtester, 1 pass)
 #   sysmedic-hwtest ram-modules     each memory slot: module, size, speed, maker/part; ECC/EDAC error counts per slot
 #   sysmedic-hwtest ram-stress [MIN] stressapptest: heavy memory traffic to expose marginal RAM (default 10 min)
-#   sysmedic-hwtest ram-speed       memory bandwidth (mbw, tinymembench): a dead or missing module shows as single-channel
+#   sysmedic-hwtest ram-speed       memory bandwidth (mbw): a dead or missing module shows as single-channel
 #   sysmedic-hwtest disk DEV        SMART short self-test + read-only speed test (never writes)
 #   sysmedic-hwtest surface DEV     read-only surface scan for bad sectors (badblocks, slow)
 #   sysmedic-hwtest gpu             3D benchmark/stress without a desktop (glmark2-es2-drm)
@@ -121,7 +121,7 @@ ram_modules() {
     done
     [ -d /sys/devices/system/edac/mc/mc0 ] || echo "  No EDAC memory controller: this machine has no ECC reporting (normal for laptops)."
     command -v ras-mc-ctl >/dev/null && ras-mc-ctl --errors 2>/dev/null | grep -iE 'memory|dimm' | tail -5 | sed 's/^/  /'
-    journalctl -k -b --no-pager 2>/dev/null | grep -iE 'edac|memory failure|hardware error.*memory|mce:.*memory|bad page' | tail -5 | sed 's/^/  /'
+    journalctl -k -b --no-pager 2>/dev/null | grep -iE 'edac.*(error|[^a-z]ce[^a-z]|[^a-z]ue[^a-z])|memory failure|hardware error.*memory|mce:.*memory|bad page' | tail -5 | sed 's/^/  /'
     [ $found = 1 ] && echo -e "  ${R}✖ The slot(s) with errors above hold faulty memory.${N}"
     hdr "Module details from the modules themselves (SPD)"
     modprobe -q ee1004 2>/dev/null; modprobe -q eeprom 2>/dev/null; modprobe -q i2c-i801 2>/dev/null
@@ -154,12 +154,10 @@ ram_speed() {
     if command -v mbw >/dev/null; then
         mbw -q -n 3 256 2>/dev/null | grep AVG | sed 's/^/  mbw /'
     fi
-    if command -v tinymembench >/dev/null; then
-        timeout 120 tinymembench 2>/dev/null | grep -E 'C copy  |standard memcpy|standard memset' | head -3 | sed 's/^ */  tinymembench /'
-    fi
-    echo "  Rough guide: dual-channel DDR4 laptops copy at about 8-15 GB/s (MiB/s ÷ 1000), single-channel about half."
+    echo "  (tinymembench and lmbench are installed for detailed manual runs; they take several minutes.)"
+    echo "  Rough guide (MCBLOCK line, MiB/s ÷ 1000 = GB/s): dual-channel DDR4 laptops about 10-18 GB/s, single-channel about half."
     echo "  If two modules are fitted but bandwidth looks single-channel, one module or slot may not be working."
-    record "ram-speed: $(mbw -q -n 1 256 2>/dev/null | awk '/AVG.*MEMCPY/ {print $(NF-1) " MiB/s memcpy"}')"
+    record "ram-speed: $(mbw -q -n 1 256 2>/dev/null | awk '/AVG.*MCBLOCK/ {print $(NF-1) " MiB/s (mbw MCBLOCK)"}')"
 }
 
 pick_disk() {

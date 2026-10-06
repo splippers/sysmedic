@@ -23,7 +23,7 @@ On both editions. Results are appended to the session's `hwtest.log` and appear 
 | `sysmedic-hwtest ram` | memtester on 80% of free memory, 1 pass | minutes |
 | `sysmedic-hwtest ram-modules` | Each slot: module size, type, rated/running speed, maker, part number; ECC/EDAC error counts per slot; SPD via decode-dimms where readable | 10 s |
 | `sysmedic-hwtest ram-stress [MIN]` | stressapptest on 75% of free memory from every core (default 5 min from the menu/AI, 10 direct) | minutes |
-| `sysmedic-hwtest ram-speed` | Bandwidth with mbw and tinymembench: two modules but single-channel speed = one not working | 1 min |
+| `sysmedic-hwtest ram-speed` | Bandwidth with mbw (tinymembench and lmbench for manual runs): two modules but single-channel speed = one not working | 1 min |
 | `sysmedic-hwtest disk DEV` | SMART short self-test, then **read-only** fio: sequential read for 30 s, random 4k latency for 15 s | ~3 min |
 | `sysmedic-hwtest surface DEV` | **Read-only** badblocks surface scan | hours on big disks |
 | `sysmedic-hwtest gpu` | glmark2 3D benchmark without a desktop (DRM) | ~2 min |
