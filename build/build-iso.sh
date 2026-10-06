@@ -18,7 +18,7 @@ EXCL="boot.catalog md5sum.txt pool dists casper/initrd.new casper/ubuntu-server-
       casper/vmlinuz casper/initrd boot/grub/grub.cfg boot/memtest86+x64.bin
       casper/ubuntu-server-minimal.ubuntu-server.squashfs casper/ubuntu-server-minimal.ubuntu-server.squashfs.gpg"
 # The stock ISO's installer layers (and their manifests): without them casper boots SysMedic, not the installer
-EXCL="$EXCL $(cd "$I" && ls -d casper/*installer* casper/hwe-* 2>/dev/null | tr '\n' ' ')"
+EXCL="$EXCL $(cd "$I" && { ls -d casper/*installer* casper/hwe-* 2>/dev/null || true; } | tr '\n' ' ')"
 
 sudo mksquashfs root newiso-ubuntu-server-minimal.squashfs -comp zstd -b 1M -noappend -quiet
 # casper stacks the stock ubuntu-server layer ON TOP of ./root. Our root already contains everything in it,
