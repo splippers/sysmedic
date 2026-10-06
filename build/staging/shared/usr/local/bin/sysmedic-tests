@@ -56,7 +56,9 @@ GPU = ("echo '== GPU'; lspci | grep -iE 'vga compatible|3d controller|display co
        "timeout -k 10 150 glmark2-es2-drm --off-screen -s 1280x720 "
        "-b build:duration=5 -b texture:duration=5 -b shading:shading=phong:duration=5 -b bump:duration=5 "
        "-b effect2d:duration=5 -b pulsar:duration=5 -b desktop:duration=5 -b terrain:duration=5 2>&1 "
-       "| grep --line-buffered -E 'GL_RENDERER|Score|FPS|rror' | grep --line-buffered -v 'restore original CRTC'; rc=${PIPESTATUS[0]}; "
+       "| grep --line-buffered -E 'GL_RENDERER|Score|FPS|rror' | grep --line-buffered -v 'restore original CRTC' | tee /tmp/.gpu-test; rc=${PIPESTATUS[0]}; "
+       "if grep -qiE 'GL_RENDERER:.*(llvmpipe|softpipe|swrast)' /tmp/.gpu-test; then echo 'WARNING: software rendering: no GPU driver is in use, "
+       "so this score measures the CPU, not the graphics chip. Check the driver: lspci -k (Kernel driver in use) and dmesg.'; fi; rm -f /tmp/.gpu-test; "
        "if [ $rc = 124 ] || [ $rc = 137 ]; then echo 'FAILED: the 3D benchmark stalled and was stopped after 150 s.'; "
        "echo 'A healthy GPU finishes in about a minute: suspect the graphics driver or GPU. Driver messages:'; "
        "dmesg 2>/dev/null | grep -iE 'i915|amdgpu|nouveau|gpu hang|drm' | grep -iE 'err|hang|fail|reset|timeout' | tail -8; exit 1; fi")
