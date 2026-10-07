@@ -15,6 +15,7 @@
 set -Eeuo pipefail
 trap 'echo -e "\033[1;31mERROR:\033[0m deploy stopped at line $LINENO: $BASH_COMMAND" >&2' ERR
 cd "$(dirname "$0")"
+export PYTHONDONTWRITEBYTECODE=1    # running staging's Python must not leave __pycache__ in it (it changed the version)
 KIT=$PWD
 ST=$KIT/staging
 STICK_ROOT=$KIT/root
@@ -35,7 +36,7 @@ version() {
     [ -n "${SYSMEDIC_VERSION:-}" ] && { echo "$SYSMEDIC_VERSION"; return; }   # set by sysmedic-update (from the signed manifest)
     local h
     # covers everything that ends up on the drives: shared files, AI instructions, package lists
-    h=$(cd "$ST" && find shared agent packages obsolete.txt -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-8)
+    h=$(cd "$ST" && find shared agent packages obsolete.txt -type f -not -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-8)
     # date of the last commit that touched the shared core (so identical cores get identical versions);
     # today's date only if there are uncommitted changes
     local d repo; repo=$(cd "$(realpath "$ST")/../.." && pwd)
