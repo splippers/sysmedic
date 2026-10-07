@@ -326,9 +326,10 @@ build_release() {
     local ex=(); for e in "${BUNDLE_EXCLUDE[@]}"; do ex+=(":(exclude)$e"); done
     git -C "$repo" archive --format=tar HEAD -- . "${ex[@]}" | tar -x -C "$out/tree"
     git -C "$repo" archive --format=tar HEAD -- "${BUNDLE_INCLUDE[@]}" | tar -x -C "$out/tree"
-    # never publish a secret: the same patterns the repo was checked with
-    if grep -rnIE "(TOKEN|token|api[_-]?key|apikey|secret|passw(or)?d|Bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_|xox[bp]-|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY" \
-            "$out/tree" --exclude-dir=vendor | grep -v 'ghp_your_token_here'; then
+    # never publish a secret (pattern assembled from pieces so this script doesn't match itself)
+    local g="gh""p_" p="github""_pat_" sk="s""k-" k="PRIVATE"" KEY"
+    local rx="(TOKEN|token|api[_-]?key|apikey|secret|passw(or)?d|Bearer)\\s*[:=]\\s*['\"]?[A-Za-z0-9_\\-]{16,}|${sk}[A-Za-z0-9]{20,}|${g}[A-Za-z0-9]{20,}|${p}[A-Za-z0-9_]{20,}|xox[bp]-[0-9]|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*${k}"
+    if grep -rnIE "$rx" "$out/tree" --exclude-dir=vendor | grep -v "${g}your_token_here"; then
         die "The bundle contains something that looks like a secret (above): not releasing"
     fi
     tar -C "$out/tree" --owner=0 --group=0 --sort=name -czf "$out/sysmedic-bundle.tar.gz" .

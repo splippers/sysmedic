@@ -6,3 +6,4 @@ build/tests/fixtures/
 *.iso
 *.img
 __pycache__/
+build/release/
