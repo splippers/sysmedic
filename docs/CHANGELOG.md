@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.10.08 (evening): the console goes high-tech
+
+- **SysMedic Night palette** for every console (`/etc/sysmedic/vtrgb`, applied at boot by setvtrgb): navy-black background, soft text, cyan and blue accents, gentle green/amber/red for status.
+- **SYSMEDIC in block letters** (half blocks, cyan→blue) on the first screen, revealed behind a scan line, and at the top of the menu with a live strip: CPU temperature, memory, load, clock.
+- **The rescue menu** is a screen, not a list: logo and live strip, the machine at a glance (scan chips, Windows, BitLocker locked/unlocked, network, where the AI runs, update available), then the options as grouped cards in two columns (Diagnose & test · AI · Windows & disks · Other systems · Connect & save · Tools & power). Numbers are unchanged.
+- **The scan shows its progress live**: system ✔ drive ✔ disks ✔ health ✔ filesystems ✔ boot ✔ network ✔, then the time it took.
+
 ## 2026.10.08 (later): SysMedic looks the part
 
 - **Its own console font**, `Vietnamese-SysMedic22x11` (`build/make-console-font.py`): Terminus 11×22 plus the symbols SysMedic draws — ✔ ✖ ✓ ● ▲ ▼ ⚠ □ ► ❯ and the full ▁▂▃▄▅▆▇█ sparkline set. No stock console font had them (✔ printed as "V", ▲ as an arrow, ● as a speck). Loaded through console-setup's normal codeset path (`FONTFACE="SysMedic"`): `FONT="file"` garbled capitals and digits on this kernel.

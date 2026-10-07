@@ -8,36 +8,11 @@ VERSION=$(cat /etc/sysmedic/version 2>/dev/null || echo dev)
 
 while true; do
     clear
-    echo ""
-    echo -e "${BOLD}  ╔══════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}  ║    SysMedic Rescue System            ║${NC}"
-    echo -e "${BOLD}  ╠══════════════════════════════════════╣${NC}"
-    echo -e "${BOLD}  ║  1) AI rescue assistant (OpenCode)   ║${NC}"
-    echo -e "${BOLD}  ║  2) Wi-Fi connect                    ║${NC}"
-    echo -e "${BOLD}  ║  3) Save extra logs to this session  ║${NC}"
-    echo -e "${BOLD}  ║  4) Triage scan (read-only)          ║${NC}"
-    echo -e "${BOLD}  ║  5) Fix Linux boot (GRUB/initramfs)  ║${NC}"
-    echo -e "${BOLD}  ║  6) Windows tools (BitLocker, BSOD…) ║${NC}"
-    echo -e "${BOLD}  ║  7) Fix macOS (HFS+/APFS)            ║${NC}"
-    echo -e "${BOLD}  ║  8) Backup data                      ║${NC}"
-    echo -e "${BOLD}  ║  9) Shell (type exit to return)      ║${NC}"
-    echo -e "${BOLD}  ║ 10) Reboot                           ║${NC}"
-    echo -e "${BOLD}  ║ 11) Unlock a partition for repair    ║${NC}"
-    echo -e "${BOLD}  ║ 12) Write-protect all disks again    ║${NC}"
-    echo -e "${BOLD}  ║ 13) Job report (for the customer)    ║${NC}"
-    echo -e "${BOLD}  ║ 14) Phone dashboard (QR code)        ║${NC}"
-    echo -e "${BOLD}  ║ 15) Advanced toolkit                 ║${NC}"
-    echo -e "${BOLD}  ║ 16) Tests (hardware & software)      ║${NC}"
-    echo -e "${BOLD}  ║ 17) Repair the AI assistant          ║${NC}"
-    [ "$EDITION" = caddy ] && echo -e "${BOLD}  ║  U) Update SysMedic (from GitHub)    ║${NC}"
-    echo -e "${BOLD}  ║  0) Shutdown                         ║${NC}"
-    echo -e "${BOLD}  ╚══════════════════════════════════════╝${NC}"
-    echo -e "  ${CYAN}SysMedic ${EDITION} edition · v${VERSION}${NC}"
-    if [ "$EDITION" = caddy ] && grep -qs '"state": "available"' /run/sysmedic/update.json; then
-        echo -e "  ${YELLOW}Update available: v$(python3 -c 'import json; print(json.load(open("/run/sysmedic/update.json"))["latest"])' 2>/dev/null) · press U${NC}"
-    fi
-    echo ""
-    echo -ne "  ${CYAN}Choice [0-17]:${NC} "
+    python3 /usr/local/lib/sysmedic/menuview.py 2>/dev/null || {
+        echo "  SysMedic rescue menu (v${VERSION}): 1 AI · 2 Wi-Fi · 3 save logs · 4 scan · 5 Linux boot · 6 Windows · 7 macOS"
+        echo "  8 backup · 9 shell · 10 reboot · 11 unlock · 12 protect · 13 report · 14 phone · 15 toolkit · 16 tests · 17 repair AI · 0 off"; }
+    [ "$EDITION" = caddy ] && orU=" or U" || orU=""
+    echo -ne "  ${CYAN}❯${NC} Choose a number${orU}: "
     read choice
     echo ""
     

@@ -62,7 +62,12 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     # First screen: get online (wired is automatic; offers Wi-Fi), so the scan and cloud AI see the internet
     /usr/local/bin/sysmedic-connect
     clear
-    ui_banner "Rescue system" "$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev) · network: $(/usr/local/bin/sysmedic-connect --status)"
+    setvtrgb /etc/sysmedic/vtrgb 2>/dev/null; clear   # SysMedic Night palette (also set at boot by setvtrgb.service)
+    python3 /usr/local/lib/sysmedic/logo.py --animate --tagline "${_U_B:-}RESCUE SYSTEM${_U_N:-}" \
+        --tagline "${_U_D:-}$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev)${_U_N:-}" \
+        --tagline "${_U_ACC:-}network: $(/usr/local/bin/sysmedic-connect --status)${_U_N:-}" 2>/dev/null \
+        || ui_banner "Rescue system" "$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition"
+    ui_rule
 
     /usr/local/sbin/mount-persist || true
     /usr/local/sbin/start-ollama && ui_ok "Offline AI ready" "$(/usr/local/sbin/sysmedic-ai-device status 2>/dev/null | sed 's/^ *//')"

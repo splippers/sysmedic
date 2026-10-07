@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
@@ -681,18 +682,33 @@ def main():
     if os.geteuid() != 0:
         sys.exit("sysmedic-scan must run as root")
 
-    if sys.stdout.isatty() and "--json" not in args:
-        print(UI().item("run", "Scanning (read-only)…", "disks, health, filesystems, boot, network"), flush=True)
-    system = collect_system()
-    check_self()
-    disks = collect_block_devices()
-    for d in disks:
-        d["health"] = smart(d)
-        assess_health(d, d["health"])
-    assess_guard(disks)
-    fsresults = collect_filesystems(disks)
-    assess_boot(fsresults, system)
-    network = collect_network()
+    live = sys.stdout.isatty() and "--json" not in args
+    ui, done, t0 = UI(), [], time.time()
+
+    def stage(name, fn, *fa):
+        """Run one part of the scan, showing progress on a single live line."""
+        if live:
+            print("\r\033[K  " + ui.c("run", "►") + "  Scanning (read-only)   " + "  ".join(ui.c("ok", "✔") + " " + d for d in done)
+                  + ("   " if done else "") + ui.c("accent", name + "…"), end="", flush=True)
+        r = fn(*fa)
+        done.append(name)
+        return r
+
+    def health(disks):
+        for d in disks:
+            d["health"] = smart(d)
+            assess_health(d, d["health"])
+        assess_guard(disks)
+
+    system = stage("system", collect_system)
+    stage("SysMedic's drive", check_self)
+    disks = stage("disks", collect_block_devices)
+    stage("health", health, disks)
+    fsresults = stage("filesystems", collect_filesystems, disks)
+    stage("boot", assess_boot, fsresults, system)
+    network = stage("network", collect_network)
+    if live:
+        print("\r\033[K  " + ui.c("ok", "✔") + f"  Scanned in {time.time() - t0:.0f} s   " + ui.c("dim", " · ".join(done)) + "\n", flush=True)
 
     sd = session_dir(system)
     report = {"sysmedic_scan": 1, "time": datetime.datetime.now().isoformat(timespec="seconds"),
