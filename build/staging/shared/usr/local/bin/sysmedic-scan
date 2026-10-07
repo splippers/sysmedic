@@ -490,9 +490,14 @@ def collect_filesystems(disks):
             if fs in ("LVM2_member", "linux_raid_member", "zfs_member"):
                 find("info", "filesystem", f"{label}: {fs} — part of a volume group/array; not touched by the scan")
                 continue
-            if fs == "swap" or p.get("mountpoints") and any(p["mountpoints"]):
+            if fs == "swap":
                 continue
-            sev, status = check_filesystem(p)
+            # Already mounted by someone (the AI, sysmedic-win, the engineer): read it through that mount
+            # (mount_ro reuses it and never unmounts it). Skipping it made Windows "disappear" from rescans.
+            if p.get("mountpoints") and any(p["mountpoints"]):
+                sev, status = "ok", "mounted elsewhere, so not checked (a check needs it unmounted)"
+            else:
+                sev, status = check_filesystem(p)
             entry["check"] = status
             if sev in ("warning", "critical"):
                 find(sev, "filesystem", f"{label} ({fs}): {status}", "",

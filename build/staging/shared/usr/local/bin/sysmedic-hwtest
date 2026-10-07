@@ -7,12 +7,14 @@
 #   sysmedic-hwtest ram             RAM test of free memory (memtester, 1 pass)
 #   sysmedic-hwtest ram-modules     each memory slot: module, size, speed, maker/part; ECC/EDAC error counts per slot
 #   sysmedic-hwtest ram-stress [MIN] stressapptest: heavy memory traffic to expose marginal RAM (default 10 min)
+#   sysmedic-hwtest firmware        BIOS/UEFI version, Secure Boot state, TPM, firmware updates available (read-only), boot entries
 #   sysmedic-hwtest ram-speed       memory bandwidth (mbw): a dead or missing module shows as single-channel
 #   sysmedic-hwtest disk DEV        SMART short self-test + read-only speed test (never writes)
 #   sysmedic-hwtest surface DEV     read-only surface scan for bad sectors (badblocks, slow)
 #   sysmedic-hwtest gpu             3D benchmark/stress without a desktop (glmark2-es2-drm)
 #   sysmedic-hwtest input           keyboard / touchpad / buttons (libinput debug-events)
 #   sysmedic-hwtest audio           speaker left/right test, then a 5 s microphone recording
+#   sysmedic-hwtest audio-music     extended speaker test: synthesised music (Ode to Joy) left/right/both, then a bass-to-treble sweep
 #   sysmedic-hwtest battery         battery health: design vs full capacity, cycles
 #   sysmedic-hwtest inventory       full hardware inventory (inxi, serials filtered)
 #
@@ -89,7 +91,27 @@ ram() {
     hdr "RAM test: ${mb} MB of free memory, 1 pass (Ctrl-C to stop)"
     echo "  This tests memory not in use by SysMedic. For a full test of all RAM, reboot and pick"
     echo "  'Memory test' in the boot menu (MemTest86+; Secure Boot must be off for it on UEFI)."
-    memtester "${mb}M" 1 2>&1 | sed 's/^/  /'
+    # memtester animates progress with backspaces (a 600 KB log of spinners); keep only each finished line
+    memtester "${mb}M" 1 2>&1 | python3 -u -c '
+import sys
+line, pos = [], 0
+while True:
+    ch = sys.stdin.read(1)
+    if not ch:
+        break
+    if ch == "\b":                      # a terminal moves the cursor back; what follows overwrites
+        pos = max(0, pos - 1)
+    elif ch == "\n":
+        print("  " + "".join(line).rstrip(), flush=True)
+        line, pos = [], 0
+    else:
+        if pos < len(line):
+            line[pos] = ch
+        else:
+            line.append(ch)
+        pos += 1
+if line:
+    print("  " + "".join(line).rstrip())'
     rc=${PIPESTATUS[0]}
     [ "$rc" = 0 ] && echo -e "  ${G}✔ No memory errors found.${N}" || echo -e "  ${R}✖ MEMORY ERRORS FOUND (exit $rc): faulty RAM. Test one module at a time to find it.${N}"
     record "memtester ${mb}M: exit $rc"
@@ -158,6 +180,85 @@ ram_speed() {
     echo "  Rough guide (MCBLOCK line, MiB/s ÷ 1000 = GB/s): dual-channel DDR4 laptops about 10-18 GB/s, single-channel about half."
     echo "  If two modules are fitted but bandwidth looks single-channel, one module or slot may not be working."
     record "ram-speed: $(mbw -q -n 1 256 2>/dev/null | awk '/AVG.*MCBLOCK/ {print $(NF-1) " MiB/s (mbw MCBLOCK)"}')"
+}
+
+firmware() {
+    hdr "Firmware (BIOS/UEFI)"
+    printf "  %-14s %s %s\n" "Machine:" "$(dmidecode -s system-manufacturer 2>/dev/null)" "$(dmidecode -s system-product-name 2>/dev/null)"
+    printf "  %-14s %s %s (%s)\n" "BIOS:" "$(dmidecode -s bios-vendor 2>/dev/null)" "$(dmidecode -s bios-version 2>/dev/null)" "$(dmidecode -s bios-release-date 2>/dev/null)"
+    local efivar=/sys/firmware/efi/efivars gv=8be4df61-93ca-11d2-aa0d-00e098032b8c sb setup
+    if [ ! -d /sys/firmware/efi ]; then
+        echo -e "  Boot mode:     ${Y}Legacy BIOS (CSM)${N}: Secure Boot isn't possible until it boots UEFI"
+        record "firmware: legacy BIOS boot"
+    else
+        sb=$(od -An -tu1 -j4 -N1 "$efivar/SecureBoot-$gv" 2>/dev/null | tr -d ' ')
+        setup=$(od -An -tu1 -j4 -N1 "$efivar/SetupMode-$gv" 2>/dev/null | tr -d ' ')
+        echo "  Boot mode:     UEFI"
+        if [ "$sb" = 1 ]; then
+            echo -e "  Secure Boot:   ${G}on${N}"
+        else
+            echo -e "  Secure Boot:   ${Y}off${N}"
+            if [ "$setup" = 1 ]; then
+                echo "    The firmware is in Setup Mode (its Secure Boot keys were cleared). In firmware setup, restore the"
+                echo "    factory keys first (Dell: F2 → Secure Boot → Expert Key Management → Restore Settings), then enable it."
+            else
+                echo "    To turn it on: firmware setup (Dell: F2 → Boot Configuration → Secure Boot → Enable; HP: F10; Lenovo: F1/F2),"
+                echo "    save and restart. Windows 11 and BitLocker expect it on; SysMedic boots either way."
+            fi
+        fi
+        record "firmware: Secure Boot ${sb:-?} (setup mode ${setup:-?})"
+    fi
+    if [ -r /sys/class/tpm/tpm0/tpm_version_major ]; then
+        echo -e "  TPM:           ${G}$(cat /sys/class/tpm/tpm0/tpm_version_major).0 present${N}"
+    elif [ -e /dev/tpm0 ]; then
+        echo -e "  TPM:           ${G}present${N}"
+    else
+        echo -e "  TPM:           ${Y}not found${N} (disabled in firmware setup, or absent; Windows 11 and BitLocker need TPM 2.0)"
+    fi
+    hdr "Firmware updates (fwupd / LVFS; this only reports, nothing is installed)"
+    if ! command -v fwupdmgr >/dev/null; then
+        echo "  fwupd isn't installed on this drive"
+    else
+        local online=0
+        if curl -s -o /dev/null --max-time 12 https://fwupd.org/lvfs/ 2>/dev/null; then
+            online=1
+            timeout 90 fwupdmgr refresh --force --assume-yes >/dev/null 2>&1 || echo "  (couldn't refresh the update list)"
+        else
+            echo "  Offline: showing devices only (connect to see available updates)"
+        fi
+        timeout 90 fwupdmgr get-devices --json 2>/dev/null > /tmp/.fw-dev.json
+        timeout 90 fwupdmgr get-updates --json --no-unreported-check 2>/dev/null > /tmp/.fw-upd.json
+        ONLINE=$online python3 - <<'PY'
+import json, os
+def load(p):
+    try:
+        return json.load(open(p)).get("Devices", [])
+    except (OSError, ValueError):
+        return []
+devs = [d for d in load("/tmp/.fw-dev.json") if "updatable" in d.get("Flags", []) or d.get("Version")]
+upd = {d.get("DeviceId"): d for d in load("/tmp/.fw-upd.json")}
+if not devs:
+    print("  No firmware devices reported.")
+for d in devs[:20]:
+    u = upd.get(d.get("DeviceId"))
+    rel = (u.get("Releases") or [{}])[0] if u else {}
+    line = f"  {d.get('Name', '?')[:44]:44} {d.get('Version', '?'):>16}"
+    if rel.get("Version"):
+        urgency = rel.get("Urgency", "")
+        line += f"  \033[1;33m→ {rel['Version']} available{(' (' + urgency + ')') if urgency else ''}\033[0m"
+    elif "updatable" in d.get("Flags", []):
+        line += "  up to date" if upd or not d.get("Releases") else ""
+    print(line)
+n = sum(1 for d in devs if upd.get(d.get("DeviceId")))
+if n:
+    print(f"  {n} update(s) available. Firmware is updated by the engineer (vendor tool, Windows Update, or fwupdmgr update on console 2).")
+elif os.environ.get("ONLINE") == "1":
+    print("  No firmware updates available from LVFS (the vendor's own tool may still list BIOS updates).")
+PY
+        rm -f /tmp/.fw-dev.json /tmp/.fw-upd.json
+    fi
+    hdr "UEFI boot entries"
+    efibootmgr 2>/dev/null | sed 's/^/  /' | head -15 || echo "  (not UEFI)"
 }
 
 pick_disk() {
@@ -242,8 +343,9 @@ menu() {
 
 [ "$(id -u)" = 0 ] || { echo "Run as root"; exit 1; }
 case "${1:-menu}" in
-    menu) menu ;; report) report ;; cpu) cpu "${2:-5}" ;; ram) ram ;; ram-modules) ram_modules ;; ram-stress) ram_stress "${2:-10}" ;; ram-speed) ram_speed ;; disk) disk "${2:-}" ;; surface) surface "${2:-}" ;;
+    menu) menu ;; report) report ;; cpu) cpu "${2:-5}" ;; ram) ram ;; ram-modules) ram_modules ;; ram-stress) ram_stress "${2:-10}" ;; ram-speed) ram_speed ;; firmware) firmware ;;
+    audio-music) hdr "Speakers: music and sweep"; python3 /usr/local/lib/sysmedic/audiotest.py; record "audio-music: played (engineer listened)" ;; disk) disk "${2:-}" ;; surface) surface "${2:-}" ;;
     gpu) gpu ;; input) input ;; audio) audio ;; battery) battery ;; inventory) inventory ;;
-    -h|--help|help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
-    *) echo "sysmedic-hwtest: no such test '$1'. Real ones:"; sed -n '4,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    -h|--help|help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) echo "sysmedic-hwtest: no such test '$1'. Real ones:"; sed -n '4,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

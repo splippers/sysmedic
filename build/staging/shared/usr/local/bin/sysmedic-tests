@@ -84,6 +84,8 @@ TESTS = {
                   "sysmedic-hwtest surface {disk}", "disk", "1–4 h", ""),
     "gpu":       ("hardware", "Graphics benchmark", "glmark2 off-screen 3D benchmark with a score",
                   GPU, "", "1 min", ""),
+    "firmware":  ("hardware", "Firmware (BIOS/UEFI)", "BIOS version, Secure Boot state and how to turn it on, TPM, firmware updates available (reports only), boot entries",
+                  "sysmedic-hwtest firmware", "", "30 s", ""),
     "gpu-info":  ("hardware", "Graphics & displays", "GPU, driver in use, OpenGL/Vulkan renderer, video memory; displays: panel, resolution, outputs",
                   "sysmedic-gfx info", "", "5 s", ""),
     "gpu-display": ("hardware", "Screen test patterns", "Full-screen colours, ramp, bars, checkerboard, edges: dead pixels, bleed, banding",
@@ -94,6 +96,8 @@ TESTS = {
                   "sysmedic-gfx stress {minutes}", "minutes", "10 min", "watch the laptop's screen for artefacts"),
     "gpu-video": ("hardware", "Video decode", "Which video formats the GPU decodes in hardware (VA-API)",
                   "sysmedic-gfx video", "", "5 s", ""),
+    "audio-music": ("hardware", "Speakers with music", "Beethoven's Ode to Joy (synthesised) left, right and both, then a bass-to-treble sweep: rattle, buzz, distortion, a weak side",
+                  "sysmedic-hwtest audio-music", "", "45 s", "listen at the laptop"),
     "battery":   ("hardware", "Battery health", "Design vs current capacity, wear, charge cycles, adapter",
                   "sysmedic-hwtest battery", "", "5 s", ""),
     "inventory": ("hardware", "Hardware inventory", "Full component list (serial numbers hidden)",
@@ -128,7 +132,7 @@ SUITES = {"full-check": ["health", "scan", "battery", "network", "windows-checku
 # OpenCode slash command for each test
 SLASH = {"health": "health", "cpu": "cpu-stress", "ram": "ram-test", "ram-modules": "ram-modules", "ram-stress": "ram-stress",
          "ram-speed": "ram-speed", "disk": "disk-test", "surface": "surface-scan",
-         "gpu": "gpu-test", "gpu-info": "gpu-info", "gpu-display": "screen-test", "gpu-bench": "gpu-bench", "gpu-stress": "gpu-stress", "gpu-video": "video-decode", "battery": "battery", "inventory": "inventory", "input": "input-test", "audio": "audio-test",
+         "gpu": "gpu-test", "gpu-info": "gpu-info", "firmware": "firmware-check", "audio-music": "audio-music", "gpu-display": "screen-test", "gpu-bench": "gpu-bench", "gpu-stress": "gpu-stress", "gpu-video": "video-decode", "battery": "battery", "inventory": "inventory", "input": "input-test", "audio": "audio-test",
          "scan": "scan", "network": "network-check", "windows-checkup": "windows-checkup", "windows-events": "windows-events",
          "windows-registry": "windows-registry", "windows-updates": "windows-updates", "windows-traces": "windows-traces", "windows-crashes": "windows-crashes",
          "autoruns": "autoruns", "malware": "malware-scan"}
@@ -205,7 +209,7 @@ ALIASES = {"mem": "ram", "memory": "ram", "memtest": "ram", "memtester": "ram", 
            "memslot": "ram-modules", "memslots": "ram-modules", "dimm": "ram-modules", "dimms": "ram-modules", "sodimm": "ram-modules",
            "memory-modules": "ram-modules", "stressapptest": "ram-stress", "memory-stress": "ram-stress", "bandwidth": "ram-speed",
            "graphics": "gpu", "glmark2": "gpu", "vkmark": "gpu-bench", "screen": "gpu-display", "display": "gpu-display", "dead-pixels": "gpu-display",
-           "burn-in": "gpu-stress", "gpu-burn": "gpu-stress", "vaapi": "gpu-video", "video": "gpu-video", "displays": "gpu-info", "smart": "disk", "badblocks": "surface", "wifi": "network", "net": "network",
+           "burn-in": "gpu-stress", "bios": "firmware", "music": "audio-music", "beethoven": "audio-music", "speakers-music": "audio-music", "uefi": "firmware", "secureboot": "firmware", "secure-boot": "firmware", "tpm": "firmware", "fwupd": "firmware", "gpu-burn": "gpu-stress", "vaapi": "gpu-video", "video": "gpu-video", "displays": "gpu-info", "smart": "disk", "badblocks": "surface", "wifi": "network", "net": "network",
            "keyboard": "input", "touchpad": "input", "sound": "audio", "speakers": "audio", "virus": "malware", "clamav": "malware"}
 
 

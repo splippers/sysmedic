@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sysmedic-win — Windows rescue toolkit (works on the offline installation).
+r"""sysmedic-win — Windows rescue toolkit (works on the offline installation).
 
 Read-only (safe for the AI to run):
   sysmedic-win                      list Windows installations and BitLocker volumes
@@ -19,6 +19,11 @@ Deep troubleshooting (read-only; PART can also be files or a folder handed over,
   sysmedic-win cbs      [PART|CBS.log|FOLDER] [--days N]
                                     servicing: CBS/CbsPersist, dism.log, Windows Update results, upgrade
                                     (Panther) logs: failing updates, error meanings, corruption, SFC
+  sysmedic-win reg      [PART] KEY [VALUE] [--depth N]
+                                    read any registry key/value, read-only: HKLM\SYSTEM\CurrentControlSet\…,
+                                    HKLM\SOFTWARE\Policies\… (SAM/SECURITY refused)
+  sysmedic-win bcd      [ESP|BCD-FILE]  Windows boot configuration: entries, default, hypervisorlaunchtype,
+                                    testsigning, safeboot, recovery (read-only)
   sysmedic-win etl      [PART|FILES|FOLDER] [--days N]
                                     ETW traces (.etl: Windows Update, waasmedic, SIH, NetSetup…): failure codes
                                     with meanings, when they happened, and decode coverage per file (default 7 days)
@@ -49,6 +54,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
 import winlib  # noqa: E402
 import winevidence  # noqa: E402
 
@@ -164,6 +170,13 @@ class Mounted:
 
 def windows_installs(part=None):
     """Yield (device, mountpoint) for each Windows system volume, mounted read-only."""
+    if part and part in bitlocker_volumes():
+        mapped = f"/dev/mapper/bitlocker-{os.path.basename(part)}"
+        if not os.path.exists(mapped):
+            sys.exit(f"{part} is BitLocker-encrypted and locked. Unlock it first (read-only): sysmedic-win bitlocker {part}, "
+                     "or the BitLocker card on the phone dashboard.")
+        print(f"  {C['dim']}{part} is BitLocker-encrypted; reading its unlocked copy {mapped}{C['end']}")
+        part = mapped
     candidates = [part] if part else ntfs_partitions()
     for dev in candidates:
         try:
@@ -180,6 +193,196 @@ def header(dev, mp):
     print(f"\n{C['bold']}{i['name']}{C['end']} on {dev}" + (f" — {i.get('computer_name')}" if i.get("computer_name") else ""))
     return i
 
+
+
+# ── Registry and boot configuration (read-only) ───────────────────────────────
+
+REG_HIVES = {"SYSTEM": "Windows/System32/config/SYSTEM", "SOFTWARE": "Windows/System32/config/SOFTWARE",
+             "DEFAULT": "Windows/System32/config/DEFAULT"}
+
+
+def reg_split(key):
+    k = key.replace("/", "\\").strip("\\")
+    k = re.sub(r"^(computer\\)?(hklm|hkey_local_machine)\\", "", k, flags=re.I)
+    hive, _, rest = k.partition("\\")
+    return hive.upper(), rest
+
+
+def fmt_val(v):
+    if isinstance(v, int):
+        return f"{v} (0x{v:x})"
+    if isinstance(v, list):
+        return " | ".join(v) if v else "(empty list)"
+    if isinstance(v, bytes):
+        return (v[:48].hex(" ") + (" …" if len(v) > 48 else "")) if v else "(empty)"
+    return v if v != "" else '""'
+
+
+def cmd_reg(args):
+    """sysmedic-win reg [PART] KEY [VALUE] [--depth N]: read a registry key's values and subkeys."""
+    depth = opt(args, "--depth", 0)
+    rest = [a for i, a in enumerate(args) if not a.startswith("--") and not (i and args[i - 1] == "--depth")]
+    part = rest.pop(0) if rest and (rest[0].startswith("/dev/") or Path(rest[0]).is_dir()) else None
+    if not rest:
+        sys.exit("usage: sysmedic-win reg [PART] KEY [VALUE] [--depth N]\n"
+                 "  e.g. sysmedic-win reg HKLM\\SYSTEM\\CurrentControlSet\\Services\\wuauserv Start\n"
+                 "       sysmedic-win reg /dev/nvme0n1p3 SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate --depth 2")
+    key, value = rest[0], (rest[1] if len(rest) > 1 else None)
+    hive_name, path = reg_split(key)
+    if hive_name in ("SAM", "SECURITY"):
+        sys.exit("Refused: the SAM and SECURITY hives hold password hashes and secrets; SysMedic never reads them.")
+    if hive_name not in REG_HIVES:
+        sys.exit(f"Unknown hive '{hive_name}': use SYSTEM, SOFTWARE or DEFAULT (HKLM\\SYSTEM\\…, HKLM\\SOFTWARE\\…)")
+    for label, root in ([("", Path(part))] if part and Path(part).is_dir() else targets([part] if part else [])):
+        h = winlib.open_hive(root, REG_HIVES[hive_name])
+        if not h:
+            print(f"  {C['yel']}Can't open the {hive_name} hive{C['end']}")
+            continue
+        p = path
+        if hive_name == "SYSTEM" and re.match(r"currentcontrolset(\\|$)", p, re.I):
+            p = winlib.control_set(h) + p[len("CurrentControlSet"):]
+        if not h.node(p):
+            print(f"  {C['yel']}No such key: {hive_name}\\{p}{C['end']}")
+            continue
+        if value:
+            v = h.get(p, value, None)
+            if v is None:
+                print(f"  {C['yel']}{hive_name}\\{p}: no value '{value}'{C['end']}")
+            else:
+                print(f"  {hive_name}\\{p}\\{value} = {fmt_val(v)}")
+            continue
+
+        def show(kp, level):
+            print(f"  {C['bold']}{hive_name}\\{kp}{C['end']}")
+            for n, v in sorted(h.values(kp).items(), key=lambda x: x[0].lower()):
+                print(f"    {n or '(Default)'} = {fmt_val(v)}")
+            subs = h.subkeys(kp)
+            if subs and level >= depth:
+                print(f"    {C['dim']}subkeys: {', '.join(subs[:60])}{' …' if len(subs) > 60 else ''}{C['end']}")
+            elif level < depth:
+                for sk in subs[:60]:
+                    show(kp + "\\" + sk, level + 1)
+        show(p, 0)
+
+
+BCD_TYPES = {0x10100002: "Windows Boot Manager", 0x10200003: "Windows Boot Loader", 0x10200004: "Resume from Hibernate",
+             0x10200005: "Memory Diagnostic", 0x10300006: "Legacy OS loader", 0x10400008: "Boot sector", 0x101fffff: "Firmware Boot Manager"}
+BCD_WELL_KNOWN = {"{9dea862c-5cdd-4e70-acc1-f32b344d4795}": "bootmgr", "{7ea2e1ac-2e61-4728-aaa3-896d9d0a9f0e}": "globalsettings",
+                  "{6efb52bf-1766-41db-a6b3-0ee5eff72bd5}": "bootloadersettings", "{7ff607e0-4395-11db-b0de-0800200c9a66}": "hypervisorsettings",
+                  "{4636856e-540f-4170-a130-a84776f4c654}": "dbgsettings", "{a5a30fa2-3d06-4e9f-b5f4-a01df9d1fcba}": "fwbootmgr",
+                  "{b2721d73-1db4-4c62-bf78-c548a880142d}": "memdiag", "{0ce4991b-e6b3-4b16-b23c-5e0d9250e5d9}": "emssettings",
+                  "{5189b25c-5558-4bf2-bca4-289b11bd29e2}": "badmemory", "{1afa9c49-16ab-4a5c-901b-212802da9460}": "resumeloadersettings"}
+BCD_ELEMENTS = {0x12000004: "description", 0x12000002: "path", 0x22000002: "systemroot", 0x23000003: "default",
+                0x24000001: "displayorder", 0x24000010: "toolsdisplayorder", 0x25000004: "timeout", 0x250000f0: "hypervisorlaunchtype",
+                0x16000049: "testsigning", 0x16000048: "nointegritychecks", 0x16000010: "bootdebug", 0x260000a0: "debug",
+                0x25000020: "nx", 0x25000080: "safeboot", 0x16000009: "recoveryenabled", 0x14000008: "recoverysequence",
+                0x250000e0: "bootstatuspolicy", 0x250000c2: "bootmenupolicy", 0x23000006: "resumeobject", 0x26000022: "winpe",
+                0x21000001: "device", 0x11000001: "device", 0x22000011: "kernel", 0x250000f3: "vsmlaunchtype?",
+                0x26000025: "lastknowngood", 0x12000005: "locale", 0x24000006: "displayorder(tools)"}
+BCD_ENUMS = {"hypervisorlaunchtype": {0: "Off", 1: "Auto"}, "nx": {0: "OptIn", 1: "OptOut", 2: "AlwaysOff", 3: "AlwaysOn"},
+             "safeboot": {0: "Minimal", 1: "Network", 2: "DsRepair"}, "bootstatuspolicy": {0: "DisplayAllFailures", 1: "IgnoreAllFailures",
+             2: "IgnoreShutdownFailures", 3: "IgnoreBootFailures"}, "bootmenupolicy": {0: "Legacy", 1: "Standard"}}
+BCD_WARN = {"testsigning": "test-signed drivers allowed (security risk; often left by driver tools)",
+            "nointegritychecks": "driver signature checks OFF (security risk)", "safeboot": "Windows will keep booting into Safe Mode",
+            "bootdebug": "boot debugging on", "debug": "kernel debugging on (slow, unusual)"}
+
+
+def esp_partitions():
+    p = run(["lsblk", "-lnpo", "NAME,PARTTYPENAME"])
+    return [l.split()[0] for l in p.stdout.splitlines() if "EFI System" in l]
+
+
+def bcd_read(path):
+    h = winlib.Hive(path)
+    entries = []
+    for g in h.subkeys("Objects"):
+        typ = h.get(f"Objects\\{g}\\Description", "Type", 0)
+        els = {}
+        for e in h.subkeys(f"Objects\\{g}\\Elements"):
+            try:
+                eid = int(e, 16)
+            except ValueError:
+                continue
+            v = h.get(f"Objects\\{g}\\Elements\\{e}", "Element")
+            fmt = (eid >> 24) & 0xF
+            if isinstance(v, bytes):
+                if fmt == 6:
+                    v = bool(v[0]) if v else False
+                elif fmt == 5 and len(v) >= 8:
+                    v = int.from_bytes(v[:8], "little")
+                elif fmt == 1:
+                    v = "(device)"
+            name = BCD_ELEMENTS.get(eid, f"0x{eid:08x}")
+            if name in BCD_ENUMS and isinstance(v, int):
+                v = BCD_ENUMS[name].get(v, v)
+            els[name] = v
+        entries.append({"guid": g.lower(), "type": BCD_TYPES.get(typ, f"0x{typ:08x}" if isinstance(typ, int) else "?"), "el": els})
+    return entries
+
+
+def cmd_bcd(args):
+    """sysmedic-win bcd [ESP-PARTITION|BCD-FILE]: Windows boot configuration, read-only."""
+    given = [a for a in args if not a.startswith("--")]
+    files = []
+    if given and Path(given[0]).is_file():
+        files = [(given[0], Path(given[0]))]
+    devs = [] if files else ([given[0]] if given else esp_partitions())
+    mounts = []
+    try:
+        for d in devs:
+            mp = tempfile.mkdtemp(prefix="sysmedic-esp-")
+            if run(["mount", "-o", "ro", d, mp]).returncode != 0:
+                os.rmdir(mp)
+                continue
+            mounts.append(mp)
+            f = winlib.ci_path(mp, "EFI/Microsoft/Boot/BCD")
+            if f:
+                files.append((d, Path(f)))
+        if not files:
+            print(f"  {C['yel']}No Windows boot configuration (EFI/Microsoft/Boot/BCD) found on {', '.join(devs) or 'any EFI partition'}.{C['end']}")
+            return
+        for src, f in files:
+            try:
+                entries = bcd_read(f)
+            except (OSError, RuntimeError) as e:
+                print(f"  {C['red']}Can't read {f}: {e}{C['end']}")
+                continue
+            byg = {e["guid"]: e for e in entries}
+            mgr = byg.get("{9dea862c-5cdd-4e70-acc1-f32b344d4795}", {}).get("el", {})
+            default = str(mgr.get("default", "")).lower()
+            print(f"\n{C['bold']}Windows boot configuration{C['end']} {C['dim']}({src}: {f.name}){C['end']}")
+            if mgr:
+                order = mgr.get("displayorder") or []
+                print(f"  Boot manager: timeout {mgr.get('timeout', '?')} s · default {byg.get(default, {}).get('el', {}).get('description', default) or '?'}"
+                      + (f" · {len(order)} entr{'y' if len(order) == 1 else 'ies'} in the menu" if order else ""))
+            loaders = [e for e in entries if e["type"] == "Windows Boot Loader"]
+            loaders.sort(key=lambda e: (e["guid"] != default, str(e["el"].get("description", ""))))
+            hv = byg.get("{7ff607e0-4395-11db-b0de-0800200c9a66}", {}).get("el", {})
+            for e in loaders:
+                el = e["el"]
+                tag = " (default)" if e["guid"] == default else ""
+                print(f"  {C['bold']}{el.get('description', '?')}{C['end']}{tag}  {C['dim']}{e['guid']}{C['end']}")
+                print(f"    {el.get('path', '?')} · systemroot {el.get('systemroot', '?')}"
+                      + (" · WinPE" if el.get("winpe") else ""))
+                flags = {k: el[k] for k in ("hypervisorlaunchtype", "nx", "bootstatuspolicy", "recoveryenabled", "bootmenupolicy",
+                                             "testsigning", "nointegritychecks", "safeboot", "debug", "bootdebug") if k in el}
+                if flags:
+                    print("    " + " · ".join(f"{k} {v}" for k, v in flags.items()))
+                for k, why in BCD_WARN.items():
+                    if el.get(k) not in (None, False):
+                        print(f"    {C['yel']}! {k}: {why}{C['end']}")
+            if hv:
+                print(f"  Hypervisor settings: " + " · ".join(f"{k} {v}" for k, v in hv.items() if not k.startswith("0x")) or "default")
+            others = [e for e in entries if e["type"] not in ("Windows Boot Loader",) and e["guid"] not in BCD_WELL_KNOWN]
+            if others:
+                print(f"  {C['dim']}Other entries: " + ", ".join(f"{e['type']} {e['el'].get('description', '')}".strip() for e in others[:10]) + C["end"])
+    finally:
+        for mp in mounts:
+            run(["umount", mp])
+            try:
+                os.rmdir(mp)
+            except OSError:
+                pass
 
 # ── Read-only commands ─────────────────────────────────────────────────────
 
@@ -226,11 +429,11 @@ def cmd_info(args):
 
 
 def cmd_crashes(args):
-    for dev, mp in windows_installs(args[0] if args else None):
-        header(dev, mp)
+    for dev, mp in targets(args):           # a partition (BitLocker → its unlocked copy) or a mounted folder
         cs = winlib.crashes(mp)
+        print(f"  {C['bold']}Crash dumps{C['end']} (Windows\\Minidump, MEMORY.DMP)")
         if not cs:
-            print("  No crash dumps found (Windows\\Minidump, MEMORY.DMP).")
+            print("  none found")
         counts = {}
         for c in cs:
             counts[c["code"]] = counts.get(c["code"], 0) + 1
@@ -239,11 +442,25 @@ def cmd_crashes(args):
             top, n = max(counts.items(), key=lambda kv: kv[1])
             hint = next(c["hint"] for c in cs if c["code"] == top)
             if n == len(cs) and n > 1:
-                print(f"\n  {C['bold']}Pattern:{C['end']} all {n} crashes share one stop code ({top}): {hint}.")
+                print(f"  {C['bold']}Pattern:{C['end']} all {n} crashes share one stop code ({top}): {hint}.")
             elif n > len(cs) / 2:
-                print(f"\n  {C['bold']}Pattern:{C['end']} {n} of {len(cs)} crashes are {top}: {hint}.")
+                print(f"  {C['bold']}Pattern:{C['end']} {n} of {len(cs)} crashes are {top}: {hint}.")
             elif len(counts) > 2:
-                print(f"\n  {C['bold']}Pattern:{C['end']} {len(counts)} different stop codes; varied codes often mean hardware (RAM, heat, power).")
+                print(f"  {C['bold']}Pattern:{C['end']} {len(counts)} different stop codes; varied codes often mean hardware (RAM, heat, power).")
+        wr = winlib.wer_reports(mp)
+        print(f"\n  {C['bold']}Crash reports kept by Windows Error Reporting{C['end']} (blue screens, live kernel events; newest first)")
+        if not wr:
+            print("  none found (WER ReportArchive/ReportQueue, LiveKernelReports)")
+        for r in wr[:20]:
+            code = f"{C['red']}{r['code']}{C['end']} {r['name']}" if r["code"] else ""
+            print(f"  {r['time']}  {r['type']:22} {code}  {C['dim']}{r['detail'] or r['folder']}{C['end']}")
+        if any(r["type"] == "LiveKernelEvent" for r in wr):
+            print(f"  {C['dim']}LiveKernelEvent = a driver or device hung and was reset without a blue screen "
+                  f"(0x141/0x117/0x193 graphics, 0x144 USB 3); repeated ones point at that driver or device.{C['end']}")
+        hints = {r["code"]: winlib.BUGCHECKS.get(int(r["code"], 16), ("", ""))[1] for r in wr if r["code"].startswith("0x")}
+        for code, hint in hints.items():
+            if hint and code not in counts:
+                print(f"  {C['dim']}{code}: {hint}{C['end']}")
         evs = winlib.events(mp) or []
         bsod = [e for e in evs if e["category"] == "crash"]
         if bsod:
@@ -700,7 +917,7 @@ def cmd_checkup(args):
 
 
 COMMANDS = {"info": cmd_info, "crashes": cmd_crashes, "events": cmd_events, "autoruns": cmd_autoruns,
-            "malware": cmd_malware, "evtx": cmd_evtx, "registry": cmd_registry, "cbs": cmd_cbs, "etl": cmd_etl,
+            "malware": cmd_malware, "evtx": cmd_evtx, "registry": cmd_registry, "reg": cmd_reg, "bcd": cmd_bcd, "cbs": cmd_cbs, "etl": cmd_etl,
             "checkup": cmd_checkup, "bitlocker": cmd_bitlocker, "bitlocker-web": cmd_bitlocker_web, "fix-update": cmd_fix_update,
             "fix-hibernation": cmd_fix_hibernation, "reset-password": cmd_reset_password}
 

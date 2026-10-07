@@ -155,14 +155,18 @@ main() {
     check_persist || exit 1
 
     # Determine session name
-    local session_name="${1:-}"
+    local session_name="${1:-}" session_dir
+    # Save into this visit's session (the one sysmedic-scan started), not a separate folder
+    if [ -z "$session_name" ] && [ -d "$(readlink -f /run/sysmedic/latest 2>/dev/null)" ]; then
+        session_dir=$(readlink -f /run/sysmedic/latest)
+        session_name=$(basename "$session_dir")
+    fi
     if [ -z "$session_name" ]; then
         local host
         host=$(hostname -s 2>/dev/null || echo "unknown")
         session_name="session-$(date +%Y%m%d-%H%M%S)-${host}"
     fi
-
-    local session_dir="${PERSIST_MOUNT}/sessions/${session_name}"
+    session_dir="${session_dir:-${PERSIST_MOUNT}/sessions/${session_name}}"
     mkdir -p "$session_dir"
 
     info "Session: $session_name"

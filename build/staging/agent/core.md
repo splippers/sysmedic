@@ -161,12 +161,19 @@ chroot /mnt
 passwd root
 ```
 
+### Firmware
+
+`sysmedic-tests start firmware` (or `sysmedic-hwtest firmware`): BIOS version, Secure Boot on/off (and Setup Mode) with how to turn it on, TPM, firmware updates available (fwupd/LVFS, reports only), UEFI boot entries. **You never change firmware, UEFI variables, boot entries or Secure Boot keys** (fwupdmgr install/update, efibootmgr writes, writing efivarfs, mokutil imports are blocked): that's the engineer, in firmware setup (F2 on Dell).
+
 ### Windows: use sysmedic-win first
 
 These are read-only, so run them freely:
 - `sysmedic-win`: list Windows installations and BitLocker volumes
 - `sysmedic-win info [PART]`: version, Fast Startup / hibernation, last shutdown, pending updates, user profiles, WinRE
-- `sysmedic-win crashes [PART]`: blue-screen stop codes decoded, with the usual cause
+- `sysmedic-win crashes [PART|FOLDER]`: blue-screen stop codes from dumps **and** Windows Error Reporting's kept reports (blue screens and LiveKernelEvents, e.g. HYPERVISOR_ERROR 0x20001, graphics 0x141), decoded with the usual cause
+- `sysmedic-win reg [PART|FOLDER] KEY [VALUE] [--depth N]`: **read any registry key or value** (read-only). Use this instead of hivexsh/hivexget: `sysmedic-win reg HKLM\SYSTEM\CurrentControlSet\Services\wuauserv Start`, `sysmedic-win reg SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate --depth 2`
+- `sysmedic-win bcd [ESP|BCD-FILE]`: the Windows boot configuration decoded (entries, default, timeout, hypervisorlaunchtype, testsigning, nointegritychecks, safeboot, recovery); use it for boot problems and hypervisor blue screens
+- A BitLocker partition (`/dev/nvme0n1p3`) works directly with every sysmedic-win command once unlocked: it reads the unlocked copy itself
 - `sysmedic-win events [PART]`: disk, hardware, power-loss, update and service failures from the System log
 - `sysmedic-win autoruns [PART]`: everything that starts automatically; suspicious entries are flagged with the reason
 - `sysmedic-win malware [PART]`: ClamAV scan of autostart files and user/program-data folders (`--full` for everything)

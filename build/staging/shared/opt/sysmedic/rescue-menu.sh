@@ -14,7 +14,7 @@ while true; do
     echo -e "${BOLD}  ╠══════════════════════════════════════╣${NC}"
     echo -e "${BOLD}  ║  1) AI rescue assistant (OpenCode)   ║${NC}"
     echo -e "${BOLD}  ║  2) Wi-Fi connect                    ║${NC}"
-    echo -e "${BOLD}  ║  3) Save session log to USB          ║${NC}"
+    echo -e "${BOLD}  ║  3) Save extra logs to this session  ║${NC}"
     echo -e "${BOLD}  ║  4) Triage scan (read-only)          ║${NC}"
     echo -e "${BOLD}  ║  5) Fix Linux boot (GRUB/initramfs)  ║${NC}"
     echo -e "${BOLD}  ║  6) Windows tools (BitLocker, BSOD…) ║${NC}"

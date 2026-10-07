@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026.10.08: what the Samsung caddy and the stick saw on 7 October
+
+Ten sessions (Dell Pro 13 Plus ×5, Latitude 3450 ×2, Precision 3571 drop inspection, …). Fixed:
+- **Rescans lost Windows when the AI had it mounted.** The scan skipped any already-mounted partition, so after the AI mounted `C:` at `/mnt/win`, the job report's rescan said "No installed operating system found". Mounted partitions are now read through their existing mount (left mounted; the filesystem check is skipped for them). Reproduced on the stick system before and after.
+- **Microsoft Defender flagged as suspicious** (`MDCoreSvc`, `WinDefend` "run from a user-writable folder"): Defender's admin-only folders in ProgramData are no longer treated as user-writable; service names that are `@…dll,-NNN` resource strings are no longer shown.
+- **Firmware is the engineer's.** The AI refreshed firmware metadata online and looked at writing UEFI variables to enable Secure Boot (it didn't). Both AIs are now blocked from flashing (`fwupdmgr` install/update…, `fwupdtool`, `flashrom`), boot-entry changes (`efibootmgr` writes), writing efivarfs, and Secure Boot key changes (`mokutil`); reading stays allowed.
+- `sysmedic-win` commands take a BitLocker partition directly once it's unlocked (the AI kept passing `/dev/nvme0n1p3`).
+- The RAM test's log was 600 KB of memtester spinner; it now keeps only finished lines.
+- "Save session log" (menu 3) wrote a separate `session-…-sysmedic` folder; it now adds its logs to the visit's session.
+
+New, from what the AI had to do by hand:
+- **`firmware` test**: BIOS version, Secure Boot on/off (and Setup Mode) with how to turn it on, TPM, firmware updates available from LVFS (reports only), UEFI boot entries.
+- **`sysmedic-win reg`**: read any registry key/value (it took the AI ~40 `hivexsh` attempts to read a few service and policy values).
+- **`sysmedic-win bcd`**: the Windows boot configuration decoded (it spent 10 minutes on this by hand for a HYPERVISOR_ERROR case).
+- **`sysmedic-win crashes`** also reads Windows Error Reporting's kept reports (blue screens, LiveKernelEvents) and LiveKernelReports, and names HYPERVISOR_ERROR, 0x141/0x117/0x193 graphics resets and 0x144 USB 3.
+- **`audio-music` test** (the AI's suggestion for drop-damaged laptops): Beethoven's Ode to Joy, synthesised on the spot, left / right / both with bass, then a 40 Hz–12 kHz sweep for rattles and buzz.
+
 ## 2026.10.07 (evening): caddies update themselves from GitHub
 
 - **`sysmedic-update`** (menu **U**): check, apply, rollback, status. Signed releases from the public `splippers/sysmedic-releases`; the private repo and its history stay private and no credential is stored on a caddy. Boot-time check (timer) and an "Update available" line in the menu.

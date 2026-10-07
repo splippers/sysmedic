@@ -32,6 +32,10 @@ On both editions. Results are appended to the session's `hwtest.log` and appear 
 | `sysmedic-hwtest battery` | Design vs full capacity, cycles, adapter (upower, acpi) | seconds |
 | `sysmedic-hwtest inventory` | Full inventory (inxi; serials hidden) | seconds |
 
+**Firmware (`firmware`)**: BIOS version and date, Secure Boot state (and Setup Mode: keys cleared) with the setup-screen steps to turn it on, TPM presence and version, firmware updates available from LVFS (reports only; installing is the engineer's), UEFI boot entries.
+
+**Speakers with music (`audio-music`)**: Beethoven's Ode to Joy synthesised on the drive (nothing downloaded): left only, right only, both with a bass line, then a 16 s sweep from 40 Hz to 12 kHz. Listen for a weak or dead side, harshness, and rattle or buzz at some point in the sweep (loose parts after a drop).
+
 **Graphics battery (`sysmedic-gfx`, also tests `gpu-info`, `gpu-display`, `gpu-bench`, `gpu-stress`, `gpu-video`):**
 
 | Command | What it does | Time |

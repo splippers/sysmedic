@@ -172,6 +172,11 @@ def info(root):
 # ── Crashes ────────────────────────────────────────────────────────────────
 
 BUGCHECKS = {
+    0x00020001: ("HYPERVISOR_ERROR", "the Hyper-V hypervisor failed: check BIOS virtualisation settings (VT-x/VT-d), firmware and chipset drivers, and VBS/Credential Guard (sysmedic-win bcd shows hypervisorlaunchtype)"),
+    0x00000141: ("VIDEO_ENGINE_TIMEOUT_DETECTED", "the graphics engine hung and was reset (no blue screen): graphics driver or GPU"),
+    0x00000117: ("VIDEO_TDR_TIMEOUT_DETECTED", "the graphics driver stopped responding and was reset: update or roll back the graphics driver"),
+    0x00000144: ("BUGCODE_USB3_DRIVER", "a USB 3 controller or device misbehaved: chipset/USB drivers, a faulty dock or device"),
+    0x00000193: ("VIDEO_DXGKRNL_LIVEDUMP", "Windows captured a graphics diagnostic dump: graphics driver"),
     0x0A: ("IRQL_NOT_LESS_OR_EQUAL", "usually a faulty driver"),
     0x19: ("BAD_POOL_HEADER", "driver memory corruption"),
     0x1A: ("MEMORY_MANAGEMENT", "often faulty RAM: run the memory test"),
@@ -240,6 +245,48 @@ def crashes(root):
             out.append({"file": f.name, "time": when.isoformat(" ", "minutes"), "code": None,
                         "name": "unreadable dump", "hint": "file is truncated or not a crash dump"})
     return out
+
+
+WER_KINDS = ("BlueScreen", "LiveKernelEvent", "Kernel", "WHEA", "Critical")
+
+
+def wer_reports(root, limit=60):
+    """Kernel-level crash reports Windows Error Reporting kept (they often survive when dumps don't)."""
+    out = []
+    for sub in ("ProgramData/Microsoft/Windows/WER/ReportArchive", "ProgramData/Microsoft/Windows/WER/ReportQueue"):
+        base = ci_path(root, sub)
+        if not base or not base.is_dir():
+            continue
+        for d in base.iterdir():
+            f = ci_path(d, "Report.wer")
+            if not f:
+                continue
+            try:
+                raw = f.read_bytes()
+                txt = raw.decode("utf-16-le" if raw[:2] == b"\xff\xfe" or raw[1:2] == b"\0" else "utf-8", "replace")
+            except OSError:
+                continue
+            kv = dict(l.split("=", 1) for l in txt.splitlines() if "=" in l)
+            etype = kv.get("EventType", "")
+            if not any(k.lower() in etype.lower() for k in WER_KINDS):
+                continue
+            sig = {kv.get(f"Sig[{i}].Name", ""): kv.get(f"Sig[{i}].Value", "") for i in range(10) if f"Sig[{i}].Name" in kv}
+            code = next((v for k, v in sig.items() if k.lower() in ("bccode", "code", "bugcheck code", "bug check code")), "")
+            try:
+                code = f"0x{int(code, 16):08X}" if code else ""
+            except ValueError:
+                pass
+            t = filetime(int(kv["EventTime"])) if kv.get("EventTime", "").isdigit() else None
+            name = BUGCHECKS.get(int(code, 16), ("", ""))[0] if code.startswith("0x") else ""
+            out.append({"time": t.isoformat(" ", "minutes") if hasattr(t, "isoformat") else str(t or "?"), "type": etype,
+                        "code": code, "name": name, "folder": d.name[:60],
+                        "detail": ", ".join(f"{k}={v}" for k, v in sig.items() if v and k.lower() not in ("bccode", "code"))[:140]})
+    lkr = ci_path(root, "Windows/LiveKernelReports")
+    if lkr and lkr.is_dir():
+        for f in lkr.rglob("*.dmp"):
+            out.append({"time": datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat(" ", "minutes"), "type": "LiveKernelReport dump",
+                        "code": "", "name": "", "folder": str(f.relative_to(lkr)), "detail": f"{f.stat().st_size // 1024} KB"})
+    return sorted(out, key=lambda r: r["time"], reverse=True)[:limit]
 
 
 # ── Event logs ─────────────────────────────────────────────────────────────
@@ -332,6 +379,8 @@ def events(root, logname="System", since_days=None, timeout=120):
 SYSTEM_NAMES = {"svchost.exe", "csrss.exe", "lsass.exe", "services.exe", "winlogon.exe", "explorer.exe",
                 "smss.exe", "wininit.exe", "spoolsv.exe", "taskhostw.exe", "dllhost.exe", "conhost.exe"}
 USER_WRITABLE = re.compile(r"\\(users\\[^\\]+\\appdata|appdata|temp|programdata|users\\public|\$recycle\.bin)\\", re.I)
+# Inside ProgramData but admin-only by default (Defender and Defender for Endpoint): not user-writable
+PROTECTED_PROGRAMDATA = re.compile(r"\\programdata\\microsoft\\(windows defender|windows defender advanced threat protection)\\", re.I)
 SHADY_ARGS = re.compile(r"(-enc(odedcommand)?\s|frombase64string|downloadstring|iex\s*\(|mshta\s+https?:|regsvr32\s.*\/i:https?:|bitsadmin\s.*\/transfer)", re.I)
 
 
@@ -343,7 +392,7 @@ def judge(command):
     if exe in SYSTEM_NAMES and "\\windows\\system32\\" not in c.lower() and "%windir%\\system32" not in c.lower() \
             and "%systemroot%\\system32" not in c.lower():
         reasons.append(f"'{exe}' is a Windows system name, but this copy is not in System32")
-    if USER_WRITABLE.search(c.replace("/", "\\") + "\\"):
+    if USER_WRITABLE.search(c.replace("/", "\\") + "\\") and not PROTECTED_PROGRAMDATA.search(c.replace("/", "\\")):
         reasons.append("runs from a user-writable folder")
     if SHADY_ARGS.search(c):
         reasons.append("downloads or runs encoded/remote code")
@@ -389,7 +438,9 @@ def autoruns(root):
             low = str(img).lower()
             if any(s in low for s in ("\\windows\\", "%systemroot%", "%windir%", "system32\\")) and not judge(str(img)):
                 continue                       # stock Windows services
-            add("Service (auto-start)", f"{svc} ({vals.get('DisplayName', '')})".replace(" ()", ""), str(img))
+            dn = str(vals.get("DisplayName") or "")
+            dn = "" if dn.startswith("@") else dn          # "@C:\\…\\x.dll,-245" is a resource reference, not a name
+            add("Service (auto-start)", f"{svc} ({dn})".replace(" ()", ""), str(img))
     tasks = ci_path(root, "Windows/System32/Tasks")
     if tasks and tasks.is_dir():
         for t in tasks.rglob("*"):
