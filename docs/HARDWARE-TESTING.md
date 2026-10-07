@@ -32,6 +32,18 @@ On both editions. Results are appended to the session's `hwtest.log` and appear 
 | `sysmedic-hwtest battery` | Design vs full capacity, cycles, adapter (upower, acpi) | seconds |
 | `sysmedic-hwtest inventory` | Full inventory (inxi; serials hidden) | seconds |
 
+**Graphics battery (`sysmedic-gfx`, also tests `gpu-info`, `gpu-display`, `gpu-bench`, `gpu-stress`, `gpu-video`):**
+
+| Command | What it does | Time |
+|---|---|---|
+| `sysmedic-gfx info` | Each GPU and the **driver in use** (none = not working), the real OpenGL renderer (warns on software rendering), Vulkan devices, video memory; every display output, connected or not, with the panel's maker, model and size from its EDID | 5 s |
+| `sysmedic-gfx display` | Full-screen patterns on the laptop's panel: white, black, red, green, blue, 50% grey, grey ramp, colour bars, 1-pixel checkerboard, edge frame. Dead/stuck pixels, backlight bleed, mura, banding, blur, missing edges. Space = next, q = quit, 8 s each otherwise | 90 s |
+| `sysmedic-gfx bench` | On the laptop's screen: 14 glmark2 OpenGL ES scenes then 6 vkmark Vulkan scenes, with SysMedic's **live telemetry panel** (FPS with history, GPU clock and load, temperature, power, CPU load and clock, throttling). Afterwards: both scores, FPS per scene, peak temperature and power, GPU clock range, throttling, GPU hangs/resets from the kernel log | 3 min |
+| `sysmedic-gfx stress [MIN]` | Burn-in: heavy scenes (terrain, refract, jellyfish, shadow) in a loop with the same panel; reports each scene's FPS first-to-last (a drop = heat throttling), peak temperature, throttling and any GPU hang | 10 min |
+| `sysmedic-gfx video` | Hardware video decode/encode the GPU offers (VA-API: H.264, HEVC, VP9, AV1…) | 5 s |
+
+On-screen tests run in a minimal display server (sway) on a spare console and switch back when done; the telemetry is read straight from the kernel (Intel, AMD, nouveau), and saved per run as `gfx/…/telemetry.csv` in the session. Started from the phone or the AI, they still appear on the laptop's screen.
+
 **Full RAM test:** reboot and choose **Memory test (MemTest86+)** in the boot menu. On UEFI, Secure Boot must be off for MemTest86+. Run at least one full pass; errors mean faulty RAM, so test one module at a time to find it.
 
 None of the disk tests write. They're safe on a customer's disk even while it's unlocked.

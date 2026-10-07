@@ -145,6 +145,8 @@
       "sysmedic-hwtest battery*": "allow",
       "sysmedic-hwtest inventory*": "allow",
       "sysmedic-hwtest ram-modules*": "allow",
+      "sysmedic-gfx info*": "allow",
+      "sysmedic-gfx video*": "allow",
       "upower *": "allow",
       "acpi*": "allow",
       "lscpu*": "allow",

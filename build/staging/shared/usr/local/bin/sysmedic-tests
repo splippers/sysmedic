@@ -84,6 +84,16 @@ TESTS = {
                   "sysmedic-hwtest surface {disk}", "disk", "1–4 h", ""),
     "gpu":       ("hardware", "Graphics benchmark", "glmark2 off-screen 3D benchmark with a score",
                   GPU, "", "1 min", ""),
+    "gpu-info":  ("hardware", "Graphics & displays", "GPU, driver in use, OpenGL/Vulkan renderer, video memory; displays: panel, resolution, outputs",
+                  "sysmedic-gfx info", "", "5 s", ""),
+    "gpu-display": ("hardware", "Screen test patterns", "Full-screen colours, ramp, bars, checkerboard, edges: dead pixels, bleed, banding",
+                  "sysmedic-gfx display", "", "90 s", "watch the laptop's screen (Space = next pattern)"),
+    "gpu-bench": ("hardware", "Graphics benchmark on screen", "OpenGL and Vulkan scenes on the laptop's screen with live telemetry; scores, temps, power, hangs",
+                  "sysmedic-gfx bench", "", "3 min", "watch the laptop's screen"),
+    "gpu-stress": ("hardware", "Graphics burn-in", "Heavy 3D scenes in a loop with live telemetry: overheating, throttling, artefacts, GPU hangs",
+                  "sysmedic-gfx stress {minutes}", "minutes", "10 min", "watch the laptop's screen for artefacts"),
+    "gpu-video": ("hardware", "Video decode", "Which video formats the GPU decodes in hardware (VA-API)",
+                  "sysmedic-gfx video", "", "5 s", ""),
     "battery":   ("hardware", "Battery health", "Design vs current capacity, wear, charge cycles, adapter",
                   "sysmedic-hwtest battery", "", "5 s", ""),
     "inventory": ("hardware", "Hardware inventory", "Full component list (serial numbers hidden)",
@@ -118,7 +128,7 @@ SUITES = {"full-check": ["health", "scan", "battery", "network", "windows-checku
 # OpenCode slash command for each test
 SLASH = {"health": "health", "cpu": "cpu-stress", "ram": "ram-test", "ram-modules": "ram-modules", "ram-stress": "ram-stress",
          "ram-speed": "ram-speed", "disk": "disk-test", "surface": "surface-scan",
-         "gpu": "gpu-test", "battery": "battery", "inventory": "inventory", "input": "input-test", "audio": "audio-test",
+         "gpu": "gpu-test", "gpu-info": "gpu-info", "gpu-display": "screen-test", "gpu-bench": "gpu-bench", "gpu-stress": "gpu-stress", "gpu-video": "video-decode", "battery": "battery", "inventory": "inventory", "input": "input-test", "audio": "audio-test",
          "scan": "scan", "network": "network-check", "windows-checkup": "windows-checkup", "windows-events": "windows-events",
          "windows-registry": "windows-registry", "windows-updates": "windows-updates", "windows-traces": "windows-traces", "windows-crashes": "windows-crashes",
          "autoruns": "autoruns", "malware": "malware-scan"}
@@ -194,7 +204,8 @@ def find_run(key):
 ALIASES = {"mem": "ram", "memory": "ram", "memtest": "ram", "memtester": "ram", "ram-test": "ram",
            "memslot": "ram-modules", "memslots": "ram-modules", "dimm": "ram-modules", "dimms": "ram-modules", "sodimm": "ram-modules",
            "memory-modules": "ram-modules", "stressapptest": "ram-stress", "memory-stress": "ram-stress", "bandwidth": "ram-speed",
-           "graphics": "gpu", "glmark2": "gpu", "smart": "disk", "badblocks": "surface", "wifi": "network", "net": "network",
+           "graphics": "gpu", "glmark2": "gpu", "vkmark": "gpu-bench", "screen": "gpu-display", "display": "gpu-display", "dead-pixels": "gpu-display",
+           "burn-in": "gpu-stress", "gpu-burn": "gpu-stress", "vaapi": "gpu-video", "video": "gpu-video", "displays": "gpu-info", "smart": "disk", "badblocks": "surface", "wifi": "network", "net": "network",
            "keyboard": "input", "touchpad": "input", "sound": "audio", "speakers": "audio", "virus": "malware", "clamav": "malware"}
 
 

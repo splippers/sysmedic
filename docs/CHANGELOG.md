@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.10.07 (afternoon): graphics battery on the laptop's own screen
+
+- **`sysmedic-gfx`**: `info` (GPUs, driver in use, real renderer, displays with panel identity), `display` (10 full-screen test patterns), `bench` (glmark2 OpenGL ES + vkmark Vulkan on screen), `stress MIN` (burn-in), `video` (VA-API decode). New tests `gpu-info`, `gpu-display`, `gpu-bench`, `gpu-stress`, `gpu-video` (slash commands, phone, AI: "check for dead pixels", "graphics burn-in", "vulkan benchmark").
+- **Live telemetry panel** over the visuals: FPS with sparkline, GPU clock/load bars, temperature and power with history, CPU load/clock/temperature, throttling; read from the kernel (no vendor tools) and saved as CSV for the report. Results name scores, per-scene FPS, peaks, throttling and GPU hangs/resets.
+- MangoHud (Ubuntu 24.04's 0.6.9) was tried for the overlay and dropped: it crashed glmark2 and didn't draw. Packages added: sway, foot, seatd, vkmark, glmark2-es2-wayland, kmscube, vainfo, intel-media-va-driver, mesa-va-drivers.
+
 ## 2026.10.07 (later): the offline AI obeys, and uses a discrete GPU when there is one
 
 - **Obedience, enforced in code.** Declined commands, "No", "forget/drop X" and corrections are remembered for the conversation and enforced by SysMedic (re-offers are held back, and flagged and rewritten if they appear in text). "No" alone gets "OK." without a new suggestion. After a correction the model no longer sees its earlier plan, and in general only the last few exchanges. Its instructions now open with "the engineer is in charge: do exactly what the latest message asks, nothing more, no unasked offers". Replayed the 3410 session: after "These tests do not exist" it now says "Got it, I'll stick to known tests" instead of re-offering `memslot`.

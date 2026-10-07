@@ -1,0 +1,496 @@
+#!/usr/bin/env python3
+"""sysmedic-gfx — graphics tests on the laptop's own screen, with live telemetry.
+
+  sysmedic-gfx info              GPUs, driver in use, OpenGL/Vulkan renderer, displays (panel, resolution, outputs)
+  sysmedic-gfx display           full-screen colour patterns: dead pixels, backlight bleed, banding, sharpness, edges
+                                 (Space/Enter = next, q = quit; advances by itself every 8 s)
+  sysmedic-gfx bench             OpenGL (glmark2) and Vulkan (vkmark) scenes on screen, telemetry panel below
+  sysmedic-gfx stress [MIN]      burn-in (default 10 min): heavy scenes in a loop; temperatures, clocks, throttling
+                                 and GPU hangs are watched and recorded
+  sysmedic-gfx video             hardware video decode the GPU offers (VA-API)
+
+On-screen tests take over the laptop's screen on a spare console and give it back when they finish. Results go
+into the job report. The quick off-screen score is still `sysmedic-tests start gpu`.
+"""
+import csv
+import datetime
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+import gputelemetry  # noqa: E402
+
+B, D, G, Y, R, CY, N = "\033[1m", "\033[2m", "\033[0;32m", "\033[1;33m", "\033[1;31m", "\033[0;36m", "\033[0m"
+SELF = os.path.abspath(__file__)
+
+GLMARK2_SCENES = ["build:use-vbo=true", "texture:texture-filter=linear", "shading:shading=phong", "bump:bump-render=normals",
+                  "effect2d:kernel=0,1,0;1,-4,1;0,1,0;", "pulsar:quads=5:texture=false:light=false", "desktop:windows=4:effect=blur",
+                  "buffer:update-method=map", "ideas:speed=duration", "jellyfish", "terrain", "shadow", "refract",
+                  "conditionals:vertex-steps=0:fragment-steps=5"]
+VKMARK_SCENES = ["vertex", "texture", "shading", "cube", "effect2d", "desktop"]
+STRESS_SCENES = ["terrain", "refract", "jellyfish", "shadow"]
+
+
+def session_dir():
+    d = os.path.realpath("/run/sysmedic/latest")
+    if not os.path.isdir(d):
+        d = "/run/sysmedic"
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def record(line):
+    with open(os.path.join(session_dir(), "hwtest.log"), "a") as f:
+        f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} {line}\n")
+
+
+def run(cmd, timeout=20):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+# ── info ────────────────────────────────────────────────────────────────────────
+
+def displays():
+    out = []
+    for c in sorted(glob.glob("/sys/class/drm/card*-*")):
+        name = os.path.basename(c).split("-", 1)[1]
+        status = gputelemetry._read(f"{c}/status", "?")
+        modes = (gputelemetry._read(f"{c}/modes", "") or "").splitlines()
+        panel = ""
+        try:
+            edid = open(f"{c}/edid", "rb").read()
+        except OSError:
+            edid = b""
+        if edid and shutil.which("edid-decode"):
+            txt = subprocess.run(["edid-decode"], input=edid, capture_output=True, timeout=10).stdout.decode(errors="replace")
+            mfr = re.search(r"Manufacturer: (\S+)", txt)
+            prod = re.search(r"(?:Display Product Name|Alphanumeric Data String): '?([^'\n]+)", txt)
+            size = re.search(r"Maximum image size: (\d+) cm x (\d+) cm", txt)
+            inch = f'{((int(size.group(1))**2 + int(size.group(2))**2) ** 0.5) / 2.54:.1f}"' if size else ""
+            panel = " ".join(x for x in (mfr.group(1) if mfr else "", prod.group(1).strip() if prod else "", inch) if x)
+        out.append({"output": name, "status": status, "mode": modes[0] if modes else "", "panel": panel})
+    return out
+
+
+def renderer():
+    gl = run(["eglinfo", "-B"]) or run(["glxinfo", "-B"])
+    names = [x.strip() for x in re.findall(r"renderer(?: string)?: (.+)", gl)]
+    real = [x for x in names if not re.search(r"llvmpipe|softpipe|swrast", x, re.I)]
+    m = re.match(r"(.+)", (real or names or [""])[0])
+    vk = run(["vulkaninfo", "--summary"])
+    vkd = re.findall(r"deviceName\s*=\s*(.+)", vk)
+    return (m.group(1).strip() if m else ""), [d.strip() for d in vkd]
+
+
+def cmd_info():
+    print(f"\n{B}== Graphics hardware =={N}")
+    lspci = run(["lspci", "-nnk"])
+    for block in re.split(r"\n(?=\S)", lspci):
+        if re.search(r"VGA compatible|3D controller|Display controller", block):
+            first = block.splitlines()[0]
+            drv = re.search(r"Kernel driver in use: (\S+)", block)
+            print(f"  {first.split(': ', 1)[-1]}")
+            print(f"    driver in use: {G if drv else R}{drv.group(1) if drv else 'NONE (no driver: the GPU is not working)'}{N}")
+    gl, vk = renderer()
+    soft = re.search(r"llvmpipe|softpipe|swrast", gl, re.I)
+    print(f"  OpenGL renderer: {R if soft else ''}{gl or 'unknown'}{N}")
+    if soft:
+        print(f"  {R}Software rendering: no working GPU driver. Check 'driver in use' above and dmesg.{N}")
+    if vk:
+        print(f"  Vulkan devices: {', '.join(vk)}")
+    for c, drv in gputelemetry.gpu_cards():
+        vram = gputelemetry._num(f"{c}/device/mem_info_vram_total", 1 / 2**30)
+        if vram:
+            print(f"  {drv} video memory: {vram:.1f} GiB")
+    print(f"\n{B}== Displays =={N}")
+    ds = displays()
+    for d in ds:
+        col = G if d["status"] == "connected" else D
+        print(f"  {col}{d['output']:14} {d['status']:13}{N} {d['mode']:12} {d['panel']}")
+    if not ds:
+        print("  no display outputs reported")
+    conn = [d for d in ds if d["status"] == "connected"]
+    record(f"gfx info: {gl or 'renderer unknown'}; {len(conn)} display(s) connected: "
+           + ", ".join(f"{d['output']} {d['mode']} {d['panel']}".strip() for d in conn))
+
+
+# ── display patterns (framebuffer, no compositor) ───────────────────────────────
+
+PATTERNS = [("White: look for dark (dead) pixels and uneven brightness", "solid", (255, 255, 255)),
+            ("Black: look for bright (stuck) pixels and backlight bleed at the edges", "solid", (0, 0, 0)),
+            ("Red", "solid", (255, 0, 0)), ("Green", "solid", (0, 255, 0)), ("Blue", "solid", (0, 0, 255)),
+            ("Grey 50%: look for blotches (mura) and tinted areas", "solid", (128, 128, 128)),
+            ("Grey ramp: look for banding or colour steps", "ramp", None),
+            ("Colour bars", "bars", None),
+            ("Fine checkerboard: look for shimmer or blur", "checker", None),
+            ("Edge frame: all four 1-pixel white edges should be visible", "frame", None)]
+
+
+def fb_geometry():
+    vs = gputelemetry._read("/sys/class/graphics/fb0/virtual_size", "")
+    bpp = int(gputelemetry._read("/sys/class/graphics/fb0/bits_per_pixel", "32") or 32)
+    stride = int(gputelemetry._read("/sys/class/graphics/fb0/stride", "0") or 0)
+    w, h = (int(x) for x in vs.split(",")) if "," in vs else (0, 0)
+    return w, h, bpp, stride or w * bpp // 8
+
+
+def px(rgb):
+    return bytes((rgb[2], rgb[1], rgb[0], 0))
+
+
+def frame_bytes(kind, rgb, w, h, stride):
+    pad = b"\0" * (stride - w * 4)
+    if kind == "solid":
+        row = px(rgb) * w + pad
+        return row * h
+    if kind == "ramp":
+        row = b"".join(px((v, v, v)) for v in (x * 255 // max(w - 1, 1) for x in range(w))) + pad
+        return row * h
+    if kind == "bars":
+        cols = [(255, 255, 255), (255, 255, 0), (0, 255, 255), (0, 255, 0), (255, 0, 255), (255, 0, 0), (0, 0, 255), (0, 0, 0)]
+        row = b"".join(px(cols[min(x * 8 // w, 7)]) for x in range(w)) + pad
+        return row * h
+    if kind == "checker":
+        a = (px((255, 255, 255)) + px((0, 0, 0))) * (w // 2) + px((255, 255, 255)) * (w % 2) + pad
+        b = (px((0, 0, 0)) + px((255, 255, 255))) * (w // 2) + px((0, 0, 0)) * (w % 2) + pad
+        return (a + b) * (h // 2) + (a if h % 2 else b"")
+    if kind == "frame":
+        white, black = px((255, 255, 255)), px((0, 0, 0))
+        edge = white * w + pad
+        mid = white + black * (w - 2) + white + pad
+        return edge + mid * (h - 2) + edge
+    return b""
+
+
+def cmd_display():
+    w, h, bpp, stride = fb_geometry()
+    if not w or bpp != 32 or not os.path.exists("/dev/fb0"):
+        print(f"  {R}No 32-bit framebuffer (/dev/fb0) to draw on: can't show patterns on this machine.{N}")
+        return 1
+    print(f"\n{B}Display patterns{N} on the laptop's screen ({w}×{h}). Space/Enter = next, q = quit; each advances after 8 s.")
+    print("  Watch for: dead or stuck pixels, backlight bleed, blotches, banding, flicker, missing edges.\n")
+    time.sleep(2)
+    import termios
+    import tty
+    import select
+    fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+    old = termios.tcgetattr(fd) if fd is not None else None
+    subprocess.run(["setterm", "--cursor", "off"], stderr=subprocess.DEVNULL)
+    shown = 0
+    try:
+        if fd is not None:
+            tty.setcbreak(fd)
+        with open("/dev/fb0", "r+b", buffering=0) as fb:
+            for title, kind, rgb in PATTERNS:
+                fb.seek(0)
+                fb.write(frame_bytes(kind, rgb, w, h, stride))
+                shown += 1
+                t0 = time.time()
+                while time.time() - t0 < 8:
+                    if fd is not None and select.select([fd], [], [], 0.2)[0]:
+                        k = os.read(fd, 1)
+                        if k in (b"q", b"Q", b"\x1b"):
+                            raise KeyboardInterrupt
+                        break
+                    time.sleep(0.05 if fd is not None else 0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if old:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        try:
+            with open("/dev/fb0", "r+b", buffering=0) as fb:
+                fb.write(frame_bytes("solid", (0, 0, 0), w, h, stride))
+        except OSError:
+            pass
+        subprocess.run(["setterm", "--cursor", "on"], stderr=subprocess.DEVNULL)
+        print("\033[2J\033[H", end="", flush=True)
+    print(f"  Showed {shown} of {len(PATTERNS)} patterns: " + ", ".join(p[0].split(':')[0] for p in PATTERNS[:shown]) + ".")
+    print("  Note what you saw in the job report: sysmedic-note \"display: …\"")
+    record(f"gfx display patterns: {shown}/{len(PATTERNS)} shown ({w}x{h})")
+    return 0
+
+
+# ── on-screen session (sway: benchmark above, telemetry below) ──────────────────
+
+SWAY_CONF = """xwayland disable
+default_border none
+default_floating_border none
+focus_follows_mouse no
+output * bg #0b1220 solid_color
+default_orientation vertical
+seat * hide_cursor 1000
+for_window [app_id="sysmedic-telemetry"] floating enable, sticky enable, resize set width 100 ppt height 30 ppt, move position 0 ppt 70 ppt
+no_focus [app_id="sysmedic-telemetry"]
+exec foot --app-id=sysmedic-telemetry --font="DejaVu Sans Mono:size={font}" --override=colors.background=0b1220 --override=colors.alpha=0.82 -e python3 {self} telemetry {rundir}
+exec sh -c 'sleep 2; python3 {self} runner {rundir}; swaymsg exit'
+"""
+
+
+def on_screen(plan, label):
+    """Run plan (list of steps) in a sway session on a spare console; return the run directory."""
+    if not shutil.which("sway") or not shutil.which("foot"):
+        print(f"  {R}sway/foot aren't installed on this drive: on-screen tests unavailable.{N}")
+        return None
+    rundir = os.path.join(session_dir(), "gfx", datetime.datetime.now().strftime("%H%M%S") + "-" + label)
+    os.makedirs(rundir, exist_ok=True)
+    json.dump({"plan": plan, "label": label}, open(f"{rundir}/plan.json", "w"))
+    h = fb_geometry()[1] or 1080
+    open(f"{rundir}/sway.conf", "w").write(SWAY_CONF.format(self=SELF, rundir=rundir, font=max(10, min(18, h // 72))))
+    xdg = "/run/user/0"
+    os.makedirs(xdg, mode=0o700, exist_ok=True)
+    before = run(["fgconsole"]).strip()
+    dmesg0 = run(["dmesg"])
+    env = f"LIBSEAT_BACKEND=builtin XDG_RUNTIME_DIR={xdg} WLR_RENDERER_ALLOW_SOFTWARE=1 WLR_NO_HARDWARE_CURSORS=1"
+    print(f"  {CY}The test is on the laptop's screen now; it switches back when it finishes.{N}")
+    subprocess.run(["openvt", "-s", "-w", "--", "sh", "-c", f"{env} sway -c {rundir}/sway.conf > {rundir}/sway.log 2>&1"])
+    if before.isdigit():
+        subprocess.run(["chvt", before])
+    json.dump({"hang": gputelemetry.gpu_hang_lines(dmesg0)}, open(f"{rundir}/kernel.json", "w"))
+    return rundir
+
+
+def cmd_runner(rundir):
+    plan = json.load(open(f"{rundir}/plan.json"))["plan"]
+    log = open(f"{rundir}/bench.log", "a", buffering=1)
+    for i, step in enumerate(plan, 1):
+        json.dump({"step": i, "of": len(plan), "title": step["title"], "started": time.time(), "until": time.time() + step["timeout"]},
+                  open(f"{rundir}/status.json", "w"))
+        log.write(f"### {step['title']}\n")
+        try:
+            p = subprocess.run(step["cmd"], stdout=log, stderr=subprocess.STDOUT, timeout=step["timeout"],
+                               env=dict(os.environ, vblank_mode="0"))
+            log.write(f"### exit {p.returncode}\n")
+        except subprocess.TimeoutExpired:
+            log.write("### stopped (time limit)\n" if step.get("loop") else "### TIMEOUT\n")
+        except OSError as e:
+            log.write(f"### could not start: {e}\n")
+    json.dump({"done": True}, open(f"{rundir}/status.json", "w"))
+
+
+SPARK = "▁▂▃▄▅▆▇█"
+
+
+def spark(vals, lo=None, hi=None, n=40, warm=False):
+    vals = [v for v in vals[-n:] if v is not None]
+    if not vals:
+        return ""
+    lo = min(vals) if lo is None else lo
+    hi = max(vals) if hi is None else hi
+    span = (hi - lo) or 1
+    out = ""
+    for v in vals:
+        x = max(0.0, min(1.0, (v - lo) / span))
+        r, g, b = (int(60 + 195 * x), int(200 - 120 * x), 90) if warm else (40, int(150 + 80 * x), int(220 - 40 * x))
+        out += f"\033[38;2;{r};{g};{b}m" + SPARK[min(7, int(x * 7.99))]
+    return out + N
+
+
+def bar(frac, width, warm=False):
+    frac = max(0.0, min(1.0, frac or 0))
+    full = int(frac * width)
+    out = ""
+    for i in range(width):
+        x = i / max(width - 1, 1)
+        r, g, b = (int(60 + 195 * x), int(200 - 120 * x), 90) if warm else (40, int(150 + 80 * x), int(220 - 40 * x))
+        out += f"\033[38;2;{r};{g};{b}m" + ("█" if i < full else "\033[38;2;40;48;64m·")
+    return out + N
+
+
+def cmd_telemetry(rundir):
+    s = gputelemetry.Sampler()
+    gpu_name = ""
+    lspci = run(["lspci"])
+    m = re.search(r"(?:VGA compatible controller|3D controller): (.+)", lspci)
+    gpu_name = (m.group(1) if m else "GPU")[:60]
+    hist = {"fps": [], "gpu_temp": [], "cpu_temp": [], "watts": [], "gpu_busy": []}
+    thr0 = None
+    out = open(f"{rundir}/telemetry.csv", "w", newline="", buffering=1)
+    w = csv.writer(out)
+    fields = ["t", "gpu_mhz", "gpu_max_mhz", "gpu_busy", "gpu_temp", "gpu_watts", "cpu_temp", "cpu_watts", "cpu_busy", "cpu_mhz", "throttle", "fps", "scene"]
+    w.writerow(fields)
+    print("\033[?25l", end="")
+    while True:
+        r = s.sample()
+        try:
+            st = json.load(open(f"{rundir}/status.json"))
+        except (OSError, ValueError):
+            st = {}
+        if st.get("done"):
+            break
+        try:
+            tail = open(f"{rundir}/bench.log", errors="replace").read()[-4000:]
+        except OSError:
+            tail = ""
+        fm = re.findall(r"\[([^\]]+)\][^\n]*?FPS: (\d+)", tail)
+        scene, fps = (fm[-1][0], float(fm[-1][1])) if fm else ("", None)
+        r["fps"], r["scene"] = fps, scene
+        w.writerow([r.get(k) for k in fields])
+        out.flush()
+        thr0 = r["throttle"] if thr0 is None else thr0
+        hist["fps"].append(fps)
+        hist["gpu_temp"].append(r["gpu_temp"] or r["cpu_temp"])
+        hist["watts"].append(r["gpu_watts"] or r["cpu_watts"])
+        hist["gpu_busy"].append(r["gpu_busy"])
+        cols = shutil.get_terminal_size((100, 12)).columns
+        bw = max(10, min(40, cols - 60))
+        left = int(st.get("until", time.time()) - time.time())
+        lines = [f"{B}\033[38;2;120;200;255mSysMedic · Graphics{N}  {D}{gpu_name}{N}",
+                 f"  {B}{st.get('title', 'starting…')}{N}  {D}step {st.get('step', '-')}/{st.get('of', '-')}"
+                 + (f" · {max(0, left)} s left" if st else "") + f"{N}   " + (f"{D}last scene{N} {CY}{scene}{N}" if scene else ""),
+                 ""]
+        if fps is not None:
+            lines.append(f"  FPS      {B}{fps:7.0f}{N}  {bar(fps / max(max(v for v in hist['fps'] if v is not None), 1), bw)}  {spark(hist['fps'], 0)}")
+        if r["gpu_mhz"]:
+            lines.append(f"  GPU clk  {r['gpu_mhz']:5.0f} MHz {bar(r['gpu_mhz'] / (r['gpu_max_mhz'] or r['gpu_mhz']), bw)}  {D}max {r['gpu_max_mhz'] or '?':.0f}{N}"
+                         if r["gpu_max_mhz"] else f"  GPU clk  {r['gpu_mhz']:5.0f} MHz")
+        if r["gpu_busy"] is not None:
+            lines.append(f"  GPU busy {r['gpu_busy']:5.0f} %   {bar(r['gpu_busy'] / 100, bw)}  {spark(hist['gpu_busy'], 0, 100)}")
+        t = r["gpu_temp"] or r["cpu_temp"]
+        if t:
+            col = R if t >= 95 else Y if t >= 85 else G
+            lines.append(f"  {'GPU' if r['gpu_temp'] else 'Chip'} temp {col}{t:5.0f} °C{N}  {bar(t / 105, bw, warm=True)}  {spark(hist['gpu_temp'], 30, 105, warm=True)}")
+        wt = r["gpu_watts"] or r["cpu_watts"]
+        if wt:
+            lines.append(f"  {'GPU' if r['gpu_watts'] else 'Package'} power {wt:5.1f} W  {spark(hist['watts'], 0, warm=True)}")
+        cpu = f"  CPU      {r['cpu_busy'] or 0:5.0f} %" + (f" · {r['cpu_mhz'] / 1000:.2f} GHz" if r["cpu_mhz"] else "") + (f" · {r['cpu_temp']:.0f} °C" if r["cpu_temp"] else "")
+        if r["throttle"] is not None and thr0 is not None and r["throttle"] > thr0:
+            cpu += f"   {R}THROTTLING ({int(r['throttle'] - thr0)} events){N}"
+        lines.append(cpu)
+        print("\033[H\033[2J" + "\n".join(lines), end="", flush=True)
+        time.sleep(1)
+
+
+def summarize(rundir, kind):
+    log = open(f"{rundir}/bench.log", errors="replace").read() if os.path.exists(f"{rundir}/bench.log") else ""
+    rows = list(csv.DictReader(open(f"{rundir}/telemetry.csv"))) if os.path.exists(f"{rundir}/telemetry.csv") else []
+    kern = json.load(open(f"{rundir}/kernel.json")) if os.path.exists(f"{rundir}/kernel.json") else {}
+    f = lambda k: [float(r[k]) for r in rows if r.get(k) not in ("", "None", None)]  # noqa: E731
+    print(f"\n{B}== {kind} results =={N}")
+    for name, score in re.findall(r"(glmark2|vkmark) Score: (\d+)", log):
+        print(f"  {name} score: {B}{score}{N}")
+    if kind == "Benchmark":
+        for part in re.split(r"^### ", log, flags=re.M)[1:]:
+            title = part.splitlines()[0]
+            scenes = re.findall(r"\[([^\]]+)\] [^\n]*?FPS: (\d+)", part)
+            if scenes:
+                print(f"  {CY}{title}{N}")
+                for sc, fps in scenes:
+                    print(f"    {sc:14} {fps:>6} FPS")
+    soft = re.search(r"GL_RENDERER:\s*(llvmpipe|softpipe)|llvmpipe", log)
+    if soft:
+        print(f"  {Y}Software rendering (llvmpipe): no GPU driver in use; these numbers are the CPU.{N}")
+    bad = re.findall(r"### (TIMEOUT|could not start.*)", log)
+    for b in bad:
+        print(f"  {R}A step {b.lower()}: the GPU or driver may have stalled.{N}")
+    t = f("gpu_temp") or f("cpu_temp")
+    if t:
+        print(f"  Temperature: max {max(t):.0f} °C" + (f" {R}(hot){N}" if max(t) >= 95 else ""))
+    wt = f("gpu_watts") or f("cpu_watts")
+    if wt:
+        print(f"  Power: peak {max(wt):.1f} W, average {sum(wt) / len(wt):.1f} W")
+    mhz = f("gpu_mhz")
+    if mhz:
+        print(f"  GPU clock: {min(mhz):.0f}–{max(mhz):.0f} MHz" + (f" (max {f('gpu_max_mhz')[0]:.0f})" if f("gpu_max_mhz") else ""))
+    thr = f("throttle")
+    if thr and max(thr) > min(thr):
+        print(f"  {Y}CPU package throttled {int(max(thr) - min(thr))} times: cooling may be poor (dust, fan, paste).{N}")
+    if kind == "Stress":
+        runs = {}
+        for sc, fps in re.findall(r"\[([^\]]+)\] [^\n]*?FPS: (\d+)", log):
+            runs.setdefault(sc, []).append(int(fps))
+        for sc, v in runs.items():
+            line = f"  {sc:12} {v[0]} → {v[-1]} FPS over {len(v)} runs"
+            if len(v) >= 2 and v[0] and v[-1] < 0.7 * v[0]:
+                line += f"  {Y}(fell {1 - v[-1] / v[0]:.0%}: heat throttling the GPU?){N}"
+            print(line)
+    hang = kern.get("hang") or []
+    if hang:
+        print(f"  {R}✖ GPU hang/reset in the kernel log:{N}")
+        for l in hang:
+            print(f"    {l[:150]}")
+    else:
+        print(f"  {G}✔ No GPU hangs or resets.{N}")
+    print(f"  {D}Telemetry: {rundir}/telemetry.csv{N}")
+    ok = not hang and not bad
+    scores = " ".join(f"{n} {s}" for n, s in re.findall(r"(glmark2|vkmark) Score: (\d+)", log))
+    record(f"gfx {kind.lower()}: {scores or 'no score'}; max temp {max(t) if t else '?'}; "
+           f"{'GPU HANG' if hang else 'no hangs'}{'; software rendering' if soft else ''}")
+    return 0 if ok else 1
+
+
+def cmd_bench():
+    gl = ["glmark2-es2-wayland", "-s", "1280x720"] + sum((["-b", f"{sc}:duration=6"] for sc in GLMARK2_SCENES), [])
+    vk = ["vkmark", "--winsys", "wayland"] + sum((["-b", f"{sc}:duration=6"] for sc in VKMARK_SCENES), [])
+    plan = [{"title": "OpenGL ES · glmark2", "cmd": gl, "timeout": 6 * len(GLMARK2_SCENES) + 60}]
+    if shutil.which("vkmark"):
+        plan.append({"title": "Vulkan · vkmark", "cmd": vk, "timeout": 6 * len(VKMARK_SCENES) + 60})
+    rd = on_screen(plan, "bench")
+    return summarize(rd, "Benchmark") if rd else 1
+
+
+def cmd_stress(minutes):
+    secs = int(minutes) * 60
+    gl = ["glmark2-es2-wayland", "-s", "1280x720", "--run-forever"] + sum((["-b", f"{sc}:duration=20"] for sc in STRESS_SCENES), [])
+    rd = on_screen([{"title": f"Burn-in · {minutes} min", "cmd": gl, "timeout": secs, "loop": True}], "stress")
+    return summarize(rd, "Stress") if rd else 1
+
+
+def cmd_video():
+    out = run(["vainfo"], timeout=20)
+    drv = re.search(r"Driver version: (.+)", out)
+    print(f"\n{B}== Hardware video decode (VA-API) =={N}")
+    if not drv:
+        print(f"  {Y}No VA-API driver answered: video is decoded by the CPU (normal for some GPUs or without a driver).{N}")
+        record("gfx video: no VA-API driver")
+        return 0
+    print(f"  Driver: {drv.group(1).strip()}")
+    codecs = {}
+    for prof, ep in re.findall(r"VAProfile(\w+)\s*:\s*VAEntrypoint(\w+)", out):
+        fam = re.sub(r"(Main|High|Baseline|Profile|Simple|Advanced|Constrained|\d+$).*", "", prof) or prof
+        codecs.setdefault(fam, set()).add("decode" if ep == "VLD" else "encode" if "Enc" in ep else ep)
+    for fam in ("H264", "HEVC", "VP8", "VP9", "AV1", "MPEG2", "VC1", "JPEG"):
+        if fam in codecs:
+            print(f"  {fam:6} {', '.join(sorted(codecs[fam]))}")
+    record(f"gfx video: {drv.group(1).strip()[:60]}; " + ", ".join(f for f in codecs))
+    return 0
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a else "-h"
+    if cmd in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    if os.geteuid() != 0:
+        sys.exit("sysmedic-gfx must run as root")
+    if cmd == "info":
+        return cmd_info()
+    if cmd == "display":
+        return cmd_display()
+    if cmd == "bench":
+        return cmd_bench()
+    if cmd == "stress":
+        return cmd_stress(a[1] if len(a) > 1 and a[1].isdigit() else 10)
+    if cmd == "video":
+        return cmd_video()
+    if cmd == "runner":
+        return cmd_runner(a[1])
+    if cmd == "telemetry":
+        return cmd_telemetry(a[1])
+    print(f"sysmedic-gfx: no such test '{cmd}'.\n{__doc__}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

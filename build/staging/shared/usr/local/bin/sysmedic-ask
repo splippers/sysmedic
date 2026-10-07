@@ -41,7 +41,7 @@ READ_ONLY = re.compile(r"""^\s*(lsblk|blkid|findmnt|df|du|free|uname|uptime|lscp
     |nmcli\s+(-\w+\s+)*(dev|device|con|connection|general|radio)\s*(status|show|list|wifi\s+list)?\s*$|iw\s+(dev|list|phy)|iwconfig|ethtool(?!\s+-[sKAGLE])
     |ss|netstat|arp|arp-scan|nmap|curl\s+(-\w+\s+)*-[sIL]*I|speedtest-cli|iperf3\s+-c
     |smartctl\s+(-[aHiAxlc]|--(all|health|info|xall))|nvme\s+(list|smart-log|id-ctrl)|hdparm\s+-I|sensors|journalctl|dmesg
-    |sysmedic-hwtest\s+(report|battery|inventory|ram-modules)\s*$|sysmedic-tests\s+(list|status|log|disks|wait|watch)\b|upower\s+(-e|-i\s+\S+|--dump)|acpi(\s+-\w+)*\s*$|sensors(\s+-\w+)*\s*$|inxi(\s+-[\w]+)*\s*$
+    |sysmedic-hwtest\s+(report|battery|inventory|ram-modules)\s*$|sysmedic-gfx\s+(info|video)\s*$|sysmedic-tests\s+(list|status|log|disks|wait|watch)\b|upower\s+(-e|-i\s+\S+|--dump)|acpi(\s+-\w+)*\s*$|sensors(\s+-\w+)*\s*$|inxi(\s+-[\w]+)*\s*$
     |cat\s+/(proc|sys|run/sysmedic|etc)/|ls|stat|file|head|tail|wc|grep|sysmedic-(scan|win\s+(info|crashes|events|autoruns|evtx|registry|cbs|checkup|etl)|guard\s+status|net)
     |efibootmgr\s*(-v)?\s*$|sfdisk\s+(-d|-l)|fdisk\s+-l|dumpe2fs\s+-h|ntfsinfo|mount\s+-o\s+ro\b|systemctl\s+(status|is-active|list-units))\b""", re.X)
 SHELL_META_WRITE = re.compile(r"(>|\btee\b|;\s*(rm|dd|mkfs)|\|\s*(sh|bash)\b|`|\$\()")
@@ -597,7 +597,10 @@ def device_label():
 # Plain requests for a catalogue test are answered directly, not left to the small offline model (on a 3410
 # it ignored "test the GPU" four times while pushing its own plan).
 ASK_TEST = re.compile(r"\b(test|check|run|benchmark|try|diagnose|look at|how is|how's|bad|faulty|failing|broken|dead|suspect|stress)\b", re.I)
-TEST_WORDS = [("gpu", r"gpu|graphics|video card|3d|display adapter"), ("battery", r"battery|batteries"),
+TEST_WORDS = [("gpu-display", r"dead pixels?|stuck pixels?|backlight bleed|screen test|test (the )?(screen|display|panel)|test patterns?"),
+              ("gpu-stress", r"(gpu|graphics) (burn.?in|stress)|burn.?in"), ("gpu-video", r"video decod|hardware decod|vaapi"),
+              ("gpu-bench", r"(gpu|graphics) bench|full (gpu|graphics)|on.?screen (gpu|graphics)|vulkan"),
+              ("gpu", r"gpu|graphics|video card|3d|display adapter"), ("battery", r"battery|batteries"),
               ("cpu", r"\bcpu\b|processor|cpu stress"), ("ram-modules", r"sodimms?|\bdimms?\b|memory (modules?|slots?|sticks?)|ram (modules?|slots?|sticks?)"),
               ("ram-stress", r"stressapptest|memory stress|stress the (ram|memory)"), ("ram-speed", r"memory (bandwidth|speed)|ram speed|single.channel"),
               ("ram", r"\bram\b(?! (modules?|slots?|sticks?|speed))|memory(?! (modules?|slots?|sticks?|stress|bandwidth|speed))"),
@@ -613,6 +616,7 @@ def requested_test(q):
         return ""
     hits = [t for t, rx in TEST_WORDS if re.search(rx, q, re.I)]
     hits = [h for h in hits if not (h == "ram" and any(x.startswith("ram-") for x in hits))]
+    hits = [h for h in hits if not (h == "gpu" and any(x.startswith("gpu-") for x in hits))]
     return hits[0] if len(hits) == 1 else ""
 
 
