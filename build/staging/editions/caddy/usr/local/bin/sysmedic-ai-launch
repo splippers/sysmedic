@@ -1,0 +1,9 @@
+#!/bin/bash
+# sysmedic-ai-launch — open the AI assistant that this visit's consent allows (desktop and panel use this):
+# the cloud assistant (OpenCode) if the customer agreed at boot, otherwise the offline one.
+. /etc/sysmedic/audit.sh 2>/dev/null
+audit=$(_sysmedic_audit_file 2>/dev/null || echo /run/sysmedic/audit.log)
+if grep -qs 'CONSENT cloud AI: yes' "$audit" && command -v opencode >/dev/null; then
+    SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh exec opencode
+fi
+exec /usr/local/bin/sysmedic-ask

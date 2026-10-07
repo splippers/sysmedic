@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""sysmedic-control-centre — the SysMedic Control Centre window on the desktop: the phone dashboard (scan, tests,
+BitLocker, notes, job report) in a plain window with no browser around it. Only ever loads the local dashboard."""
+import os
+import sys
+import time
+import urllib.request
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("WebKit2", "4.1")
+from gi.repository import Gdk, Gtk, WebKit2  # noqa: E402
+
+TOKEN = "/run/sysmedic/dash.token"
+
+
+def url():
+    for _ in range(20):                       # the dashboard writes its token when it starts
+        if os.path.exists(TOKEN):
+            break
+        time.sleep(0.25)
+    t = open(TOKEN).read().strip() if os.path.exists(TOKEN) else ""
+    return f"http://127.0.0.1:8080/?t={t}"
+
+
+def local_only(view, decision, kind):
+    """Stay on the dashboard: anything else (a link to the internet) isn't opened."""
+    if kind == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
+        uri = decision.get_navigation_action().get_request().get_uri()
+        if not uri.startswith(("http://127.0.0.1:8080/", "https://127.0.0.1:8443/", "about:")):
+            decision.ignore()
+            return True
+    return False
+
+
+def main():
+    Gtk.Settings.get_default().set_property("gtk-application-prefer-dark-theme", True)
+    win = Gtk.Window(title="SysMedic Control Centre")
+    win.set_default_size(1100, 760)
+    win.set_icon_name("utilities-system-monitor")
+    view = WebKit2.WebView()
+    s = view.get_settings()
+    s.set_enable_developer_extras(False)
+    s.set_property("enable-javascript", True)
+    view.set_background_color(Gdk.RGBA(0.027, 0.043, 0.078, 1))        # SysMedic Night while it loads
+    view.connect("decide-policy", local_only)
+    view.load_uri(url())
+    win.add(view)
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    try:
+        urllib.request.urlopen("http://127.0.0.1:8080/", timeout=2)
+    except Exception:  # noqa: BLE001  (the dashboard answers 403 without a token: that's fine, it's up)
+        pass
+    sys.exit(main())

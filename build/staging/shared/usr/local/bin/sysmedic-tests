@@ -5,7 +5,7 @@ One catalogue used by the console, the AI (OpenCode slash commands) and the phon
 Nothing here writes to the customer's disks: disk tests are read-only, Windows checks read a
 read-only mount.
 
-  sysmedic-tests menu                          pick a test, watch it live (menu 16)
+  sysmedic-tests menu                          pick a test, watch it live (menu 2)
   sysmedic-tests list [--json]                 the catalogue
   sysmedic-tests start TEST [--disk /dev/X] [--minutes N]
                                                start a test in the background; prints its run id

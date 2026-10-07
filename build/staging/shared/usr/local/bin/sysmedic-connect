@@ -55,7 +55,7 @@ fi
 echo ""
 echo "  ${DIM}Passwords are kept in memory only and forgotten at shutdown.${NC}"
 read -r -t 60 -p "  Press ${BOLD}Enter${NC} to choose a Wi-Fi network, or ${BOLD}s${NC} to skip (continues offline in 60 s): " a || a=s
-[ "$a" = s ] || [ "$a" = S ] && { echo ""; echo "  Continuing offline. Connect later with: wifi (or menu 2)"; sleep 2; exit 0; }
+[ "$a" = s ] || [ "$a" = S ] && { echo ""; echo "  Continuing offline. Connect later with: wifi (or menu 13)"; sleep 2; exit 0; }
 
 /usr/local/bin/wifi
 clear
@@ -65,6 +65,6 @@ if wait_online 20; then
     echo "  ${GRN}Online via $(via)${NC}"
 else
     echo "  ${YEL}Still no internet.${NC} If the network has a sign-in page (hotel, guest Wi-Fi), it can't be"
-    echo "  completed from here: use a phone hotspot instead. Try again later with: wifi (or menu 2)"
+    echo "  completed from here: use a phone hotspot instead. Try again later with: wifi (or menu 13)"
 fi
 sleep 3

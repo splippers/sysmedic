@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu>
+  <menu id="root-menu" label="SysMedic">
+    <item label="Control Centre (scan, tests, BitLocker, job report)"><action name="Execute" command="sysmedic-control-centre" /></item>
+    <item label="AI assistant"><action name="Execute" command="foot --title 'SysMedic AI assistant' sysmedic-ai-launch" /></item>
+    <separator />
+    <item label="Rescue menu (all console tools)"><action name="Execute" command="foot --title 'SysMedic rescue menu' -e /opt/sysmedic/rescue-menu.sh" /></item>
+    <item label="Tests"><action name="Execute" command="foot --title 'SysMedic tests' sysmedic-tests menu" /></item>
+    <item label="Windows check-up"><action name="Execute" command="foot --hold --title 'Windows check-up' sh -c 'sysmedic-win checkup'" /></item>
+    <item label="Graphics benchmark (on screen)"><action name="Execute" command="foot --hold --title 'Graphics benchmark' sysmedic-tests start gpu-bench" /></item>
+    <separator />
+    <item label="Files"><action name="Execute" command="thunar /" /></item>
+    <item label="Disks"><action name="Execute" command="gnome-disks" /></item>
+    <item label="Text editor"><action name="Execute" command="mousepad" /></item>
+    <item label="Terminal"><action name="Execute" command="foot" /></item>
+    <separator />
+    <item label="Back to the console"><action name="Exit" /></item>
+  </menu>
+</openbox_menu>

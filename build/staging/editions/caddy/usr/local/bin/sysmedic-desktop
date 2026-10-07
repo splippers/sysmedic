@@ -1,0 +1,37 @@
+#!/bin/bash
+# sysmedic-desktop — SysMedic's graphical desktop (menu G): windows, mouse, a panel, the Control Centre.
+# Optional and separate: the consoles keep working (Ctrl+Alt+F1/F2). Quitting (panel ⏻ or right-click → Back to
+# the console) returns to the rescue menu. Disk writes stay behind the kernel write protection, as everywhere.
+set -u
+. /usr/local/lib/sysmedic/ui.sh 2>/dev/null
+CONF=/etc/sysmedic/desktop
+[ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
+
+mem_gb=$(( ($(awk '/MemTotal/ {print $2}' /proc/meminfo) + 524288) / 1048576 ))
+if [ "$mem_gb" -lt 4 ]; then
+    ui_warn "The desktop needs 4 GB RAM; this machine has ${mem_gb} GB" "the console tools do everything the desktop does"
+    sleep 4; exit 1
+fi
+if ! ls /dev/dri/card* >/dev/null 2>&1; then
+    ui_warn "No graphics device (/dev/dri) for the desktop" "the console tools do everything the desktop does"
+    sleep 4; exit 1
+fi
+command -v labwc >/dev/null || { ui_warn "labwc isn't installed on this drive"; sleep 3; exit 1; }
+
+# The Control Centre is the phone dashboard on this screen: make sure it's serving
+curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8080/ 2>/dev/null || \
+    setsid -f /usr/local/bin/sysmedic-dash --serve >/dev/null 2>&1 </dev/null
+
+clear
+ui_run "Starting the desktop…" "quit from the panel's ⏻ or the right-click menu; Ctrl+Alt+F1/F2 are the consoles"
+. /etc/sysmedic/audit.sh 2>/dev/null
+printf '%s [desktop] started\n' "$(date -Is)" >> "$(_sysmedic_audit_file 2>/dev/null || echo /run/sysmedic/audit.log)" 2>/dev/null
+mkdir -p -m 700 /run/user/0
+# app settings live in RAM for this session (foot, fuzzel from SysMedic's; GTK apps write theirs here, not /etc)
+rm -rf /run/user/0/sysmedic-config; mkdir -p /run/user/0/sysmedic-config
+cp -a "$CONF/foot" "$CONF/fuzzel" /run/user/0/sysmedic-config/
+before=$(fgconsole 2>/dev/null)
+openvt -s -w -- sh -c "LIBSEAT_BACKEND=builtin XDG_RUNTIME_DIR=/run/user/0 WLR_RENDERER_ALLOW_SOFTWARE=1 \
+    labwc -C $CONF/labwc >/run/sysmedic/desktop.log 2>&1"
+[ -n "$before" ] && chvt "$before"
+printf '%s [desktop] closed\n' "$(date -Is)" >> "$(_sysmedic_audit_file 2>/dev/null || echo /run/sysmedic/audit.log)" 2>/dev/null

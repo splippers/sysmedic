@@ -1,0 +1,18 @@
+# SysMedic Night window decorations
+border.width: 1
+window.active.border.color: #22d3ee
+window.inactive.border.color: #1b2840
+window.active.title.bg.color: #0d1524
+window.inactive.title.bg.color: #0a111e
+window.active.label.text.color: #67e8f9
+window.inactive.label.text.color: #6b7a93
+window.active.button.unpressed.image.color: #c5d1e6
+window.inactive.button.unpressed.image.color: #6b7a93
+menu.items.bg.color: #0d1524
+menu.items.text.color: #c5d1e6
+menu.items.active.bg.color: #22d3ee
+menu.items.active.text.color: #041018
+menu.separator.color: #1b2840
+osd.bg.color: #0d1524
+osd.border.color: #22d3ee
+osd.label.text.color: #c5d1e6

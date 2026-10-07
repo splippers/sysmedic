@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """menuview — the rescue menu's screen: a machine summary, then the options as grouped cards.
 
-The menu (opt/sysmedic/rescue-menu.sh) keeps the actions; this only draws. Option numbers never change (the
-guides and messages refer to "menu 16", "menu 17", "menu U").
+The menu (opt/sysmedic/rescue-menu.sh) keeps the actions; this only draws. Options are numbered in reading order
+(card by card); the guides and messages quote these numbers ("menu 2" = tests), so change them together.
 """
 import json
 import os
@@ -18,15 +18,16 @@ EDITION = open("/etc/sysmedic/edition").read().strip() if os.path.exists("/etc/s
 VERSION = open("/etc/sysmedic/version").read().strip() if os.path.exists("/etc/sysmedic/version") else "dev"
 
 CARDS = [
-    ("Diagnose & test", [("4", "Triage scan (read-only)"), ("16", "Tests: hardware & software"),
-                         ("13", "Job report for the customer"), ("14", "Phone dashboard (QR code)")]),
-    ("AI", [("1", "AI rescue assistant (OpenCode)"), ("17", "Repair the AI assistant")]),
-    ("Windows & disks", [("6", "Windows tools: BitLocker, crashes…"), ("11", "Unlock a partition for repair"),
-                         ("12", "Write-protect all disks again"), ("8", "Back up data")]),
-    ("Other systems", [("5", "Fix Linux boot (GRUB/initramfs)"), ("7", "Fix macOS (HFS+/APFS)")]),
-    ("Connect & save", [("2", "Wi-Fi"), ("3", "Save extra logs to this session")]
+    ("Diagnose & test", [("1", "Triage scan (read-only)"), ("2", "Tests: hardware & software"),
+                         ("3", "Job report for the customer"), ("4", "Phone dashboard (QR code)")]),
+    ("AI", [("5", "AI rescue assistant (OpenCode)"), ("6", "Repair the AI assistant")]),
+    ("Windows & disks", [("7", "Windows tools: BitLocker, crashes…"), ("8", "Unlock a partition for repair"),
+                         ("9", "Write-protect all disks again"), ("10", "Back up data")]),
+    ("Other systems", [("11", "Fix Linux boot (GRUB/initramfs)"), ("12", "Fix macOS (HFS+/APFS)")]),
+    ("Connect & save", [("13", "Wi-Fi"), ("14", "Save extra logs to this session")]
      + ([("U", "Update SysMedic (from GitHub)")] if EDITION == "caddy" else [])),
-    ("Tools & power", [("15", "Advanced toolkit"), ("9", "Shell (type exit to return)"), ("10", "Reboot"), ("0", "Shut down")]),
+    ("Desktop & tools", ([("G", "Graphical desktop (windows & mouse)")] if shutil.which("labwc") else [])
+     + [("15", "Advanced toolkit"), ("16", "Shell (type exit to return)"), ("17", "Reboot"), ("0", "Shut down")]),
 ]
 
 

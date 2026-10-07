@@ -15,42 +15,42 @@ while true; do
     python3 /usr/local/lib/sysmedic/menuview.py 2>/dev/null || {
         echo "  SysMedic rescue menu (v${VERSION}): 1 AI · 2 Wi-Fi · 3 save logs · 4 scan · 5 Linux boot · 6 Windows · 7 macOS"
         echo "  8 backup · 9 shell · 10 reboot · 11 unlock · 12 protect · 13 report · 14 phone · 15 toolkit · 16 tests · 17 repair AI · 0 off"; }
-    [ "$EDITION" = caddy ] && orU=" or U" || orU=""
-    echo -ne "  ${CYAN}❯${NC} Choose a number${orU}: "
+    keys=""; command -v labwc >/dev/null && keys="G"; [ "$EDITION" = caddy ] && keys="${keys:+$keys, }U"
+    echo -ne "  ${CYAN}❯${NC} Choose a number${keys:+ or $keys}: "
     read choice
     echo ""
     
     case "$choice" in
-        1)
+        5)
             clear
             if command -v opencode &>/dev/null; then
                 t0=$(date +%s)
                 SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode
                 rc=$?
                 [ "$rc" != 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ] && \
-                    { echo ""; echo "  OpenCode stopped straight away (exit $rc). Repair it with option 17."; read -p "  Press Enter..."; }
+                    { echo ""; echo "  OpenCode stopped straight away (exit $rc). Repair it with option 6."; read -p "  Press Enter..."; }
             else
                 echo "OpenCode not found"
                 read -p "Press Enter..."
             fi
             ;;
-        2)
+        13)
             clear
             /usr/local/bin/wifi
             read -p "Press Enter..."
             ;;
-        3)
+        14)
             clear
             [ -x "/opt/sysmedic/scripts/sync-back.sh" ] && /opt/sysmedic/scripts/sync-back.sh || echo "sync-back script not found"
             read -p "Press Enter..."
             ;;
-        4)
+        1)
             clear
             /usr/local/bin/sysmedic-scan
             echo ""
             read -p "Press Enter..."
             ;;
-        5)
+        11)
             clear
             ui_banner "Linux boot repair" "writes to the customer's disk: unlock the partition first on Alt+F2 (sysmedic-unlock)"
             ui_section "Repairs"
@@ -69,7 +69,7 @@ while true; do
             esac
             pause
             ;;
-        6)
+        7)
             while true; do
                 clear
                 ui_banner "Windows tools" "read-only unless noted · works on the offline installation"
@@ -122,7 +122,7 @@ while true; do
                 pause
             done
             ;;
-        7)
+        12)
             clear
             ui_banner "macOS" "HFS+ and APFS"
             ui_section "HFS+ (older Macs)"
@@ -131,7 +131,7 @@ while true; do
             ui_info "Read with apfs-fuse, or repair from macOS Recovery" "Cmd+R at boot on Intel Macs; hold the power button on Apple silicon"
             pause
             ;;
-        8)
+        10)
             clear
             ui_banner "Back up data" "copies the customer's files to SysMedic's drive before any repair"
             if mountpoint -q /mnt/persist; then
@@ -145,17 +145,17 @@ while true; do
             fi
             pause
             ;;
-        9)
+        16)
             clear
             echo -e "${YELLOW}Dropping to shell. Type 'exit' or 'menu' to return.${NC}\n"
             cd /
             bash
             ;;
-        10)
+        17)
             echo "Rebooting..."
             reboot
             ;;
-        11)
+        8)
             clear
             /usr/local/sbin/sysmedic-guard status
             echo ""
@@ -163,16 +163,16 @@ while true; do
             [ -n "$dev" ] && /usr/local/sbin/sysmedic-unlock "$dev"
             read -p "Press Enter..."
             ;;
-        12)
+        9)
             clear
             /usr/local/sbin/sysmedic-lock
             read -p "Press Enter..."
             ;;
-        13)
+        3)
             clear
             /usr/local/bin/sysmedic-report --print | less -R
             ;;
-        14)
+        4)
             clear
             /usr/local/bin/sysmedic-dash
             read -p "Press Enter..."
@@ -190,14 +190,21 @@ while true; do
                 read -p "  Press Enter..."
             fi
             ;;
-        16)
+        2)
             clear
             /usr/local/bin/sysmedic-tests menu
             ;;
-        17)
+        6)
             clear
             /usr/local/bin/sysmedic-ai-repair
             read -p "  Press Enter..."
+            ;;
+        g|G)
+            if command -v labwc >/dev/null && [ -x /usr/local/bin/sysmedic-desktop ]; then
+                /usr/local/bin/sysmedic-desktop
+            else
+                clear; ui_info "The graphical desktop isn't on this drive" "it's on the caddy edition; this drive has the console tools"; pause
+            fi
             ;;
         u|U)
             clear

@@ -365,7 +365,7 @@ def inspect_linux(target, label, known_ids):
             sev = "info" if "nofail" in opts or "noauto" in opts else "critical"
             find(sev, "boot", f"{name} ({label}): /etc/fstab mounts {spec} on {mnt}, but no such disk exists",
                  "Boot will stop at an emergency shell waiting for it." if sev == "critical" else "Marked nofail/noauto, so it won't block boot.",
-                 "Menu 5 → Fix /etc/fstab, or correct the UUID (compare with 'lsblk -f').")
+                 "Menu 11 → Fix /etc/fstab, or correct the UUID (compare with 'lsblk -f').")
     return result
 
 
@@ -378,9 +378,9 @@ def inspect_linux_boot(boot, label):
         if not initrd.exists() or initrd.stat().st_size == 0:
             find("critical", "boot", f"{label}: kernel {ver} has no initramfs",
                  "Booting this kernel ends in a kernel panic (\"unable to mount root fs\").",
-                 "Menu 5 → Fix corrupt initramfs (update-initramfs in a chroot).")
+                 "Menu 11 → Fix corrupt initramfs (update-initramfs in a chroot).")
     if kernels and not (boot / "grub/grub.cfg").exists():
-        find("warning", "boot", f"{label}: kernels present but no grub.cfg", "", "Menu 5 → Fix GRUB bootloader.")
+        find("warning", "boot", f"{label}: kernels present but no grub.cfg", "", "Menu 11 → Fix GRUB bootloader.")
 
 
 def windows_version(target):
@@ -552,7 +552,7 @@ def assess_boot(fsresults, system):
         names = {n.lower() for e in esps for n in e.get("loaders", {})}
         if not names - {"boot", "microsoft"}:
             find("warning", "boot", "Linux is installed but no Linux bootloader (GRUB/shim) is on the EFI partition",
-                 "", "Menu 5 → Fix GRUB bootloader.")
+                 "", "Menu 11 → Fix GRUB bootloader.")
     if system["firmware"] == "UEFI":
         rc, out, _ = run(["efibootmgr"])
         entries = re.findall(r"^Boot([0-9A-F]{4})\*?\s+(.+)$", out, re.M)

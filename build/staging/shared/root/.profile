@@ -116,7 +116,7 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
         rc=$?
         if [ "$rc" != 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ]; then
             echo ''
-            echo "  OpenCode stopped straight away (exit $rc). Repair it: sysmedic-ai-repair (menu 17), then type: opencode"
+            echo "  OpenCode stopped straight away (exit $rc). Repair it: sysmedic-ai-repair (menu 6), then type: opencode"
         fi
         # Keep the cloud AI conversation with this visit (for the transcript bundle)
         sd=$(readlink -f /run/sysmedic/latest 2>/dev/null)

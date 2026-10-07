@@ -31,7 +31,7 @@ Read-only by design: filesystems are mounted `ro` (ext4 with `noload`, so even t
 | Network | Adapters and drivers, internet reachability, **"internet works but DNS is broken"**, Wi-Fi adapters without a driver, **drivers that couldn't load their firmware** |
 | Safety | Which customer disks are write-protected or unlocked |
 
-Re-run any time: `sysmedic-scan` (or menu 4). The job report compares the first and last scan.
+Re-run any time: `sysmedic-scan` (or menu 1). The job report compares the first and last scan.
 
 ## 3. Safety layer
 
@@ -50,7 +50,7 @@ Details: [AI-ASSISTANTS](AI-ASSISTANTS.md)
 - **Offline: `sysmedic-ask`** (Ollama, `qwen2.5:7b` on 12 GB+ RAM, otherwise `qwen2.5:3b`). The short prompt is pre-loaded at boot, so the first answer takes about a minute on CPU. Read-only commands run straight away with **full output streamed live on the console**; others ask (Enter = yes). Commands the model writes in its text need an explicit `y`. There's a time limit per command, and Ctrl-C stops just the current command.
 - Both know which edition they're on, the field lessons, and the tool list. They record limitations with `sysmedic-note --feedback`.
 
-## 5. Windows (`sysmedic-win`, menu 6)
+## 5. Windows (`sysmedic-win`, menu 7)
 
 Details: [WINDOWS-AND-BITLOCKER](WINDOWS-AND-BITLOCKER.md)
 
@@ -59,7 +59,7 @@ Details: [WINDOWS-AND-BITLOCKER](WINDOWS-AND-BITLOCKER.md)
 - Engineer only: `bitlocker` (48-digit recovery key or password; read-only unless `--rw`), `bitlocker-web` (the key typed on a phone/laptop on the same network: HTTPS, secret QR link, read-only, self-stopping), `fix-update`, `fix-hibernation`, `reset-password` (local accounts, `chntpw`).
 - Also: chntpw, hivex tools, evtxexport, cabextract, ntfs-3g/ntfsfix, wimlib **(caddy)**, dislocker.
 
-## 6. Hardware testing (`sysmedic-hwtest`, menu 16)
+## 6. Hardware testing (`sysmedic-hwtest`, menu 2)
 
 Details: [HARDWARE-TESTING](HARDWARE-TESTING.md)
 
@@ -73,7 +73,7 @@ Tools: stress-ng, s-tui, stress, sysbench, memtester, MemTest86+, rasdaemon, eda
 
 Details: [NETWORK](NETWORK.md)
 
-- **Wi-Fi:** offered on the first screen at boot (`sysmedic-connect`); later `wifi` / menu 2 runs NetworkManager's `nmtui` picker. Networks and passwords are kept in RAM only (forgotten at shutdown, caddy included).
+- **Wi-Fi:** offered on the first screen at boot (`sysmedic-connect`); later `wifi` / menu 13 runs NetworkManager's `nmtui` picker. Networks and passwords are kept in RAM only (forgotten at shutdown, caddy included).
 - **Diagnosis:** ping, arping, tracepath, traceroute, mtr, dig, nslookup, whois, ip, ss, ethtool, iw, nmcli, wavemon, iperf3/iperf, speedtest-cli, curl, fping, hping3.
 - **Capture:** tcpdump, tshark, termshark, ngrep, iftop, nload, bmon, nethogs, iptraf-ng.
 - **LAN and services:** nmap, ncat, arp-scan, nbtscan, avahi-utils, smbclient, cifs-utils, nfs-common, snmp, lldpd, ndisc6, ipcalc, sipcalc, lftp, tnftp, telnet, tftp-hpa, socat, netcat, bridge-utils, vlan, hostapd, dnsmasq-base.
@@ -85,8 +85,8 @@ Details: [NETWORK](NETWORK.md)
 
 - Both: ddrescue, testdisk, photorec, sgdisk/gdisk, sfdisk, mdadm, lvm2, cryptsetup, e2fsprogs, ntfs-3g, exfatprogs, dosfstools, hfsprogs (`fsck.hfsplus`).
 - **(caddy):** safecopy, fsarchiver, partclone (OS image capture/restore in the advanced toolkit), ext4magic, extundelete, foremost, scalpel, nwipe (certified wipe), btrfs-progs, xfsprogs, f2fs-tools, APFS read-only (`fsapfsmount`, `apfsck`), dislocker.
-- Linux boot repair scripts (menu 5): GRUB, initramfs, fstab, oversized `/boot`.
-- macOS (menu 7, and in the caddy's advanced toolkit): HFS+ read-write, APFS read-only, data recovery.
+- Linux boot repair scripts (menu 11): GRUB, initramfs, fstab, oversized `/boot`.
+- macOS (menu 12, and in the caddy's advanced toolkit): HFS+ read-write, APFS read-only, data recovery.
 
 ## 9. Malware and security
 
@@ -96,9 +96,9 @@ Details: [NETWORK](NETWORK.md)
 
 ## 10. Job workflow
 
-- **Job report** (`sysmedic-report`, menu 13): a self-contained HTML report (print to PDF) plus text: summary, job and machine, fixed / still needs attention, work performed (from the audit trail), AI use and consent, hardware test results, backups, notes, signatures, and the full audit trail.
+- **Job report** (`sysmedic-report`, menu 3): a self-contained HTML report (print to PDF) plus text: summary, job and machine, fixed / still needs attention, work performed (from the audit trail), AI use and consent, hardware test results, backups, notes, signatures, and the full audit trail.
 - **Notes:** `sysmedic-note "…"`; job details with `sysmedic-note --job customer=… job_ref=… engineer=… contact=… complaint=…`.
-- **Phone dashboard** (`sysmedic-dash`, menu 14): QR code on tty2. Live status and findings, write protection, the job form, notes, and generating/downloading the report. Token-protected; **no repairs or unlocks**.
+- **Phone dashboard** (`sysmedic-dash`, menu 4): QR code on tty2. Live status and findings, write protection, the job form, notes, and generating/downloading the report. Token-protected; **no repairs or unlocks**.
 - **Session folder** per boot (`/mnt/persist/sessions/<time>-<model>/`): scans, audit log, job, report, backups, AI conversations.
 
 ## 11. Improving SysMedic

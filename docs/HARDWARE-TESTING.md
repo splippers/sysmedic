@@ -1,4 +1,4 @@
-# Testing (`sysmedic-tests`, menu 16, OpenCode slash commands, phone dashboard)
+# Testing (`sysmedic-tests`, menu 2, OpenCode slash commands, phone dashboard)
 
 ## Every test, three ways to run it
 
@@ -8,9 +8,9 @@
 |---|---|
 | **The AI (OpenCode)** | Type `/` for the menu: `/health`, `/cpu-stress`, `/ram-test`, `/ram-modules`, `/ram-stress`, `/ram-speed`, `/disk-test`, `/surface-scan`, `/gpu-test`, `/battery`, `/inventory`, `/input-test`, `/audio-test`, `/scan`, `/network-check`, `/windows-checkup`, `/windows-events`, `/windows-registry`, `/windows-updates`, `/windows-crashes`, `/autoruns`, `/malware-scan`, plus **`/full-check`** (health, scan, battery, network, Windows check-up), **`/tests`** (the list) and **`/test-status`**. The AI starts the test, waits, and explains the result |
 | **The phone** | The dashboard's **Tests** card (QR code on console 2): Run buttons, a disk picker, live output, Stop |
-| **The console** | Menu 16 (`sysmedic-tests menu`): pick a test and watch it live; or `sysmedic-tests start TEST [--disk /dev/X] [--minutes N]`, `status`, `log TEST`, `wait TEST`, `stop TEST|all`, `list`, `disks` |
+| **The console** | Menu 2 (`sysmedic-tests menu`): pick a test and watch it live; or `sysmedic-tests start TEST [--disk /dev/X] [--minutes N]`, `status`, `log TEST`, `wait TEST`, `stop TEST|all`, `list`, `disks` |
 
-Tests that need a person: **input** (press keys, move and click for 60 s: the events appear on screen or the phone) and **audio** (listen to left/right, speak when it records). Long tests (RAM, surface scan, malware scan) keep running in the background; check them with `/test-status`, menu 16 → s, or the phone. A full RAM test is MemTest86+ from the boot menu.
+Tests that need a person: **input** (press keys, move and click for 60 s: the events appear on screen or the phone) and **audio** (listen to left/right, speak when it records). Long tests (RAM, surface scan, malware scan) keep running in the background; check them with `/test-status`, menu 2 → s, or the phone. A full RAM test is MemTest86+ from the boot menu.
 
 ## The hardware tools (`sysmedic-hwtest`)
 

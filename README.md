@@ -44,7 +44,7 @@ Full list: **[docs/CAPABILITIES.md](docs/CAPABILITIES.md)**
 2. Read the **triage scan**. Answer the cloud-AI consent question. Press Enter to start the assistant.
 3. **Console 2** (`Alt+F2`) is your engineer console. Unlock partitions, BitLocker and repairs happen here. Its banner lists the BitLocker volumes found, with the exact command to type.
 4. `menu` opens the rescue menu: Wi-Fi (2), triage (4), Windows tools (6), unlock/lock (11/12), job report (13), phone dashboard (14), hardware tests (16).
-5. Finish with `sysmedic-lock`, the **job report** (menu 13), and a clean shutdown.
+5. Finish with `sysmedic-lock`, the **job report** (menu 3), and a clean shutdown.
 
 Step by step: **[docs/FIELD-GUIDE.md](docs/FIELD-GUIDE.md)**. On the drive itself: `sysmedic-help`.
 

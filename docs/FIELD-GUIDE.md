@@ -78,7 +78,7 @@ Low RAM: the cloud AI needs 4 GB and an AVX-capable CPU, and the offline AI need
    sysmedic-note --job customer="Acme Ltd" job_ref=J-1042 engineer=Sam complaint="Won't finish updating"
    sysmedic-note "Advised RAM check: two WHEA crashes this week"
    ```
-8. **Job report:** menu 13 (or `sysmedic-report`). It re-scans, then writes `report.html` and `report.txt`, to open on the phone dashboard or print to PDF.
+8. **Job report:** menu 3 (or `sysmedic-report`). It re-scans, then writes `report.html` and `report.txt`, to open on the phone dashboard or print to PDF.
 9. **Shut down cleanly** (menu 0). The visit is bundled into `claude-review.md`.
 
 ## 7. BitLocker
@@ -91,11 +91,11 @@ Type that line, then the **48-digit recovery key** (8 groups of 6 digits; dashes
 
 **From your phone:** the dashboard (QR code on console 2) has a **BitLocker** card: tap **Unlock from this phone** and type the key on the secure page it opens.
 
-**Key with someone else?** Run `sysmedic-win bitlocker-web` (menu 6 → w). The customer or their IT admin scans the QR code with a phone or laptop on the same network and types the key there. It's HTTPS with a secret link, unlocks read-only, and stops by itself after unlocking, 5 wrong keys or 15 minutes.
+**Key with someone else?** Run `sysmedic-win bitlocker-web` (menu 7 → w). The customer or their IT admin scans the QR code with a phone or laptop on the same network and types the key there. It's HTTPS with a secret link, unlocks read-only, and stops by itself after unlocking, 5 wrong keys or 15 minutes.
 
 ## 8. Wi-Fi
 
-The first screen at boot offers Wi-Fi. Later, `wifi` (menu 2) opens NetworkManager's picker: choose the network, type the password, press Esc to leave. Networks and passwords are kept in memory only and forgotten at shutdown; nothing is saved on the drive. WPS isn't supported. If no Wi-Fi adapter appears, the scan says why (usually a missing driver or firmware); use Ethernet or phone tethering.
+The first screen at boot offers Wi-Fi. Later, `wifi` (menu 13) opens NetworkManager's picker: choose the network, type the password, press Esc to leave. Networks and passwords are kept in memory only and forgotten at shutdown; nothing is saved on the drive. WPS isn't supported. If no Wi-Fi adapter appears, the scan says why (usually a missing driver or firmware); use Ethernet or phone tethering.
 
 ## 9. Phone dashboard
 

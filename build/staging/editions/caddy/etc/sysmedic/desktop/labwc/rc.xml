@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!-- SysMedic desktop (labwc). Shortcuts: Super+Return terminal · Super+Space launcher · Super+C Control Centre
+     · Super+A AI assistant · Super+E files · Alt+Tab switch windows · right-click the desktop for everything -->
+<labwc_config>
+  <core><gap>6</gap></core>
+  <theme>
+    <name></name>
+    <cornerRadius>8</cornerRadius>
+    <font place="ActiveWindow"><name>DejaVu Sans</name><size>10</size><weight>bold</weight></font>
+    <font place="InactiveWindow"><name>DejaVu Sans</name><size>10</size></font>
+    <font place="MenuItem"><name>DejaVu Sans</name><size>11</size></font>
+  </theme>
+  <placement><policy>center</policy></placement>
+  <keyboard>
+    <default />
+    <keybind key="W-Return"><action name="Execute" command="foot" /></keybind>
+    <keybind key="W-space"><action name="Execute" command="fuzzel" /></keybind>
+    <keybind key="W-c"><action name="Execute" command="sysmedic-control-centre" /></keybind>
+    <keybind key="W-a"><action name="Execute" command="foot --title 'SysMedic AI assistant' sysmedic-ai-launch" /></keybind>
+    <keybind key="W-e"><action name="Execute" command="thunar /" /></keybind>
+    <keybind key="W-Up"><action name="ToggleMaximize" /></keybind>
+  </keyboard>
+  <mouse><default /></mouse>
+  <windowRules>
+    <windowRule identifier="sysmedic-control-centre" title="SysMedic Control Centre"><action name="Maximize" /></windowRule>
+  </windowRules>
+</labwc_config>

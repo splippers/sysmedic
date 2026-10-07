@@ -1,4 +1,4 @@
-# Windows and BitLocker (`sysmedic-win`, menu 6)
+# Windows and BitLocker (`sysmedic-win`, menu 7)
 
 Works on an offline Windows installation from SysMedic. Without a partition argument, every Windows installation found is used.
 
@@ -17,7 +17,7 @@ The boot scan includes the important parts of all of these automatically.
 
 ## Deep troubleshooting: event logs, registry, servicing
 
-For "what's wrong with this Windows", start with **`sysmedic-win checkup`** (menu 6 → c). It runs everything below plus `info`, `crashes` and `autoruns`, prints it, and saves it as `windows-checkup-<partition>.md` in the session folder. From there it goes into the job report and the review bundle. All of it is read-only.
+For "what's wrong with this Windows", start with **`sysmedic-win checkup`** (menu 7 → c). It runs everything below plus `info`, `crashes` and `autoruns`, prints it, and saves it as `windows-checkup-<partition>.md` in the session folder. From there it goes into the job report and the review bundle. All of it is read-only.
 
 | Command | Reads | Finds |
 |---|---|---|
@@ -64,7 +64,7 @@ For "what's wrong with this Windows", start with **`sysmedic-win checkup`** (men
 
 All repairs need the partition unlocked first (`sysmedic-unlock`), and they say so if you forget. A hibernated volume silently mounts read-only under ntfs-3g; SysMedic detects this and tells you to run `fix-hibernation` first.
 
-## BitLocker from a phone or laptop (`sysmedic-win bitlocker-web`, menu 6 → w, or the phone dashboard)
+## BitLocker from a phone or laptop (`sysmedic-win bitlocker-web`, menu 7 → w, or the phone dashboard)
 
 **From the phone dashboard (one QR code for everything):** when the machine has BitLocker volumes, the dashboard shows a **BitLocker** card with each volume locked or unlocked and an **Unlock from this phone** button. It starts the encrypted unlock page and opens it on the phone; the key is typed there, never on the dashboard (which is plain HTTP). The AI can't use this: it's blocked from the dashboard's secret and its BitLocker endpoint.
 

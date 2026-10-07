@@ -2,7 +2,7 @@
 # sysmedic-ai-repair — put the AI assistants (OpenCode and the offline Ollama/Qwen) back to a known-good state.
 # Safe any time: it never touches customer disks or the visit's records (the current AI conversation is
 # saved into the session first).
-#   sysmedic-ai-repair           repair, then self-check            (menu 17)
+#   sysmedic-ai-repair           repair, then self-check            (menu 6)
 #   sysmedic-ai-repair --check   self-check only
 set -u
 GOOD=/usr/local/share/sysmedic/opencode          # known-good copies, installed by sysmedic-deploy
@@ -49,7 +49,7 @@ PY
 
 if [ "${1:-}" = --check ]; then
     echo; check; echo
-    [ $FAILS = 0 ] && echo "  ${G}All good.${N}" || echo "  ${Y}$FAILS problem(s). Run sysmedic-ai-repair (menu 17) to fix.${N}"
+    [ $FAILS = 0 ] && echo "  ${G}All good.${N}" || echo "  ${Y}$FAILS problem(s). Run sysmedic-ai-repair (menu 6) to fix.${N}"
     exit $((FAILS > 0))
 fi
 

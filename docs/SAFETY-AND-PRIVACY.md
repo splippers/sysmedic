@@ -10,7 +10,7 @@ SysMedic works as root on other people's computers, with an AI assistant. This i
 
 ### Unlocking
 
-`sysmedic-unlock /dev/X` (console 2, or menu 11):
+`sysmedic-unlock /dev/X` (console 2, or menu 8):
 1. **It refuses** if called by the AI (`SYSMEDIC_AI` set, or OpenCode/sysmedic-ask/Ollama as an ancestor process), or if not on a real console (a recorded console is accepted only after checking, via `/proc`, that its recorder sits on a VT).
 2. It asks **why** (goes in the audit log) and for the **device name typed back**.
 3. It **backs up first** into the session's `backups/`: the partition table (`sfdisk -d`), ext4 metadata (`e2image -Q`), NTFS metadata (`ntfsclone --metadata`), or a full zstd copy of FAT/small partitions.

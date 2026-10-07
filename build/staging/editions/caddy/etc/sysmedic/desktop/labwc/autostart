@@ -1,0 +1,4 @@
+# SysMedic desktop: background, panel, and the Control Centre to start with
+swaybg -c '#070b14' >/dev/null 2>&1 &
+waybar -c /etc/sysmedic/desktop/waybar/config.jsonc -s /etc/sysmedic/desktop/waybar/style.css >/dev/null 2>&1 &
+sysmedic-control-centre >/dev/null 2>&1 &
