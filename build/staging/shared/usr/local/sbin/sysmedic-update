@@ -172,8 +172,14 @@ def cmd_apply(yes=False):
     with tempfile.NamedTemporaryFile(suffix=".tar.gz") as t:
         t.write(data)
         t.flush()
-        with tarfile.open(t.name) as tf:
-            tf.extractall(dest, filter="data")
+        try:
+            with tarfile.open(t.name) as tf:
+                tf.extractall(dest, filter="tar")     # nothing may land outside dest, not even through a symlink
+        except (tarfile.TarError, OSError) as e:
+            print(f"  {R}The bundle couldn't be unpacked safely: {e}. Not installing.{N}")
+            audit(f"REFUSED {m['tag']}: unpack failed ({e})")
+            shutil.rmtree(dest, ignore_errors=True)
+            return 1
     open(os.path.join(dest, "manifest.json"), "wb").write(raw)
     prev = os.path.realpath(os.path.join(STORE, "current")) if os.path.islink(os.path.join(STORE, "current")) else ""
     audit(f"installing {m['tag']} (v{m['version']})")
