@@ -210,6 +210,16 @@ install_caddy_extras() {
         printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
     sudo mkdir -p "$root/etc/systemd/system/sysinit.target.wants"
     sudo ln -sf /etc/systemd/system/sysmedic-persist.service "$root/etc/systemd/system/sysinit.target.wants/sysmedic-persist.service"
+    # Offline AI on a discrete GPU: Ollama's Vulkan backend, only if it matches the caddy's Ollama exactly
+    local obin olib; obin=$( [ -x downloads/ollama/bin/ollama ] && echo downloads/ollama/bin/ollama || echo /usr/local/bin/ollama )
+    olib=$( [ -d downloads/ollama/lib/ollama ] && echo downloads/ollama/lib/ollama || echo /usr/local/lib/ollama )
+    if [ -d "$olib/vulkan" ] && [ -f "$root/srv/sysmedic/ollama/bin/ollama" ]; then
+        if sudo cmp -s "$obin" "$root/srv/sysmedic/ollama/bin/ollama"; then
+            sudo rsync -a --delete "$olib/vulkan/" "$root/srv/sysmedic/ollama/lib/ollama/vulkan/"
+        else
+            say "The caddy's Ollama differs from this kit's: GPU backend not added (the AI stays on the CPU)"
+        fi
+    fi
     # Offline AI: Qwen only (anything else in the store is removed, with blobs no Qwen manifest uses)
     pruned=$(sudo python3 - "$root/srv/sysmedic/ollama/models" <<'PY'
 import json, os, sys, shutil

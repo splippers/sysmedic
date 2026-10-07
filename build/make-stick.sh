@@ -40,7 +40,8 @@ sudo mount "$PART" pmnt
 P=pmnt
 sudo mkdir -p $P/{logs,backups,sessions} $P/ollama/{bin,lib/ollama} $P/ollama/models/blobs
 sudo cp "$OLLAMA_BIN" $P/ollama/bin/
-sudo cp -a "$OLLAMA_LIB"/libggml-*.so* $P/ollama/lib/ollama/   # CPU backends only
+sudo cp -a "$OLLAMA_LIB"/libggml-*.so* $P/ollama/lib/ollama/   # CPU backends
+[ -d "$OLLAMA_LIB/vulkan" ] && sudo cp -a "$OLLAMA_LIB/vulkan" $P/ollama/lib/ollama/   # discrete GPUs (sysmedic-ai-device decides)
 
 for m in $MODELS; do
     name=${m%:*} tag=${m#*:}

@@ -11,6 +11,8 @@ export OLLAMA_KEEP_ALIVE=30m
 export OLLAMA_CONTEXT_LENGTH=16384   # OpenCode system prompt + SysMedic instructions need more than the default
 export OLLAMA_FLASH_ATTENTION=1
 export OLLAMA_KV_CACHE_TYPE=q8_0
+# A discrete GPU (Vulkan) if there is a good one, else the CPU; sysmedic-ai-device records the choice and why
+eval "$(/usr/local/sbin/sysmedic-ai-device detect 2>/dev/null || echo 'export OLLAMA_VULKAN=0')"
 mkdir -p /mnt/persist/logs
 # Own session: Ctrl-C in the console (e.g. quitting OpenCode) must not reach Ollama
 setsid -f "$OLLAMA_DIR/bin/ollama" serve >>/mnt/persist/logs/ollama.log 2>&1 </dev/null

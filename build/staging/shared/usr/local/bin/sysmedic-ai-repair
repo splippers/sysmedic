@@ -39,6 +39,7 @@ PY
     if curl -sf --max-time 3 http://127.0.0.1:11434/api/version >/dev/null; then
         local models; models=$(curl -sf --max-time 5 http://127.0.0.1:11434/api/tags | python3 -c "import json,sys; print(' '.join(m['name'] for m in json.load(sys.stdin)['models']))" 2>/dev/null)
         case "$models" in *qwen2.5*) ok "Offline AI running ($models)" ;; *) bad "Offline AI running but no Qwen model found" ;; esac
+        note "$(/usr/local/sbin/sysmedic-ai-device status 2>/dev/null | sed 's/^ *//')"
     else
         bad "Offline AI (Ollama) not running"
     fi
@@ -72,6 +73,7 @@ pkill -9 -x ollama 2>/dev/null
 ok "stopped"
 
 step "3. Clearing OpenCode's state (caches, database, locks)"
+rm -f /run/sysmedic/ai-gpu-failed /run/sysmedic/ai-device.json   # re-decide GPU or CPU on restart
 rm -rf /root/.local/share/opencode /root/.cache/opencode /root/.local/state/opencode/locks \
        /root/.local/state/opencode/model.json /tmp/opencode 2>/dev/null
 mkdir -p /root/.local/state/opencode

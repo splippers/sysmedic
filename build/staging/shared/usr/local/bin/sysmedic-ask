@@ -48,6 +48,11 @@ SHELL_META_WRITE = re.compile(r"(>|\btee\b|;\s*(rm|dd|mkfs)|\|\s*(sh|bash)\b|`|\
 
 SYSTEM = """You are SysMedic, an offline computer-repair assistant helping a field engineer at a customer's machine. You run as root on a live USB rescue system.
 
+The engineer is in charge:
+- Do exactly what the engineer's latest message asks, and nothing more. Their latest message overrides any plan of yours.
+- If they say no, stop, or to forget something, drop it completely: never suggest it again in any form.
+- Don't add extra steps, offers or "would you like me to…" questions unless they ask what to do next. When a task is done, say so and stop.
+
 Rules:
 - Start from the triage scan below and from command output you have actually seen. Never invent devices, sizes or results. If unsure, run a command to check.
 - Never suggest write-mode tests or repairs (badblocks -w or -n, fsck without -n, mkfs, dd to a disk): they are refused. For bad blocks use the read-only test: sysmedic-tests start surface --disk /dev/X. If a write fails on a write-protected disk, that is the protection, not bad hardware; judge health from SMART.
@@ -407,6 +412,10 @@ def run_approved(call):
     if refusal:
         print(f"\n  {YELLOW}{refusal}{END}  {DIM}({cmd[:80]}){END}")
         return refusal
+    why_not = refused(cmd)
+    if why_not:
+        print(f"\n  {DIM}(SysMedic held back a command you'd refused: {cmd[:90]}){END}")
+        return f"Not run: {why_not}. Don't propose it or anything like it again; answer what the engineer actually asked."
     problems = unreal(cmd)
     if problems:
         what = "a command with a wrong disk" if all(_is_usage(p) for p in problems) else "a made-up command"
@@ -426,6 +435,7 @@ def run_approved(call):
             if ans in ("/quit", "/exit", "q"):
                 raise KeyboardInterrupt
             if ans in ("n", "no"):
+                CONTROL["declined"].add(_norm(cmd))
                 note = input("  (optional) tell the AI why not: ").strip()
                 return "The engineer declined to run this command." + (f" Reason: {note}" if note else "")
             if ans in ("e", "edit"):
@@ -486,7 +496,7 @@ def assistant_turn(model, messages):
         t0 = time.time()
         content, calls = "", []
         try:
-            for chunk in with_wait_timer(ollama_chat(model, messages)):
+            for chunk in with_wait_timer(ollama_chat(model, window(messages))):
                 msg = chunk.get("message", {})
                 piece = msg.get("content", "")
                 if piece:
@@ -498,13 +508,14 @@ def assistant_turn(model, messages):
             messages.append({"role": "assistant", "content": content + " [interrupted by engineer]"})
             return
         print(f"  {DIM}({time.time() - t0:.0f}s){END}")
-        bad = [] if calls else unreal_in_text(content)
+        bad = [] if calls else unreal_in_text(content) + [(c, [f"`{c}`: {refused(c)}."]) for c in suggested_commands(content) if refused(c)]
         if bad:
-            print(f"  {YELLOW}⚠ SysMedic check: " + "; ".join(f"`{c}` doesn't exist" for c, _ in bad) + f". Ignore that; correcting…{END}")
+            print(f"  {YELLOW}⚠ SysMedic check: " + "; ".join(f"`{c}` " + ("was refused" if refused(c) else "doesn't exist") for c, _ in bad)
+                  + f". Ignore that; correcting…{END}")
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content": "[SysMedic check] " + " ".join(p[0] for _, p in bad) +
-                             " Rewrite your answer using only real SysMedic tests and tools from the list in your instructions, "
-                             "or say plainly that there isn't one."})
+                             " Rewrite your answer without that: use only real SysMedic tests the engineer hasn't refused, "
+                             "or say plainly that there isn't one. Don't offer anything else."})
             if corrected:
                 return
             corrected = True
@@ -546,6 +557,18 @@ def warm(model):
             pass
     except (urllib.error.URLError, OSError):
         sys.exit(1)
+    # On a GPU: prove it works and is faster than the CPU, or fall back to the CPU (restarts Ollama), then warm again
+    if subprocess.run(["/usr/local/sbin/sysmedic-ai-device", "verify", model], stdout=subprocess.DEVNULL).returncode == 1:
+        for _ in ollama_chat(model, [system_message(), {"role": "user", "content": "Ready?"}], stream=False, num_predict=1):
+            pass
+
+
+def device_label():
+    try:
+        st = json.load(open("/run/sysmedic/ai-device.json"))
+    except (OSError, ValueError):
+        return "this machine's CPU"
+    return f"this machine's GPU ({st['device']})" if st.get("mode") == "gpu" else "this machine's CPU"
 
 
 # Plain requests for a catalogue test are answered directly, not left to the small offline model (on a 3410
@@ -595,8 +618,107 @@ def run_test_directly(model, messages, test, q):
     return True
 
 
-LATEST = ("\n\n[SysMedic: answer this latest message from the engineer. If it changes the subject, drop any earlier plan "
-          "the engineer hasn't agreed to. If they say no or stop, don't repeat the same command.]")
+# ── The engineer is in charge ───────────────────────────────────────────────────
+# A small model drifts back to its own plan. What the engineer refuses is enforced here, not left to the model.
+CONTROL = {"declined": set(), "banned": [], "view_from": 1}   # per conversation; /new and /scan clear it
+COMPLAINT = re.compile(r"hallucinat|(does|do|did)\s*n[o']t exist|not real|made (that|it|this|them) up|invent|"
+                       r"(you'?re|you are|stop) ignoring|listen to me|do not ignore|don'?t ignore|insubordinat|"
+                       r"that'?s (wrong|not what i)|not what i (asked|said|want)|i (said|told you)\b", re.I)
+NO_ONLY = re.compile(r"^\s*(no|nope|nah|no thanks|no thank you|stop|stop it|don'?t|do not|cancel|not now|leave it|"
+                     r"never ?mind|forget it|no,? (thanks|stop|don'?t))[\s.!]*$", re.I)
+FORGET = re.compile(r"\b(?:forget|drop|leave|ignore|stop with|stop talking about|no more|enough (?:of|about)|never mind)\s+"
+                    r"(?:about\s+)?(?:the\s+|that\s+|those\s+)?([a-z][a-z0-9 -]{1,30}?)(?=[.,;!?]|$|\s+(?:and|then|now|-|just|instead)\b)", re.I)
+TOPICS = [(r"disk|drive|ssd|nvme|hdd|partition|bitlocker|mount|surface|filesystem",
+           r"/dev/(nvme|sd|mmc|hd)|\bmount\b|surface|\bdisk\b|smartctl|fsck|bitlocker|dislocker|badblocks|ntfs"),
+          (r"network|wi-?fi|internet|ethernet", r"\bnetwork\b|\bping\b|\bnmcli\b|\bip (a|addr|route)|wifi|\biw\b|curl"),
+          (r"memory|ram|sodimm|dimm", r"\bram\b|memtest|memtester|stressapptest|ram-|dmidecode -t 17"),
+          (r"gpu|graphics", r"\bgpu\b|glmark|graphics"), (r"battery", r"battery|upower"),
+          (r"windows|registry|event", r"sysmedic-win|evtx|hive"), (r"malware|virus", r"malware|clam"),
+          (r"scan|rescan|triage", r"sysmedic-scan|\bscan\b")]
+
+
+def _norm(cmd):
+    return re.sub(r"\s+", " ", cmd.strip().rstrip(";")).lower()
+
+
+FILLER = re.compile(r"\s+(alone|stuff|things?|bits?|parts?|side|for now|now|altogether|entirely|completely)$", re.I)
+
+
+def ban_topic(word):
+    word = word.strip().lower()
+    while FILLER.search(word):
+        word = FILLER.sub("", word)
+    rx = next((r for k, r in TOPICS if re.search(k, word)), r"\b" + re.escape(word.rstrip("s")))
+    if (word, rx) not in CONTROL["banned"]:
+        CONTROL["banned"].append((word, rx))
+    return word
+
+
+def lift_bans(q):
+    """The engineer bringing a dropped topic up again themselves lifts the ban."""
+    lifted = []
+    for word, rx in list(CONTROL["banned"]):
+        key = next((k for k, r in TOPICS if r == rx), re.escape(word.rstrip("s")))
+        if re.search(key, q, re.I):
+            CONTROL["banned"].remove((word, rx))
+            lifted.append(word)
+    return lifted
+
+
+def refused(cmd):
+    """Why this command was already refused by the engineer, or ''."""
+    if _norm(cmd) in CONTROL["declined"]:
+        return "the engineer already said no to this command"
+    for word, rx in CONTROL["banned"]:
+        if re.search(rx, cmd, re.I):
+            return f"the engineer told you to drop {word}"
+    return ""
+
+
+STOPWORDS = r"(?:and|then|or|to|for|which|this|that|will|it|on|in|the|a|an|so|we|you|if|with|from|again|now|first)\b"
+PLAIN_SYSMEDIC = re.compile(r"\b(sysmedic-[a-z-]+(?:\s+(?!" + STOPWORDS + r")(?:--?[\w-]+|/[\w/.-]+|[a-z0-9][\w.-]*)(?![\w/]))*)")
+
+
+def suggested_commands(text):
+    text = text or ""
+    found = [c for c in INLINE_CMD.findall(text) if " " in c or c.startswith("sysmedic")]
+    found += [c.rstrip(".") for c in PLAIN_SYSMEDIC.findall(INLINE_CMD.sub(" ", text))]
+    return list(dict.fromkeys(found))
+
+
+def latest_reminder():
+    parts = ["[SysMedic: answer only this latest message from the engineer. Don't add offers or extra steps."]
+    if CONTROL["banned"]:
+        parts.append("The engineer told you to drop: " + ", ".join(w for w, _ in CONTROL["banned"]) + ". Never bring those up again.")
+    if CONTROL["declined"]:
+        parts.append("Commands the engineer refused (never suggest again): " + "; ".join(sorted(CONTROL["declined"]))[:600] + ".")
+    return "\n\n" + " ".join(parts) + "]"
+
+
+WINDOW = 10   # the model sees the system prompt plus about the last 10 messages; the whole conversation is still saved
+
+
+def refuse_last_suggestions(messages):
+    """The engineer said no / corrected the AI: its last suggestions are refused, and the model stops seeing the
+    conversation before this point so it can't copy its old plan back."""
+    last = next((m for m in reversed(messages) if m["role"] == "assistant"), {})
+    for c in suggested_commands(last.get("content", "")):
+        CONTROL["declined"].add(_norm(c))
+    for c in last.get("tool_calls") or []:
+        args = (c.get("function") or {}).get("arguments") or {}
+        if isinstance(args, dict) and args.get("command"):
+            CONTROL["declined"].add(_norm(args["command"]))
+    CONTROL["view_from"] = len(messages)
+
+
+def window(messages):
+    messages = [messages[0]] + messages[max(1, CONTROL["view_from"]):]
+    if len(messages) <= WINDOW + 1:
+        return messages
+    tail = messages[-WINDOW:]
+    while tail and tail[0]["role"] != "user":     # never start mid tool-call
+        tail = tail[1:]
+    return [messages[0]] + (tail or messages[-2:])
 
 
 def main():
@@ -610,7 +732,7 @@ def main():
     except (urllib.error.URLError, OSError):
         sys.exit("Ollama isn't running. Start it with: start-ollama")
 
-    print(f"\n  {BOLD}SysMedic offline assistant{END} — {model} on this machine's CPU")
+    print(f"\n  {BOLD}SysMedic offline assistant{END} — {model} on {device_label()}")
     print(f"  {DIM}Read-only checks run straight away; anything else asks you first (Enter = yes). Ctrl-C stops a command.")
     print(f"  Customer disks stay write-protected until you run sysmedic-unlock on Alt+F2.")
     print(f"  Commands: /tests (list tests)  /feedback TEXT (note a SysMedic problem)  /scan  /new  /quit{END}")
@@ -631,6 +753,7 @@ def main():
         if q in ("/quit", "/exit", "quit", "exit"):
             return
         if q == "/new":
+            CONTROL["declined"].clear(); CONTROL["banned"].clear(); CONTROL["view_from"] = 1
             messages = [system_message()]
             log = conversation_path(model)
             print(f"  {DIM}(fresh conversation){END}")
@@ -643,6 +766,26 @@ def main():
             if text:
                 subprocess.run(["/usr/local/bin/sysmedic-note", "--feedback", f"(offline AI, {model}) {text}"])
             continue
+        if NO_ONLY.match(q):
+            refuse_last_suggestions(messages)
+            print(f"\n{CYAN}SysMedic:{END} OK. What would you like to do?")
+            messages += [{"role": "user", "content": q}, {"role": "assistant", "content": "OK. What would you like to do?"}]
+            save_conversation(messages, log)
+            continue
+        rest = re.sub(FORGET, "", q).strip(" .,!-")
+        lifted = lift_bans(rest)
+        if lifted:
+            print(f"  {DIM}(back on: {', '.join(lifted)}){END}")
+        dropped = [ban_topic(m.group(1)) for m in FORGET.finditer(q)]
+        if dropped or COMPLAINT.search(q):
+            refuse_last_suggestions(messages)
+        if dropped:
+            print(f"  {DIM}(dropped: {', '.join(dropped)}; SysMedic won't bring it up again in this conversation){END}")
+            if not rest or re.fullmatch(r"(no|ok|okay|right|fine)", rest, re.I):
+                messages += [{"role": "user", "content": q}, {"role": "assistant", "content": f"OK, dropping {', '.join(dropped)}."}]
+                print(f"\n{CYAN}SysMedic:{END} OK, dropping {', '.join(dropped)}. What would you like to do?")
+                save_conversation(messages, log)
+                continue
         if FEEDBACK.search(q):
             try:
                 ans = input(f"\n  {CYAN}Save this as SysMedic feedback for review (claude-review.md)?{END} [Y/n] ").strip().lower()
@@ -655,20 +798,22 @@ def main():
                 print(f"  {DIM}Saved. The whole conversation is in the session folder too.{END}")
                 save_conversation(messages, log)
                 continue
-        test = requested_test(q)
+        test = requested_test(rest)
         if test and run_test_directly(model, messages, test, q):
             save_conversation(messages, log)
             continue
         if q == "/scan":
             subprocess.run(["/usr/local/bin/sysmedic-scan"])
+            CONTROL["declined"].clear(); CONTROL["banned"].clear(); CONTROL["view_from"] = 1
             messages = [system_message()]
             print(f"  {DIM}(conversation restarted with the new scan){END}")
             continue
-        messages.append({"role": "user", "content": q + LATEST})
+        reminder = latest_reminder()
+        messages.append({"role": "user", "content": q + reminder})
         safe_turn(model, messages)
         for m in messages:
-            if m["role"] == "user" and m["content"].endswith(LATEST):
-                m["content"] = m["content"][:-len(LATEST)]
+            if m["role"] == "user" and m["content"].endswith(reminder):
+                m["content"] = m["content"][:-len(reminder)]
         save_conversation(messages, log)
 
 

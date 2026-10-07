@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.10.07 (later): the offline AI obeys, and uses a discrete GPU when there is one
+
+- **Obedience, enforced in code.** Declined commands, "No", "forget/drop X" and corrections are remembered for the conversation and enforced by SysMedic (re-offers are held back, and flagged and rewritten if they appear in text). "No" alone gets "OK." without a new suggestion. After a correction the model no longer sees its earlier plan, and in general only the last few exchanges. Its instructions now open with "the engineer is in charge: do exactly what the latest message asks, nothing more, no unasked offers". Replayed the 3410 session: after "These tests do not exist" it now says "Got it, I'll stick to known tests" instead of re-offering `memslot`.
+- **GPU for the offline AI.** Ollama's Vulkan backend and Mesa's Vulkan drivers ship on all drives. `sysmedic-ai-device` picks a discrete GPU with ≥3.5 GiB (never built-in graphics, which measured 5× slower than the CPU), self-tests it after the model loads, and falls back to the CPU if it fails, stalls or is slow. Measured on a GTX 1650 with qwen2.5:3b: 319 tok/s reading the prompt against 24 on the CPU, replies at 40-49 tok/s against 10.
+
 ## 2026.10.07: real tools only, and memory testing
 
 From the 3410 session at 23:00, where the offline AI offered `sysmedic-tests start memslot` and `mem` (neither existed), a malformed surface test, and said it would record the session without doing so:

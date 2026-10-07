@@ -83,11 +83,12 @@ install_opencode() {   # pinned OpenCode release into ROOT/usr/local/bin
     sudo install -D -m 755 downloads/opencode/opencode "$1/usr/local/bin/opencode"
 }
 
-copy_ollama() {        # DEST/ollama: CPU runtime + Qwen models (the layout start-ollama expects)
+copy_ollama() {        # DEST/ollama: CPU + Vulkan runtime + Qwen models (the layout start-ollama expects)
     local dest=$1/ollama m name tag man d
     sudo mkdir -p "$dest/bin" "$dest/lib/ollama" "$dest/models/blobs"
     sudo cp downloads/ollama/bin/ollama "$dest/bin/"
     sudo cp -a downloads/ollama/lib/ollama/libggml-*.so* "$dest/lib/ollama/"
+    [ -d downloads/ollama/lib/ollama/vulkan ] && sudo cp -a downloads/ollama/lib/ollama/vulkan "$dest/lib/ollama/"
     for m in $MODELS; do
         name=${m%:*} tag=${m#*:}; man=ollama-models/manifests/registry.ollama.ai/library/$name/$tag
         sudo install -D -m 644 "$man" "$dest/models/manifests/registry.ollama.ai/library/$name/$tag"

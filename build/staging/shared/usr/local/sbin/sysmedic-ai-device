@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""sysmedic-ai-device — choose where the offline AI runs: a discrete GPU (Vulkan) or the CPU.
+
+  sysmedic-ai-device detect          print the environment for start-ollama (export lines); record the choice
+  sysmedic-ai-device verify MODEL    after start: time a short reply; if the GPU fails, stalls or is slow,
+                                     fall back to the CPU (restarts Ollama) and record why
+  sysmedic-ai-device status [--json] what the AI is running on, and why
+
+Only a discrete GPU with at least 3.5 GiB is used. Built-in graphics share the CPU's memory and measured
+slower than the CPU (Intel UHD 630: 2 tok/s against 10 on the CPU; a GTX 1650 gave 40). Turn the GPU off with
+the kernel option sysmedic.aigpu=off or by creating /mnt/persist/ai-gpu-off.
+"""
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+OLLAMA_DIR = os.environ.get("SYSMEDIC_OLLAMA_DIR", "/mnt/persist/ollama")
+STATE = os.environ.get("SYSMEDIC_AI_DEVICE_STATE", "/run/sysmedic/ai-device.json")
+FAILED = os.path.join(os.path.dirname(STATE), "ai-gpu-failed")
+HOST = os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
+PROBE_PORT = 11499
+MIN_VRAM_GIB = 3.5
+MIN_TOKS = {"3b": 15, "7b": 8}      # below this the CPU is about as fast, and steadier
+DEVICE = re.compile(r'msg="inference compute".*?library=(\S+).*?name=(\S+) description="([^"]*)".*?type=(\S+) total="([\d.]+) (\w+)"')
+
+
+def save(state):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    state["time"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with open(STATE, "w") as f:
+        json.dump(state, f)
+
+
+def load():
+    try:
+        return json.load(open(STATE))
+    except (OSError, ValueError):
+        return {}
+
+
+def turned_off():
+    try:
+        if "sysmedic.aigpu=off" in open("/proc/cmdline").read().split():
+            return True
+    except OSError:
+        pass
+    return os.environ.get("SYSMEDIC_AI_GPU") == "off" or os.path.exists("/mnt/persist/ai-gpu-off")
+
+
+def probe():
+    """Ollama's own device discovery: start it briefly on a spare port and read what it found."""
+    exe = os.path.join(OLLAMA_DIR, "bin/ollama")
+    with tempfile.TemporaryDirectory() as models, tempfile.NamedTemporaryFile("w+", suffix=".log") as log:
+        env = dict(os.environ, OLLAMA_VULKAN="1", OLLAMA_HOST=f"127.0.0.1:{PROBE_PORT}", OLLAMA_MODELS=models)
+        env.pop("GGML_VK_VISIBLE_DEVICES", None)
+        p = subprocess.Popen([exe, "serve"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             env=env, start_new_session=True)
+        text, t0 = "", time.time()
+        try:
+            while time.time() - t0 < 30:
+                time.sleep(0.5)
+                text = open(log.name, errors="replace").read()
+                if "inference compute" in text and ("Listening on" in text or p.poll() is not None):
+                    time.sleep(1)
+                    text = open(log.name, errors="replace").read()
+                    break
+                if p.poll() is not None:
+                    break
+        finally:
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+                p.wait(timeout=10)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                os.killpg(p.pid, signal.SIGKILL)
+    devs = []
+    for lib, name, desc, kind, total, unit in DEVICE.findall(text):
+        gib = float(total) / (1024 if unit.upper().startswith("M") else 1)
+        devs.append({"library": lib, "name": name, "description": desc, "type": kind, "vram_gib": round(gib, 1)})
+    return devs
+
+
+def detect():
+    def cpu(reason, devs=()):
+        save({"mode": "cpu", "device": "CPU", "reason": reason, "seen": list(devs)})
+        print("export OLLAMA_VULKAN=0")
+
+    if turned_off():
+        return cpu("GPU use is turned off")
+    if os.path.exists(FAILED):
+        return cpu("the GPU failed its self-test earlier this boot: " + open(FAILED).read().strip())
+    if not os.path.isdir(os.path.join(OLLAMA_DIR, "lib/ollama/vulkan")):
+        return cpu("this drive has no GPU support for the AI (no Vulkan backend)")
+    devs = [d for d in probe() if d["library"].lower() == "vulkan"]
+    good = [d for d in devs if d["type"] == "discrete" and d["vram_gib"] >= MIN_VRAM_GIB
+            and not re.search(r"llvmpipe|softpipe|swrast", d["description"], re.I)]
+    if not good:
+        if any(d["type"] == "discrete" for d in devs):
+            return cpu(f"the graphics card has under {MIN_VRAM_GIB:g} GiB of memory", devs)
+        if devs:
+            return cpu("only built-in graphics (slower than the CPU for the AI)", devs)
+        return cpu("no usable GPU found", devs)
+    best = max(good, key=lambda d: d["vram_gib"])
+    index = re.sub(r"\D", "", best["name"]) or "0"
+    save({"mode": "gpu", "device": best["description"], "vram_gib": best["vram_gib"], "verified": False,
+          "reason": f"discrete GPU with {best['vram_gib']:g} GiB", "seen": devs})
+    print("export OLLAMA_VULKAN=1")
+    print(f"export GGML_VK_VISIBLE_DEVICES={index}")
+
+
+def api(path, body, timeout):
+    req = urllib.request.Request(f"http://{HOST}{path}", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=timeout))
+
+
+def server_pids():
+    """PIDs of the Ollama server on SysMedic's port only (never another Ollama on the machine)."""
+    port = HOST.rsplit(":", 1)[-1]
+    out = subprocess.run(["ss", "-Hltnp", f"sport = :{port}"], capture_output=True, text=True).stdout
+    return {int(x) for x in re.findall(r"pid=(\d+)", out)}
+
+
+def fall_back(why):
+    os.makedirs(os.path.dirname(FAILED), exist_ok=True)
+    open(FAILED, "w").write(why)
+    st = load()
+    save({"mode": "cpu", "device": "CPU", "reason": f"the GPU ({st.get('device', '?')}) failed its self-test: {why}",
+          "seen": st.get("seen", [])})
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid in server_pids():
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+        time.sleep(3)
+    subprocess.run([os.environ.get("SYSMEDIC_START_OLLAMA", "/usr/local/sbin/start-ollama")],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"GPU self-test failed ({why}); the AI now runs on the CPU.")
+
+
+def verify(model):
+    st = load()
+    if st.get("mode") != "gpu" or st.get("verified"):
+        return 0
+    try:
+        api("/api/generate", {"model": model, "keep_alive": "30m"}, timeout=900)     # load (slow from a USB 2.0 stick)
+    except Exception as e:  # noqa: BLE001
+        fall_back(f"model didn't load on the GPU: {str(e)[:80]}")
+        return 1
+    try:
+        r = api("/api/generate", {"model": model, "prompt": "Count from 1 to 40, separated by spaces.", "stream": False,
+                                  "options": {"num_predict": 48, "temperature": 0}}, timeout=90)
+    except Exception as e:  # noqa: BLE001
+        fall_back(f"no reply within 90 s: {str(e)[:80]}")
+        return 1
+    toks = r.get("eval_count", 0) / max(r.get("eval_duration", 1) / 1e9, 1e-6)
+    words = r.get("response", "").split()
+    need = next((v for k, v in MIN_TOKS.items() if k in model), 8)
+    if len(words) < 10 or not words[0].strip(",.").startswith("1"):
+        fall_back(f"garbled reply: {r.get('response', '')[:40]!r}")
+        return 1
+    if toks < need:
+        fall_back(f"{toks:.1f} tok/s, below {need} (the CPU is as fast)")
+        return 1
+    st.update(verified=True, tok_s=round(toks, 1), model=model)
+    save(st)
+    print(f"AI on the GPU: {st['device']}, {toks:.0f} tok/s")
+    return 0
+
+
+def status(js):
+    st = load() or {"mode": "cpu", "device": "CPU", "reason": "not started yet"}
+    if js:
+        print(json.dumps(st))
+        return
+    if st["mode"] == "gpu":
+        print(f"  AI runs on the GPU: {st['device']} ({st.get('vram_gib', '?')} GiB)"
+              + (f", {st['tok_s']} tok/s with {st.get('model')}" if st.get("verified") else ", self-test pending"))
+    else:
+        print(f"  AI runs on the CPU: {st.get('reason', '')}")
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a else "status"
+    if cmd == "detect":
+        detect()
+    elif cmd == "verify" and len(a) > 1:
+        sys.exit(verify(a[1]))
+    elif cmd == "status":
+        status("--json" in a)
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()
