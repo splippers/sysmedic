@@ -397,6 +397,13 @@ def forbidden(cmd):
     return next((why for rx, why in FORBIDDEN if rx.search(cmd)), "")
 
 
+class NewRequest(Exception):
+    """The engineer typed a new instruction at an approval prompt: that's a no, and the new request comes first."""
+    def __init__(self, text):
+        super().__init__(text)
+        self.text = text
+
+
 def run_approved(call):
     args = call.get("function", {}).get("arguments") or {}
     if isinstance(args, str):
@@ -429,11 +436,15 @@ def run_approved(call):
             print(f"  why: {why}")
         while True:
             try:
-                ans = input("  Run it? [Y]es / [n]o / [e]dit: ").strip().lower()
+                raw = input("  Run it? [Y]es / [n]o / [e]dit: ").strip()
             except EOFError:
-                ans = "n"
+                raw = "n"
+            ans = raw.lower()
             if ans in ("/quit", "/exit", "q"):
                 raise KeyboardInterrupt
+            if len(raw) > 3 and ans not in ("yes", "edit") and not NO_ONLY.match(raw):
+                CONTROL["declined"].add(_norm(cmd))
+                raise NewRequest(raw)
             if ans in ("n", "no"):
                 CONTROL["declined"].add(_norm(cmd))
                 note = input("  (optional) tell the AI why not: ").strip()
@@ -469,18 +480,30 @@ def calls_from_text(content):
     picked = []
     for c in cmds:
         try:
-            ans = input(f"\n  {YELLOW}The AI wrote this command in its text:{END} {BOLD}{c}{END}\n  Run it? [y/N] ").strip().lower()
+            raw = input(f"\n  {YELLOW}The AI wrote this command in its text:{END} {BOLD}{c}{END}\n  Run it? [y/N] ").strip()
         except EOFError:
-            ans = ""
+            raw = ""
+        ans = raw.lower()
+        if len(raw) > 3 and ans != "yes" and not NO_ONLY.match(raw):
+            CONTROL["declined"].add(_norm(c))
+            raise NewRequest(raw)
         if ans in ("y", "yes"):
             picked.append({"function": {"name": "run_command", "arguments": {"command": c}}})
     return picked
 
 
 def safe_turn(model, messages):
-    """One assistant turn; Ctrl-C or /quit at an approval prompt returns to the question prompt."""
+    """One assistant turn; Ctrl-C or /quit at an approval prompt returns to the question prompt.
+    Returns the engineer's new request if they typed one at an approval prompt instead of answering it."""
     try:
         assistant_turn(model, messages)
+    except NewRequest as nr:
+        print(f"  {DIM}(not run; doing what you asked instead){END}")
+        if messages[-1].get("role") == "assistant" and messages[-1].get("tool_calls"):
+            for _ in messages[-1]["tool_calls"]:
+                messages.append({"role": "tool", "tool_name": "run_command", "content": "Not run: the engineer said no and asked for something else."})
+        refuse_last_suggestions(messages)
+        return nr.text
     except KeyboardInterrupt:
         print(f"\n  {DIM}(stopped){END}")
         if messages[-1].get("role") == "assistant" and messages[-1].get("tool_calls"):
@@ -614,8 +637,7 @@ def run_test_directly(model, messages, test, q):
     messages.append({"role": "user", "content": "In two or three plain sentences: what does this result mean? State only what the output "
                      "above shows, with its exact numbers (e.g. how many slots are populated); don't add anything it doesn't say. "
                      "Don't run anything else."})
-    safe_turn(model, messages)
-    return True
+    return safe_turn(model, messages) or True
 
 
 # ── The engineer is in charge ───────────────────────────────────────────────────
@@ -738,16 +760,21 @@ def main():
     print(f"  Commands: /tests (list tests)  /feedback TEXT (note a SysMedic problem)  /scan  /new  /quit{END}")
     messages = [system_message()]
     log = conversation_path(model)
+    pending = None
     if "--explain" in args:
         messages.append({"role": "user", "content": "Explain in plain English which findings in the scan matter most and why, then give a short repair plan (at most 6 steps, exact devices) in words. Don't run or list commands yet; we'll do the steps one at a time."})
-        safe_turn(model, messages)
+        pending = safe_turn(model, messages)
         save_conversation(messages, log)
     while True:
-        try:
-            q = input(f"\n{BOLD}You:{END} ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
+        if pending:
+            q, pending = pending, None
+            print(f"\n{BOLD}You:{END} {q}")
+        else:
+            try:
+                q = input(f"\n{BOLD}You:{END} ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
         if not q:
             continue
         if q in ("/quit", "/exit", "quit", "exit"):
@@ -799,7 +826,9 @@ def main():
                 save_conversation(messages, log)
                 continue
         test = requested_test(rest)
-        if test and run_test_directly(model, messages, test, q):
+        done = run_test_directly(model, messages, test, q) if test else False
+        if done:
+            pending = done if isinstance(done, str) else None
             save_conversation(messages, log)
             continue
         if q == "/scan":
@@ -810,7 +839,7 @@ def main():
             continue
         reminder = latest_reminder()
         messages.append({"role": "user", "content": q + reminder})
-        safe_turn(model, messages)
+        pending = safe_turn(model, messages)
         for m in messages:
             if m["role"] == "user" and m["content"].endswith(reminder):
                 m["content"] = m["content"][:-len(reminder)]
