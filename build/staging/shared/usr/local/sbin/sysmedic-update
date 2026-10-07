@@ -98,7 +98,9 @@ def cmd_check(quiet=False):
     save_state({"state": "available", "installed": inst.get("version"), "latest": m["version"], "tag": m["tag"],
                 "changes": [c["summary"] for c in new][:20]})
     if not quiet:
-        print(f"  {B}Update available:{N} v{inst.get('version')} → {CY}v{m['version']}{N} ({m['size'] // 1024} KB, signed)")
+        print(f"  {B}Update available:{N} v{inst.get('version')} {D}({str(inst.get('commit'))[:8]}){N} → "
+              f"{CY}v{m['version']}{N} {D}({m['commit'][:8]}, {time.strftime('%d %b %H:%M', time.localtime(m['commit_time']))}){N}"
+              f" · {m['size'] // 1024} KB, signed")
         for c in new[:15]:
             print(f"    {D}{time.strftime('%d %b', time.localtime(c['time']))}{N}  {c['summary'][:110]}")
         if len(new) > 15:
