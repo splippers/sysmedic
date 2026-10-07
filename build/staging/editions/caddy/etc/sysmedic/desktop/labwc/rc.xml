@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!-- SysMedic desktop (labwc). Shortcuts: Super+Return terminal · Super+Space launcher · Super+C Control Centre
-     · Super+A AI assistant · Super+E files · Alt+Tab switch windows · right-click the desktop for everything -->
+     · Super+A AI assistant · Super+E files · Super+M the SysMedic menu (same as right-click on the desktop) · Super+Q close a window · Alt+Tab switch -->
 <labwc_config>
   <core><gap>6</gap></core>
   <theme>
@@ -19,6 +19,8 @@
     <keybind key="W-a"><action name="Execute" command="foot --title 'SysMedic AI assistant' sysmedic-ai-launch" /></keybind>
     <keybind key="W-e"><action name="Execute" command="thunar /" /></keybind>
     <keybind key="W-Up"><action name="ToggleMaximize" /></keybind>
+    <keybind key="W-m"><action name="ShowMenu" menu="root-menu" /></keybind>
+    <keybind key="W-q"><action name="Close" /></keybind>
   </keyboard>
   <mouse><default /></mouse>
   <windowRules>

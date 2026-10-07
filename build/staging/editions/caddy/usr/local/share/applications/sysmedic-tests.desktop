@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SysMedic Tests
+Comment=Hardware and software tests
+Exec=foot --title 'SysMedic tests' sysmedic-tests menu
+Icon=applications-science
+Terminal=false
+Categories=System;

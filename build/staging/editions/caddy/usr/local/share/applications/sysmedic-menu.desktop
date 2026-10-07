@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SysMedic Rescue menu
+Comment=Every console tool
+Exec=foot --title 'SysMedic rescue menu' -e /opt/sysmedic/rescue-menu.sh
+Icon=applications-system
+Terminal=false
+Categories=System;

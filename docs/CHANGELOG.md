@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.10.08 (late): menu in order, and a graphical desktop (prototype)
+
+- **The rescue menu is numbered in reading order**, card by card: 1 scan · 2 tests · 3 job report · 4 phone dashboard · 5 AI · 6 repair the AI · 7 Windows tools · 8 unlock · 9 re-protect · 10 backup · 11 Linux boot · 12 macOS · 13 Wi-Fi · 14 save logs · U update · G desktop · 15 toolkit · 16 shell · 17 reboot · 0 shut down. Guides and messages updated.
+- **G: graphical desktop** (caddy; prototype), only when chosen: labwc windows in SysMedic Night, a panel (SYSMEDIC, Control Centre, AI, terminal, files, disks, rescue menu, open windows, RAM/network/clock, ⇦ Console), the **Control Centre** window (the dashboard on the laptop's screen), the AI assistant this visit's consent allows, a launcher with SysMedic's tools first, and a right-click menu of everything. Keyboard: Super+M menu, Super+Space launcher, Super+Return terminal, Super+A AI, Super+C Control Centre, Super+E files, Super+Q close, Alt+Tab. Needs 4 GB RAM and a graphics device; quitting returns to the rescue menu; disks stay write-protected as everywhere.
+
 ## 2026.10.08 (night): the phone dashboard, submenus and the assistant's input
 
 - **Phone dashboard in SysMedic Night**: gradient SYSMEDIC wordmark, live strip (CPU temperature, memory, load, clock), ✔ ▲ ✖ ● on findings, monospace figures, glowing cards with spaced cyan headings; a matching light variant for daylight.

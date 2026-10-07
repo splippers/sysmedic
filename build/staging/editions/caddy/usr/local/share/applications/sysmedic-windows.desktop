@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SysMedic Windows check-up
+Comment=Event logs, registry, updates, crashes
+Exec=foot --hold --title 'Windows check-up' sh -c 'sysmedic-win checkup'
+Icon=computer
+Terminal=false
+Categories=System;

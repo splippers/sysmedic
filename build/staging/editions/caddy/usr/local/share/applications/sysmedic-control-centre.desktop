@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SysMedic Control Centre
+Comment=Scan, tests, BitLocker, notes, job report
+Exec=sysmedic-control-centre
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;

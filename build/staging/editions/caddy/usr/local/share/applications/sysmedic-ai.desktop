@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SysMedic AI assistant
+Comment=The AI assistant this visit allows
+Exec=foot --title 'SysMedic AI assistant' sysmedic-ai-launch
+Icon=dialog-information
+Terminal=false
+Categories=System;
