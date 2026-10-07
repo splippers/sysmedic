@@ -76,7 +76,8 @@ EOF
     sudo install -D -o root -g root -m 644 "$WORK/agent.md" "$root/opt/sysmedic/SYSMEDIC-AGENT.md"
     # The documentation (repo docs/ + README) goes on the drive for offline reading: sysmedic-help
     local repo; repo=$(cd "$(realpath "$ST")/../.." && pwd)
-    sudo rm -rf "$root/usr/local/share/doc/sysmedic"
+    # (an update from a public release has no BUILDING.md: keep the copy the caddy already has)
+    [ "$root" = / ] || sudo rm -rf "$root/usr/local/share/doc/sysmedic"
     sudo install -D -o root -g root -m 644 "$repo/README.md" "$root/usr/local/share/doc/sysmedic/README.md"
     sudo rsync -rlpt --chown=root:root "$repo/docs/" "$root/usr/local/share/doc/sysmedic/docs/"
     # No customer Wi-Fi passwords on the drive: networks now live in RAM (NetworkManager conf.d), and any
@@ -313,7 +314,7 @@ deploy_self() {
 RELEASE_REPO=${RELEASE_REPO:-splippers/sysmedic-releases}
 SIGNING_KEY=${SIGNING_KEY:-$HOME/.config/sysmedic/release-signing-key}
 # Only what a caddy installs goes in the bundle (published publicly): no build tooling, notes or logs
-BUNDLE_EXCLUDE=(WIKI.md caddy-build.log ROADMAP.md auth 'build/*')
+BUNDLE_EXCLUDE=(WIKI.md caddy-build.log ROADMAP.md auth 'build/*' docs/BUILDING.md)   # BUILDING.md: the build kit isn't public
 BUNDLE_INCLUDE=(build/staging build/sysmedic-deploy build/opencode-brand.py)
 
 build_release() {
