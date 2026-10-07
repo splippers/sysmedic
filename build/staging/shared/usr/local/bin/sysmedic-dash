@@ -26,6 +26,10 @@ from pathlib import Path
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 import session  # noqa: E402
 
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+from ui import UI  # noqa: E402
+
 PORT = 8080
 TOKEN_FILE = Path("/run/sysmedic/dash.token")
 seen_clients = set()
@@ -340,17 +344,18 @@ def tests_state():
 def show_qr():
     t = token()
     ips = addresses()
-    print("\n  SysMedic phone dashboard (status, job notes, tests)")
+    ui = UI()
+    print(ui.section("Phone dashboard") + "\n  " + ui.c("dim", "status, job notes, tests, BitLocker unlock: scan the code with the phone camera"))
     if not ips:
-        print("  No network yet. Put the phone on the same Wi-Fi, or plug it in and turn on USB tethering,")
-        print("  then run: sysmedic-dash")
+        print(ui.item("warn", "No network yet", "put the phone on the same Wi-Fi (or USB tethering), then run: sysmedic-dash"))
         return
     for ip in ips:
         url = f"http://{ip}:{PORT}/?t={t}"
-        print(f"\n  {url}")
-        # Plain ANSI colour blocks: the Linux console font has no half-block characters
-        subprocess.run(["qrencode", "-t", "ANSI", "-m", "2", url])
-    print("  Scan with the phone camera. Anyone with this link can see this visit's findings.")
+        print("  " + ui.c("accent", url))
+        # Half blocks (▀ ▄ █, in SysMedic's console font): half the height of plain blocks, square modules,
+        # so the engineer console's commands still fit above it
+        subprocess.run(["qrencode", "-t", "ANSIUTF8", "-m", "2", url])
+    print("  " + UI().c("dim", "Anyone with this link can see this visit's findings."))
 
 
 def serve():

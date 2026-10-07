@@ -26,6 +26,7 @@ import time
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
 import gputelemetry  # noqa: E402
+from ui import UI  # noqa: E402
 
 B, D, G, Y, R, CY, N = "\033[1m", "\033[2m", "\033[0;32m", "\033[1;33m", "\033[1;31m", "\033[0;36m", "\033[0m"
 SELF = os.path.abspath(__file__)
@@ -93,7 +94,7 @@ def renderer():
 
 
 def cmd_info():
-    print(f"\n{B}== Graphics hardware =={N}")
+    print(UI().section("Graphics hardware"))
     lspci = run(["lspci", "-nnk"])
     for block in re.split(r"\n(?=\S)", lspci):
         if re.search(r"VGA compatible|3D controller|Display controller", block):
@@ -112,7 +113,7 @@ def cmd_info():
         vram = gputelemetry._num(f"{c}/device/mem_info_vram_total", 1 / 2**30)
         if vram:
             print(f"  {drv} video memory: {vram:.1f} GiB")
-    print(f"\n{B}== Displays =={N}")
+    print(UI().section("Displays"))
     ds = displays()
     for d in ds:
         col = G if d["status"] == "connected" else D
@@ -376,7 +377,7 @@ def summarize(rundir, kind):
     rows = list(csv.DictReader(open(f"{rundir}/telemetry.csv"))) if os.path.exists(f"{rundir}/telemetry.csv") else []
     kern = json.load(open(f"{rundir}/kernel.json")) if os.path.exists(f"{rundir}/kernel.json") else {}
     f = lambda k: [float(r[k]) for r in rows if r.get(k) not in ("", "None", None)]  # noqa: E731
-    print(f"\n{B}== {kind} results =={N}")
+    print("\n" + UI().banner(f"Graphics {kind.lower()} results"))
     for name, score in re.findall(r"(glmark2|vkmark) Score: (\d+)", log):
         print(f"  {name} score: {B}{score}{N}")
     if kind == "Benchmark":
@@ -416,11 +417,11 @@ def summarize(rundir, kind):
             print(line)
     hang = kern.get("hang") or []
     if hang:
-        print(f"  {R}✖ GPU hang/reset in the kernel log:{N}")
+        print(UI().item("fail", "GPU hang/reset in the kernel log:"))
         for l in hang:
             print(f"    {l[:150]}")
     else:
-        print(f"  {G}✔ No GPU hangs or resets.{N}")
+        print(UI().item("ok", "No GPU hangs or resets."))
     print(f"  {D}Telemetry: {rundir}/telemetry.csv{N}")
     ok = not hang and not bad
     scores = " ".join(f"{n} {s}" for n, s in re.findall(r"(glmark2|vkmark) Score: (\d+)", log))
@@ -449,7 +450,7 @@ def cmd_stress(minutes):
 def cmd_video():
     out = run(["vainfo"], timeout=20)
     drv = re.search(r"Driver version: (.+)", out)
-    print(f"\n{B}== Hardware video decode (VA-API) =={N}")
+    print(UI().section("Hardware video decode (VA-API)"))
     if not drv:
         print(f"  {Y}No VA-API driver answered: video is decoded by the CPU (normal for some GPUs or without a driver).{N}")
         record("gfx video: no VA-API driver")

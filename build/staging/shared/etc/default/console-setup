@@ -1,11 +1,13 @@
 # CONFIGURATION FILE FOR SETUPCON (managed by SysMedic: staging/shared/etc/default/console-setup)
 # Large Terminus font so the consoles are readable on laptop screens.
-# Vietnamese-Terminus22x11: full Latin plus the block and line-drawing characters OpenCode draws its logo and
-# panels with (Lat15 has no ▀ ▄). "12x22" and CHARMAP="utf8" matched nothing and failed boot.
+# Vietnamese-SysMedic22x11 (build/make-console-font.py): Terminus 11x22 Vietnamese set (full Latin, block and
+# line drawing for OpenCode's logo and panels) plus the symbols SysMedic draws: ✔ ✖ ✓ ● ▲ ▼ ⚠ □ ► ❯ ▁▂▃▅▆▇.
+# Named CODESET-FONTFACE+size so setupcon loads it like any Terminus font. FONT="file" garbles capitals and
+# digits on this kernel (tested); so do "12x22" and CHARMAP="utf8", which also failed boot.
 
 ACTIVE_CONSOLES="/dev/tty[1-6]"
 CHARMAP="UTF-8"
 CODESET="Vietnamese"
-FONTFACE="Terminus"
+FONTFACE="SysMedic"
 FONTSIZE="11x22"
 VIDEOMODE=

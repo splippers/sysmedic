@@ -56,6 +56,13 @@ from pathlib import Path
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
 import winlib  # noqa: E402
+from ui import UI  # noqa: E402
+
+def sec(title, note=""):
+    """A section heading in SysMedic's style, with an optional dim note under it."""
+    ui = UI()
+    print(ui.section(title) + ("\n  " + ui.c("dim", note) if note else ""), flush=True)
+
 import winevidence  # noqa: E402
 
 RUN = Path("/run/sysmedic")
@@ -190,7 +197,7 @@ def windows_installs(part=None):
 
 def header(dev, mp):
     i = winlib.info(mp)
-    print(f"\n{C['bold']}{i['name']}{C['end']} on {dev}" + (f" — {i.get('computer_name')}" if i.get("computer_name") else ""))
+    print("\n" + UI().banner(i["name"], f"{dev}" + (f" · {i.get('computer_name')}" if i.get("computer_name") else "")))
     return i
 
 
@@ -350,7 +357,7 @@ def cmd_bcd(args):
             byg = {e["guid"]: e for e in entries}
             mgr = byg.get("{9dea862c-5cdd-4e70-acc1-f32b344d4795}", {}).get("el", {})
             default = str(mgr.get("default", "")).lower()
-            print(f"\n{C['bold']}Windows boot configuration{C['end']} {C['dim']}({src}: {f.name}){C['end']}")
+            sec("Windows boot configuration", f"{src}: {f.name}")
             if mgr:
                 order = mgr.get("displayorder") or []
                 print(f"  Boot manager: timeout {mgr.get('timeout', '?')} s · default {byg.get(default, {}).get('el', {}).get('description', default) or '?'}"
@@ -431,7 +438,7 @@ def cmd_info(args):
 def cmd_crashes(args):
     for dev, mp in targets(args):           # a partition (BitLocker → its unlocked copy) or a mounted folder
         cs = winlib.crashes(mp)
-        print(f"  {C['bold']}Crash dumps{C['end']} (Windows\\Minidump, MEMORY.DMP)")
+        sec("Crash dumps", "Windows\\Minidump, MEMORY.DMP")
         if not cs:
             print("  none found")
         counts = {}
@@ -448,7 +455,7 @@ def cmd_crashes(args):
             elif len(counts) > 2:
                 print(f"  {C['bold']}Pattern:{C['end']} {len(counts)} different stop codes; varied codes often mean hardware (RAM, heat, power).")
         wr = winlib.wer_reports(mp)
-        print(f"\n  {C['bold']}Crash reports kept by Windows Error Reporting{C['end']} (blue screens, live kernel events; newest first)")
+        sec("Crash reports kept by Windows Error Reporting", "blue screens and live kernel events, newest first")
         if not wr:
             print("  none found (WER ReportArchive/ReportQueue, LiveKernelReports)")
         for r in wr[:20]:
@@ -769,9 +776,10 @@ def print_evtx(r, days):
         print(f"  … {len(main_f) - 40} more groups")
     if r["boot"]:
         times = ", ".join(f"{t[:10]} {s:.0f}s" for t, s in r["boot"][-6:])
-        print(f"\n  {C['bold']}Boot times{C['end']} (Windows' own measurement): {times}")
+        sec("Boot times", "Windows' own measurement")
+        print(f"  {times}")
     if other:
-        print(f"\n  {C['bold']}Other errors across all logs{C['end']} ({len(other)} kinds):")
+        sec("Other errors across all logs", f"{len(other)} kinds")
         for f in other[:15]:
             print(f"  {C['dim']}{f['count']:5}× {f['log'][:60]}: {f['provider']} {f['id']}  (last {f['last']}){C['end']}")
 
@@ -796,7 +804,7 @@ def print_registry(r, days):
         if f["fix"]:
             print(f"           {C['cyan']}↳ {f['fix'][:200]}{C['end']}")
     if r["recent"]:
-        print(f"\n  {C['bold']}Changed in the last {days} days{C['end']} (line these up with when the problem started):")
+        sec(f"Changed in the last {days} days", "line these up with when the problem started")
         for x in r["recent"][:25]:
             print(f"  {x['when_days']:3}d ago  {x['what'][:70]}  {C['dim']}{x['detail'][:70]}{C['end']}")
 
@@ -811,20 +819,20 @@ def print_servicing(s):
     print(f"  Read {len(s['read'])} log(s)." + (" " + "; ".join(s["notes"]) if s["notes"] else ""))
     if not s["read"] and not s["wu"]["failed"] and not s["panther"]:
         print("  No servicing logs found (Windows/Logs/CBS, Windows/Logs/DISM).")
-    print(f"\n  {C['bold']}Verdict{C['end']}")
+    sec("Verdict")
     for sev, title, fix in winevidence.servicing_verdict(s):
         print(f"  {C[SEV.get(sev, 'dim')]}{title}{C['end']}")
         if fix:
             print(f"    {C['cyan']}↳ {fix}{C['end']}")
     if s["wu"]["failed"]:
-        print(f"\n  {C['bold']}Windows Update failures{C['end']} (ReportingEvents.log)")
+        sec("Windows Update failures", "ReportingEvents.log")
         for t, g in sorted(s["wu"]["failed"].items(), key=lambda kv: kv[1]["last"], reverse=True)[:12]:
             print(f"  {g['count']:3}× {t[:100]}  {C['dim']}{', '.join(g['codes'])} last {g['last']}{C['end']}")
     if s["wu"]["installed"]:
         w, t = s["wu"]["installed"][-1]
         print(f"  Last successful update: {w}  {C['dim']}{t[:100]}{C['end']}")
     if s["errors"]:
-        print(f"\n  {C['bold']}Servicing errors{C['end']} (CBS/DISM, grouped)")
+        sec("Servicing errors", "CBS/DISM, grouped")
         for g in s["errors"][:15]:
             meaning = f"  {C['cyan']}{g['meaning']}{C['end']}" if g["meaning"] else ""
             pk = f"  {C['dim']}{', '.join(g['packages'])}{C['end']}" if g["packages"] else ""
@@ -895,7 +903,7 @@ def cmd_checkup(args):
                     ("Traces (ETL: Windows Update and other components)", lambda: print_etl(winevidence.scan_etl(mp, days=min(days, 14)), min(days, 14))),
                     ("Autostart", lambda: cmd_autoruns([dev]))]
         for title, fn in sections:
-            print(f"\n{C['bold']}━━ {title} ━━{C['end']}", flush=True)
+            sec(title)
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 saved = dict(C)

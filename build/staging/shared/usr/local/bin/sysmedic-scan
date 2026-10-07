@@ -22,6 +22,9 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+from ui import UI  # noqa: E402
+
 try:
     import winlib
 except ImportError:
@@ -648,26 +651,20 @@ def session_dir(system):
 
 
 def render(report, color=True):
-    c = {"critical": "\033[1;31m", "warning": "\033[1;33m", "info": "\033[0;36m", "ok": "\033[0;32m",
-         "bold": "\033[1m", "dim": "\033[2m", "end": "\033[0m"} if color else {k: "" for k in
-         ["critical", "warning", "info", "ok", "bold", "dim", "end"]}
-    icon = {"critical": "X", "warning": "!", "info": "i", "ok": "+"}     # the Linux console font has no ✖/▲/✔
+    ui = UI(color=color)
     s = report["system"]
-    lines = [f"{c['bold']}SysMedic scan — {s.get('manufacturer', '')} {s.get('model', '')}{c['end']}".rstrip(),
-             f"{c['dim']}{s['cpu']} · {s['ram_bytes'] / 2**30:.0f} GB RAM · {s['firmware']}"
-             + (f" · Secure Boot {'on' if s['secure_boot'] else 'off'}" if s['secure_boot'] is not None else "")
-             + f" · {report['time']}"
-             + f" · SysMedic {s.get('sysmedic_edition', 'dev')} v{s.get('sysmedic_version', 'dev')}{c['end']}", ""]
+    cpu = re.sub(r"\s+", " ", re.sub(r"\((R|TM|tm|r)\)|\bCPU\b|@ [\d.]+ ?GHz|\b\d+(th|rd|nd|st) Gen\b|Processor", "", s["cpu"])).strip()
+    sub = (f"{s.get('manufacturer', '')} {s.get('model', '')}".replace("Inc. ", "").strip() + f" · {cpu} · {s['ram_bytes'] / 2**30:.0f} GB RAM"
+           + f" · {s['firmware']}" + (f" · Secure Boot {'on' if s['secure_boot'] else 'off'}" if s['secure_boot'] is not None else ""))
+    lines = [ui.banner("Triage scan", sub)]
     counts = {sev: sum(f["severity"] == sev for f in report["findings"]) for sev in SEVERITIES}
     for sev in SEVERITIES:
         for f in (x for x in report["findings"] if x["severity"] == sev):
-            lines.append(f"  {c[sev]}{icon[sev]} {f['title']}{c['end']}")
-            if f["detail"] and sev != "ok":
-                lines.append(f"      {f['detail']}")
-            if f["next_step"] and sev in ("critical", "warning"):
-                lines.append(f"      {c['bold']}→{c['end']} {f['next_step']}")
-    lines += ["", f"  {counts['critical']} critical · {counts['warning']} warnings · {counts['info']} notes · {counts['ok']} OK",
-              f"  {c['dim']}Saved: {report['session_dir']}{c['end']}"]
+            lines.append(ui.item(sev, f["title"], f["detail"] if sev != "ok" else "",
+                                 f["next_step"] if sev in ("critical", "warning") else ""))
+    lines += ["", ui.chips(counts),
+              "  " + ui.c("dim", f"{report['time'][:16].replace('T', ' ')} · SysMedic {s.get('sysmedic_edition', 'dev')} "
+                                 f"v{s.get('sysmedic_version', 'dev')} · saved in {report['session_dir']}")]
     return "\n".join(lines)
 
 
@@ -685,7 +682,7 @@ def main():
         sys.exit("sysmedic-scan must run as root")
 
     if sys.stdout.isatty() and "--json" not in args:
-        print("  Scanning (read-only)… disks, health, filesystems, boot, network", flush=True)
+        print(UI().item("run", "Scanning (read-only)…", "disks, health, filesystems, boot, network"), flush=True)
     system = collect_system()
     check_self()
     disks = collect_block_devices()

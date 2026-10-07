@@ -16,3 +16,4 @@ etc/modprobe.d/8192eu.conf
 # jonotron is gone; SysMedic uses Qwen only
 opt/sysmedic/models/Modelfile
 opt/sysmedic/scripts/sysmedic-update.sh
+usr/share/consolefonts/SysMedic-Terminus22x11.psf.gz

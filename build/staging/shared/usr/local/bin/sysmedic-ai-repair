@@ -8,10 +8,11 @@ set -u
 GOOD=/usr/local/share/sysmedic/opencode          # known-good copies, installed by sysmedic-deploy
 CFG=/root/.config/opencode
 B=$'\033[1m'; G=$'\033[0;32m'; Y=$'\033[1;33m'; R=$'\033[1;31m'; D=$'\033[2m'; N=$'\033[0m'
-step() { echo "  ${B}$*${N}"; }
-ok()   { echo "    ${G}OK${N}      $*"; }
-bad()  { echo "    ${R}FAILED${N}  $*"; FAILS=$((FAILS + 1)); }
-note() { echo "    ${D}$*${N}"; }
+. /usr/local/lib/sysmedic/ui.sh 2>/dev/null || . "$(dirname "$0")/../lib/sysmedic/ui.sh"
+step() { ui_section "$*"; }
+ok()   { ui_ok "$*"; }
+bad()  { ui_fail "$*"; FAILS=$((FAILS + 1)); }
+note() { ui_info "${D}$*${N}"; }
 FAILS=0
 oc_ok() { bash -c 'timeout 20 opencode --version' >/dev/null 2>&1; }   # a child shell keeps crash messages off the screen
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }

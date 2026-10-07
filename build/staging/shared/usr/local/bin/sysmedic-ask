@@ -27,6 +27,10 @@ import time
 import urllib.error
 import urllib.request
 
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+from ui import UI  # noqa: E402
+
 OLLAMA = "http://127.0.0.1:11434"
 SUMMARY = "/run/sysmedic/latest/summary.txt"
 MAX_TOOL_ROUNDS = 8
@@ -769,10 +773,11 @@ def main():
     except (urllib.error.URLError, OSError):
         sys.exit("Ollama isn't running. Start it with: start-ollama")
 
-    print(f"\n  {BOLD}SysMedic offline assistant{END} — {model} on {device_label()}")
-    print(f"  {DIM}Read-only checks run straight away; anything else asks you first (Enter = yes). Ctrl-C stops a command.")
-    print(f"  Customer disks stay write-protected until you run sysmedic-unlock on Alt+F2.")
-    print(f"  Commands: /tests (list tests)  /feedback TEXT (note a SysMedic problem)  /scan  /new  /quit{END}")
+    ui = UI()
+    print("\n" + ui.banner("Offline assistant", f"{model} on {device_label()} · read-only checks run straight away; anything else asks you first"))
+    print("  " + ui.c("dim", "Ctrl-C stops a command · disks stay write-protected until sysmedic-unlock on Alt+F2"))
+    print("  " + "  ".join(ui.c("accent", c) + " " + ui.c("dim", d) for c, d in
+                           (("/tests", "list tests"), ("/feedback", "note a SysMedic problem"), ("/scan", "rescan"), ("/new", "fresh start"), ("/quit", ""))))
     messages = [system_message()]
     log = conversation_path(model)
     pending = None

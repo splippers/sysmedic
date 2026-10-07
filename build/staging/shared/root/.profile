@@ -22,34 +22,33 @@ if [ -t 0 ] && [ -z "$SYSMEDIC_TTY" ] && command -v script >/dev/null; then
     esac
 fi
 console=${SYSMEDIC_TTY:-$(tty)}
+[ -r /usr/local/lib/sysmedic/ui.sh ] && . /usr/local/lib/sysmedic/ui.sh
+_cmd() { printf '  %s%-28s%s %s%s%s\n' "${_U_ACC:-}" "$1" "${_U_N:-}" "${_U_D:-}" "$2" "${_U_N:-}"; }
 
 # SysMedic auto-launch — console 1 runs the rescue flow, console 2 is the engineer's shell
 if [ -t 0 ] && [ "$console" = /dev/tty2 ]; then
     echo ''
-    echo '  === SysMedic engineer console ==='
-    echo '  sysmedic-guard status      which disks are write-protected'
-    echo '  sysmedic-unlock /dev/X     allow writes to one partition (backs it up first)'
-    echo '  sysmedic-lock              protect everything again'
-    echo '  sysmedic-note "text"       add a note to the job report · sysmedic-report builds it'
-    echo '  sysmedic-note --feedback "…"  note something SysMedic should do better (goes to claude-review.md)'
-    echo '  sysmedic-help              the SysMedic guides (field guide, BitLocker, hardware tests, ...)'
-    echo '  This session is being recorded for later review (output only, not keystrokes).'
-    echo '  Alt+F1 returns to the assistant.'
-    echo ''
+    ui_banner "Engineer console" "Alt+F1 returns to the assistant · this console is recorded for review (output, not keystrokes)"
+    ui_section "Commands"
+    _cmd 'menu' 'the rescue menu (tests, Windows tools, reports, update…)'
+    _cmd 'sysmedic-guard status' 'which disks are write-protected'
+    _cmd 'sysmedic-unlock /dev/X' 'allow writes to one partition (backs it up first)'
+    _cmd 'sysmedic-lock' 'protect everything again'
+    _cmd 'sysmedic-note "text"' 'add a note to the job report (sysmedic-report builds it)'
+    _cmd 'sysmedic-note --feedback "…"' 'something SysMedic should do better (for the review)'
+    _cmd 'sysmedic-help' 'the guides: field guide, BitLocker, hardware tests…'
     bl=$(lsblk -lnpo NAME,FSTYPE 2>/dev/null | awk '$2=="BitLocker"{print $1}')
-    echo '  --- BitLocker ---'
+    ui_section "BitLocker"
     if [ -n "$bl" ]; then
-        echo '  Encrypted volumes on this machine (type the line for the one you need):'
-        for d in $bl; do echo "    sysmedic-win bitlocker $d      ($(lsblk -dno SIZE "$d" | xargs), $(lsblk -dno PARTLABEL "$d" | xargs))"; done
+        for d in $bl; do _cmd "sysmedic-win bitlocker $d" "$(lsblk -dno SIZE "$d" | xargs) $(lsblk -dno PARTLABEL "$d" | xargs) · type this line to unlock (read-only)"; done
     else
-        echo '  No BitLocker volumes detected. Syntax: sysmedic-win bitlocker /dev/<partition>'
+        ui_info "No BitLocker volumes on this machine" "syntax: sysmedic-win bitlocker /dev/<partition>"
     fi
-    echo '  Recovery key: 48 digits in 8 groups of 6, e.g. 123456-234567-345678-456789-567890-678901-789012-890123'
-    echo '  (dashes and spaces optional). It goes into a hidden prompt: never shown, stored, logged or recorded.'
-    echo '  The owner finds it at aka.ms/myrecoverykey (Microsoft account) or from their IT admin. Opens read-only;'
-    echo '  for repairs: sysmedic-unlock the partition first, then add --rw.'
-    echo '  Key with someone else (customer, IT admin)? sysmedic-win bitlocker-web lets them type it on their'
-    echo '  phone or laptop on the same network (secure link + QR code; read-only; stops by itself).'
+    ui_info "Recovery key: 48 digits (8 groups of 6), typed into a hidden prompt: never shown, stored or logged" \
+            "From aka.ms/myrecoverykey or the owner's IT admin. Repairs: sysmedic-unlock the partition, then add --rw."
+    ui_info "Key with someone else? The phone dashboard's BitLocker card (or sysmedic-win bitlocker-web)" \
+            "they type it on their own phone or laptop on the same network: secure link, read-only, stops by itself"
+    echo ''
     /usr/local/bin/sysmedic-dash
     echo ''
 elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; then
@@ -63,31 +62,29 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     # First screen: get online (wired is automatic; offers Wi-Fi), so the scan and cloud AI see the internet
     /usr/local/bin/sysmedic-connect
     clear
-    echo ''
-    echo "  === SysMedic Recovery System · $(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev) ==="
-    echo "  Network: $(/usr/local/bin/sysmedic-connect --status)"
-    echo ''
+    ui_banner "Rescue system" "$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev) · network: $(/usr/local/bin/sysmedic-connect --status)"
 
     /usr/local/sbin/mount-persist || true
-    /usr/local/sbin/start-ollama && echo '  Offline AI (Ollama) ready'
+    /usr/local/sbin/start-ollama && ui_ok "Offline AI ready" "$(/usr/local/sbin/sysmedic-ai-device status 2>/dev/null | sed 's/^ *//')"
+    echo ''
 
     # Read-only triage first: the engineer (and the AI) start from facts
     /usr/local/bin/sysmedic-scan
-    echo ''
 
     # Phone dashboard (view + job notes); the QR code is on console 2
     setsid -f /usr/local/bin/sysmedic-dash --serve >/dev/null 2>&1 </dev/null
     ip4=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1)
-    [ -n "$ip4" ] && echo "  Phone dashboard: http://$ip4:8080  (scan the QR code on Alt+F2)"
+    ui_section "Next"
+    [ -n "$ip4" ] && ui_info "Phone dashboard: http://$ip4:8080" "scan the QR code on Alt+F2: tests, notes, BitLocker unlock"
+    ui_info "Disks are write-protected" "to repair, unlock one partition on Alt+F2 (sysmedic-unlock)"
 
     audit() { . /etc/sysmedic/audit.sh; printf '%s [tty1] %s\n' "$(date -Is)" "$*" >> "$(_sysmedic_audit_file)"; }
     mem_gb=$(( ($(awk '/MemTotal/ {print $2}' /proc/meminfo) + 524288) / 1048576 ))   # rounded GB
     online=$(python3 -c 'import json; print(int(json.load(open("/run/sysmedic/latest/scan.json"))["network"]["online"]))' 2>/dev/null)
     mode=offline
     if [ "$online" = 1 ] && [ "$mem_gb" -ge 4 ] && grep -qw avx /proc/cpuinfo; then
-        echo '  Cloud AI available (OpenCode Zen, free). It will see this scan and command output'
-        echo '  from this machine; serial numbers are kept out. Files are only read with your approval.'
-        read -r -t 60 -p '  Does the customer consent to cloud AI? [y/N] ' consent || true
+        ui_info "Cloud AI available (OpenCode Zen, free)" "it sees this scan and command output; serial numbers are kept out; files are read only with your approval"
+        read -r -t 60 -p "  ${_U_ACC:-}❯${_U_N:-} Does the customer consent to cloud AI? [y/N] " consent || true
         if [ "$consent" = y ] || [ "$consent" = Y ]; then
             mode=cloud; audit "CONSENT cloud AI: yes"
         else
@@ -96,15 +93,14 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     fi
 
     if [ "$mode" = offline ] && [ "$mem_gb" -lt 6 ]; then
-        echo "  The offline assistant needs 6 GB RAM — this machine has ${mem_gb} GB. Opening the rescue menu."
+        ui_warn "The offline assistant needs 6 GB RAM; this machine has ${mem_gb} GB" "opening the rescue menu"
         sleep 4
         exec /usr/local/bin/ambulance
     fi
     [ "$mode" = offline ] && { setsid -f /usr/local/bin/sysmedic-ask --warm >/dev/null 2>&1 </dev/null; }
 
     echo ''
-    echo '  Disks are write-protected. To repair, unlock a partition on console 2 (Alt+F2).'
-    read -r -t 60 -p "  Press Enter to start the $mode assistant, or type m for the rescue menu: " choice || true
+    read -r -t 60 -p "  ${_U_ACC:-}❯${_U_N:-} Enter: start the $mode assistant · m: rescue menu  " choice || true
     [ "$choice" = m ] && exec /usr/local/bin/ambulance
     echo ''
 

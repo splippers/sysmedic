@@ -137,6 +137,10 @@ SLASH = {"health": "health", "cpu": "cpu-stress", "ram": "ram-test", "ram-module
          "windows-registry": "windows-registry", "windows-updates": "windows-updates", "windows-traces": "windows-traces", "windows-crashes": "windows-crashes",
          "autoruns": "autoruns", "malware": "malware-scan"}
 RUN = Path("/run/sysmedic/tests")
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+from ui import UI  # noqa: E402
+
 C = {k: (v if sys.stdout.isatty() else "") for k, v in {"g": "\033[0;32m", "y": "\033[1;33m", "r": "\033[1;31m",
                                                         "b": "\033[1m", "d": "\033[2m", "e": "\033[0m"}.items()}
 
@@ -246,8 +250,9 @@ def start(test, disk="", minutes=None, via="console"):
     stamp = datetime.datetime.now().strftime("%H%M%S")
     run_id = f"{test}-{stamp}"
     log = runs_dir() / f"{run_id}.log"
-    wrapped = f"exec 2>&1; echo \"== {title} — started $(date '+%H:%M:%S')\"; {{ {cmd}\n}}; rc=$?; " \
-              f"echo; echo \"== finished $(date '+%H:%M:%S'), exit $rc\"; echo $rc > {shlex.quote(str(log.with_suffix('.rc')))}"
+    wrapped = f"exec 2>&1; echo \"► {title} · started $(date '+%H:%M:%S')\"; {{ {cmd}\n}}; rc=$?; echo; " \
+              f"if [ $rc = 0 ]; then echo \"✔ {title} · finished $(date '+%H:%M:%S')\"; " \
+              f"else echo \"✖ {title} · failed (exit $rc) · $(date '+%H:%M:%S')\"; fi; echo $rc > {shlex.quote(str(log.with_suffix('.rc')))}"
     env = dict(os.environ, TERM="dumb", PAGER="cat", SYSTEMD_PAGER="", SYSMEDIC_TEST_VIA=via)
     p = subprocess.Popen(["bash", "-c", wrapped], stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                          start_new_session=True, env=env, cwd="/root")
@@ -399,13 +404,17 @@ def main():
             print(json.dumps([{"id": t, "category": v[0], "title": v[1], "what": v[2], "needs": v[4], "estimate": v[5], "person": v[6]}
                               for t, v in TESTS.items()], indent=1))
             return
+        ui = UI()
+        print(ui.banner("Tests", f"{len(TESTS)} hardware and software tests · start one: sysmedic-tests start NAME"))
         for cat in ("hardware", "software"):
-            print(f"\n{C['b']}{cat.capitalize()} tests{C['e']}")
+            print(ui.section(f"{cat.capitalize()}"))
             for t, v in TESTS.items():
                 if v[0] == cat:
-                    extra = " --disk /dev/X" if v[4] == "disk" else " [--minutes N]" if v[4] == "minutes" else ""
-                    print(f"  {t:17} {v[1]:30} {C['d']}{v[5]:>9}  {v[2]}{C['e']}" + (f"  {C['y']}(person: {v[6]}){C['e']}" if v[6] else ""))
-        print(f"\n  Start: sysmedic-tests start TEST   ·   Watch: sysmedic-tests status / log TEST   ·   Full RAM test: MemTest86+ in the boot menu")
+                    room = max(20, ui.width - 62 - (4 if v[6] else 0))
+                    what = v[2] if len(v[2]) <= room else v[2][:room - 1].rstrip(" ,;:") + "…"
+                    person = ui.c("warning", "  ●") if v[6] else ""
+                    print(f"  {ui.c('accent', t.ljust(16))} {v[1][:30]:30} {ui.c('dim', v[5].rjust(9) + '  ' + what)}{person}")
+        print("\n  " + ui.c("warning", "●") + ui.c("dim", " needs you at the laptop   ·   watch: sysmedic-tests watch NAME   ·   full RAM test: MemTest86+ (boot menu)"))
     elif cmd == "disks":
         ds = disks()
         print(json.dumps(ds) if js else "\n".join(f"  {d['dev']:14} {d['size']:>8}  {d['model']} {d['tran']}" for d in ds) or "  no disks to test")
@@ -427,7 +436,8 @@ def main():
             print("\n  (stopped watching; the test keeps running: sysmedic-tests status)")
             sys.exit(130)
         code = rc.read_text().strip()
-        print(f"\n  [{r['title']}: {'passed' if code == '0' else 'FAILED (exit ' + code + ')'}]")
+        ui = UI()
+        print("\n" + (ui.item("ok", f"{r['title']}: passed") if code == "0" else ui.item("fail", f"{r['title']}: FAILED (exit {code})")))
         sys.exit(0 if code == "0" else 1)
     elif cmd == "status":
         rs = runs()
@@ -439,8 +449,8 @@ def main():
         if not rs:
             print("  No tests run yet this visit. sysmedic-tests list")
         for r in rs:
-            col = {"running": C["y"], "passed": C["g"]}.get(r["state"], C["r"])
-            print(f"  {col}{r['state']:20}{C['e']} {r['title']}{(' ' + r['disk']) if r.get('disk') else ''}  {C['d']}{r['run']}, started {r['started'][11:19]}{C['e']}")
+            sev = {"running": "run", "passed": "ok"}.get(r["state"], "fail")
+            print(UI().item(sev, f"{r['title']}{(' ' + r['disk']) if r.get('disk') else ''}  " + UI().c("dim", f"{r['state']} · {r['run']} · started {r['started'][11:19]}")))
     elif cmd == "wait":
         key = a[1] if len(a) > 1 else "latest"
         limit, t0 = int(opt("--timeout", 540)), time.time()

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.10.08 (later): SysMedic looks the part
+
+- **Its own console font**, `Vietnamese-SysMedic22x11` (`build/make-console-font.py`): Terminus 11×22 plus the symbols SysMedic draws — ✔ ✖ ✓ ● ▲ ▼ ⚠ □ ► ❯ and the full ▁▂▃▄▅▆▇█ sparkline set. No stock console font had them (✔ printed as "V", ▲ as an arrow, ● as a speck). Loaded through console-setup's normal codeset path (`FONTFACE="SysMedic"`): `FONT="file"` garbled capitals and digits on this kernel.
+- **One look everywhere** (`lib/sysmedic/ui.py` and `ui.sh`): a ▌SysMedic banner, sections with a rule, coloured ✔ ▲ ✖ ● ► marks with dim detail lines and → next steps, and summary chips (✖ 0 critical ▲ 1 warning ● 2 notes ✔ 4 OK). Applied to the first screen, the triage scan, the engineer console, the offline assistant, tests (list, status, run markers, results), hardware tests, sysmedic-win, graphics results and the AI self-check.
+- The phone dashboard's QR code is drawn with half blocks: half the height, so the engineer console's commands are visible above it (the console has no scrollback).
+
 ## 2026.10.08: what the Samsung caddy and the stick saw on 7 October
 
 Ten sessions (Dell Pro 13 Plus ×5, Latitude 3450 ×2, Precision 3571 drop inspection, …). Fixed:
