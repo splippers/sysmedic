@@ -49,6 +49,23 @@ The stick deploy then builds the ISO and the test image, backs up the persistenc
 
 **Version** = date + the first 8 hex digits of the SHA-256 of `shared/`. Both drives show the same version when their shared core matches: in the boot banner, the scan header, the menu, reports and review bundles.
 
+## Updating a caddy from GitHub (signed releases)
+
+A caddy can update itself without the build PC: **menu U**, or `sysmedic-update apply`. It checks two minutes after boot and every two hours when online (`sysmedic-update check`, never installs), and the menu shows **Update available: vX · press U**.
+
+| On the caddy | |
+|---|---|
+| `sysmedic-update check` | Newer release? Lists what changed since the installed one |
+| `sysmedic-update apply` | Asks, downloads, verifies, installs (`--yes` to skip the question) |
+| `sysmedic-update rollback` | Reinstalls the release that was there before the last update |
+| `sysmedic-update status` | Installed version and the last check |
+
+**How it stays safe.** The main repo is private, and caddies hold no GitHub credential. Each release is a bundle published to the public repo `splippers/sysmedic-releases` (GitHub Releases). Its manifest (version, commit, SHA-256 of the bundle, change list) is **signed** with SysMedic's release key, which never leaves the build PC (`~/.config/sysmedic/release-signing-key`). Caddies hold only the public half (`/etc/sysmedic/release-signers`). Nothing is installed unless the signature and the checksum verify, and an older release is never offered. The bundle contains only what a caddy installs (no build tooling, notes or logs), and `--release` refuses to build if anything in it looks like a secret. The AIs may check for updates but can't apply them.
+
+**What an update covers.** Everything `sysmedic-deploy --caddy` installs from `staging/` (scripts, tests, AI instructions and permissions, packages, docs, boot settings), run on the caddy itself as `sysmedic-deploy --self`. The OpenCode program, Ollama and the AI models are not in updates: the build PC's deploy updates those. The stick can't update itself (its system is a read-only image): update it from the build PC.
+
+**Publishing a release (build PC):** commit, then `build/sysmedic-deploy --release --publish`. Without `--publish` it only builds and signs into `build/release/`.
+
 ## The build directory
 
 `~/sysmedic-build` holds the large artifacts and links its sources to this repo:

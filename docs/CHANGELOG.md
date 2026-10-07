@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.10.07 (evening): caddies update themselves from GitHub
+
+- **`sysmedic-update`** (menu **U**): check, apply, rollback, status. Signed releases from the public `splippers/sysmedic-releases`; the private repo and its history stay private and no credential is stored on a caddy. Boot-time check (timer) and an "Update available" line in the menu.
+- **`sysmedic-deploy --release [--publish]`** builds, secret-scans, signs and publishes; **`--self`** installs a release on the running caddy.
+- Removed the old `scripts/sysmedic-update.sh`, which carried a hard-coded CraicKen token onto every caddy (`/opt/sysmedic/scripts`); deploys now delete it.
+
 ## 2026.10.07 (afternoon): graphics battery on the laptop's own screen
 
 - **`sysmedic-gfx`**: `info` (GPUs, driver in use, real renderer, displays with panel identity), `display` (10 full-screen test patterns), `bench` (glmark2 OpenGL ES + vkmark Vulkan on screen), `stress MIN` (burn-in), `video` (VA-API decode). New tests `gpu-info`, `gpu-display`, `gpu-bench`, `gpu-stress`, `gpu-video` (slash commands, phone, AI: "check for dead pixels", "graphics burn-in", "vulkan benchmark").
