@@ -71,7 +71,29 @@ def status():
             "online": last.get("network", {}).get("online"), "ai": ai,
             "audit": lines[-40:], "backups": session.backups(), "job": job,
             "report": (d / "report.html").exists(), "session": d.name,
-            "bitlocker": bitlocker_state(), "battery": battery()}
+            "bitlocker": bitlocker_state(), "battery": battery(), "hud": hud()}
+
+
+def hud():
+    """Live machine strip: CPU temperature, memory, load (like the console menu)."""
+    import glob
+    out = {}
+    temps = []
+    for h in glob.glob("/sys/class/hwmon/hwmon*"):
+        try:
+            if open(f"{h}/name").read().strip() in ("coretemp", "k10temp", "zenpower"):
+                temps += [int(open(f).read()) / 1000 for f in glob.glob(f"{h}/temp*_input")]
+        except (OSError, ValueError):
+            pass
+    if temps:
+        out["cpu_c"] = round(max(temps))
+    try:
+        mem = {l.split(":")[0]: int(l.split()[1]) for l in open("/proc/meminfo")}
+        out["ram"] = f"{(mem['MemTotal'] - mem['MemAvailable']) / 2**20:.1f}/{mem['MemTotal'] / 2**20:.0f} GB"
+        out["load"] = open("/proc/loadavg").read().split()[0]
+    except (OSError, KeyError, ValueError):
+        pass
+    return out
 
 
 def battery():
@@ -120,30 +142,46 @@ def bitlocker_state():
 PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>SysMedic</title>
 <style>
-:root{--bg:#0f1420;--card:#182032;--ink:#e8ecf4;--muted:#93a0b8;--line:#263049;--crit:#ff6b5b;--warn:#f5b041;--info:#6cb4ff;--ok:#4cd27e;--accent:#6c8cff}
-@media (prefers-color-scheme:light){:root{--bg:#f3f5f9;--card:#fff;--ink:#1b2333;--muted:#5d6779;--line:#dde2ea;--crit:#c0392b;--warn:#b26a00;--info:#1f6fd1;--ok:#1a8a43;--accent:#2457c5}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{position:sticky;top:0;z-index:2;background:var(--bg);padding:12px 16px 8px;border-bottom:1px solid var(--line)}
-header h1{font-size:17px;margin:0}header .sub{color:var(--muted);font-size:13px}
+:root{--bg:#070b14;--card:#0d1524;--card2:#111c30;--ink:#c5d1e6;--hi:#f2f6ff;--muted:#6b7a93;--line:#1b2840;--glow:rgba(34,211,238,.18);
+ --crit:#f25f5c;--warn:#f6c453;--info:#22d3ee;--ok:#3ddc97;--accent:#22d3ee;--blue:#3a86ff}
+@media (prefers-color-scheme:light){:root{--bg:#eef3f9;--card:#fff;--card2:#f6f9fd;--ink:#1b2333;--hi:#0b1220;--muted:#5d6779;--line:#d9e1ec;--glow:rgba(58,134,255,.15);
+ --crit:#c0392b;--warn:#b26a00;--info:#0e7490;--ok:#15803d;--accent:#0891b2;--blue:#2457c5}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+ background-image:radial-gradient(ellipse at top,rgba(34,211,238,.08),transparent 60%)}
+.mono,.stat b,.hud,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+header{position:sticky;top:0;z-index:2;background:rgba(7,11,20,.88);backdrop-filter:blur(8px);padding:10px 16px 8px;border-bottom:1px solid var(--line)}
+@media (prefers-color-scheme:light){header{background:rgba(238,243,249,.9)}}
+.brand{font:800 15px/1 ui-monospace,Menlo,monospace;letter-spacing:.32em;background:linear-gradient(90deg,#67e8f9,#22d3ee 40%,#3a86ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+header h1{font-size:17px;margin:4px 0 0;color:var(--hi)}header .sub{color:var(--muted);font-size:13px}
+.hud{color:var(--accent);font-size:12px;margin-top:2px;letter-spacing:.02em}
 main{padding:12px 16px 80px;max-width:760px;margin:0 auto}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:12px 0}
-.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat{text-align:center}.stat b{display:block;font-size:24px}.stat span{font-size:12px;color:var(--muted)}
-.f{border-left:3px solid var(--line);padding:6px 0 6px 10px;margin:6px 0}.f.critical{border-color:var(--crit)}.f.warning{border-color:var(--warn)}.f.info{border-color:var(--info)}.f.ok{border-color:var(--ok)}
-.f small{display:block;color:var(--muted);font-size:13px}.pill{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--line);margin:2px 4px 2px 0}
+.card{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:12px 0;box-shadow:0 0 0 1px rgba(0,0,0,.2),0 8px 24px -16px var(--glow)}
+.card h2{font:600 11.5px/1 ui-monospace,Menlo,monospace;text-transform:uppercase;letter-spacing:.16em;color:var(--accent);margin:2px 0 10px;display:flex;align-items:center;gap:8px}
+.card h2::after{content:"";flex:1;height:1px;background:var(--line)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat{text-align:center;padding:4px 0}.stat b{display:block;font-size:26px;color:var(--hi)}.stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+#nc.n{color:var(--crit)}#nw.n{color:var(--warn)}
+.f{position:relative;padding:7px 0 7px 26px;margin:2px 0;border-top:1px solid var(--line)}.f:first-child{border-top:0}
+.f::before{position:absolute;left:2px;top:7px;font-weight:700;width:18px;text-align:center}
+.f.critical::before{content:"✖";color:var(--crit)}.f.warning::before{content:"▲";color:var(--warn)}.f.info::before{content:"●";color:var(--info);font-size:12px;top:9px}.f.ok::before{content:"✔";color:var(--ok)}
+.f.critical{color:var(--hi);font-weight:600}
+.f small{display:block;color:var(--muted);font-size:13px;font-weight:400}.pill{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--line);margin:2px 4px 2px 0}
 .t{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
 .t div{flex:1}.t small{display:block;color:var(--muted);font-size:13px}.t button{margin:0;padding:8px 14px;white-space:nowrap}
 .t select,.t input{margin:4px 0 0;padding:6px;font-size:14px;width:auto}.run{padding:6px 0;border-top:1px solid var(--line)}
-.state{font-size:12px;padding:2px 8px;border-radius:99px;background:var(--line)}.state.running{color:var(--warn);font-weight:700}
-.state.passed{color:var(--ok)}pre.log{max-height:320px;overflow:auto;white-space:pre-wrap;font-size:12px;margin:6px 0 0}
+.state{font:600 11px/1 ui-monospace,Menlo,monospace;padding:4px 8px;border-radius:99px;background:var(--line);text-transform:uppercase;letter-spacing:.06em}
+.state.running{color:var(--warn)}.state.running::before{content:"► "}.state.passed{color:var(--ok)}.state.passed::before{content:"✔ "}
+.state.failed,.state.FAILED{color:var(--crit)}
+pre.log{max-height:320px;overflow:auto;white-space:pre-wrap;font-size:12px;margin:6px 0 0;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
 .pill.locked{color:var(--ok)}.pill.WRITABLE{color:var(--warn);font-weight:700}
 pre{white-space:pre-wrap;word-break:break-word;font-size:11.5px;margin:0;color:var(--muted)}
 input,textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;margin:4px 0}
-textarea{min-height:70px}button,.btn{display:inline-block;font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 14px;background:var(--accent);color:#fff;margin:6px 6px 0 0;text-decoration:none;cursor:pointer}
-button.secondary{background:var(--line);color:var(--ink)}.muted{color:var(--muted)}label{font-size:13px;color:var(--muted)}
-details summary{cursor:pointer;color:var(--muted);font-size:13px}#toast{position:fixed;bottom:16px;left:16px;right:16px;text-align:center;background:var(--accent);color:#fff;padding:10px;border-radius:10px;display:none}
+input:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--glow)}
+textarea{min-height:70px}button,.btn{display:inline-block;font:inherit;font-weight:600;border:0;border-radius:9px;padding:9px 14px;
+ background:linear-gradient(90deg,#22d3ee,#3a86ff);color:#041018;margin:6px 6px 0 0;text-decoration:none;cursor:pointer;box-shadow:0 4px 14px -6px var(--glow)}
+button.secondary{background:var(--line);color:var(--ink);box-shadow:none}.muted{color:var(--muted)}label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+details summary{cursor:pointer;color:var(--accent);font-size:13px;padding:6px 0}#toast{position:fixed;bottom:16px;left:16px;right:16px;text-align:center;background:var(--accent);color:#041018;font-weight:600;padding:10px;border-radius:10px;display:none}
 </style>
-<header><h1 id=machine>SysMedic</h1><div class=sub id=sub>connecting…</div></header>
+<header><div class=brand>SYSMEDIC</div><h1 id=machine>…</h1><div class=sub id=sub>connecting…</div><div class=hud id=hud></div></header>
 <main>
 <div class=card id=batcard style="display:none"><h2>Battery</h2><div id=bat></div></div>
 <div class=card><div class=stats>
@@ -177,9 +215,10 @@ function size(n){return n>1e9?(n/1e9).toFixed(1)+' GB':n>1e6?(n/1e6).toFixed(1)+
 async function refresh(){
  let s;try{const r=await fetch('api/status?t='+T);if(!r.ok)throw 0;s=await r.json()}catch(e){$('sub').textContent='offline — retrying…';return}
  $('machine').textContent=s.machine||'SysMedic';
+ const h=s.hud||{};$('hud').textContent=[h.cpu_c!==undefined?'CPU '+h.cpu_c+'°C':'',h.ram?'RAM '+h.ram:'',h.load?'load '+h.load:'',new Date().toTimeString().slice(0,5)].filter(Boolean).join('  ·  ');
  $('sub').textContent=[s.oses.join(', ')||'no OS found',s.ram_gb+' GB RAM',s.firmware+(s.secure_boot?' · Secure Boot':''),'AI: '+s.ai,'scan '+(s.scan_time||'').slice(11,16)].join(' · ');
  const c=s.findings.filter(f=>f.severity=='critical').length,w=s.findings.filter(f=>f.severity=='warning').length,u=Object.values(s.guard).filter(v=>v!='locked').length;
- $('nc').textContent=c;$('nw').textContent=w;$('nb').textContent=s.backups.length;$('ng').textContent=u;
+ $('nc').textContent=c;$('nw').textContent=w;$('nc').classList.toggle('n',c>0);$('nw').classList.toggle('n',w>0);$('nb').textContent=s.backups.length;$('ng').textContent=u;
  const F=$('findings');F.replaceChildren();for(const f of s.findings){const d=el('div','f '+f.severity,f.title);if(f.next_step&&f.severity!='ok')d.append(el('small','', '→ '+f.next_step));F.append(d)}
  const G=$('guard');G.replaceChildren();for(const [k,v] of Object.entries(s.guard))G.append(el('span','pill '+v,k.replace('/dev/','')+' '+v));
  const N=$('notes');N.replaceChildren();for(const n of (s.job.notes||[])){const d=el('div','f',n.text);d.prepend(el('small','',n.time.slice(11,16)+' · '+n.author));N.append(d)}

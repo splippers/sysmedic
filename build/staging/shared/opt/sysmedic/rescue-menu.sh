@@ -3,6 +3,10 @@
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'; BOLD='\033[1m'
 
+. /usr/local/lib/sysmedic/ui.sh 2>/dev/null || { ui_banner() { echo "== $1 =="; }; ui_section() { echo "-- $1 --"; }; ui_info() { echo "  $1"; }; ui_warn() { echo "  ! $1"; }; }
+opt() { printf '  %s%3s%s  %s%s\n' "${_U_ACC:-}" "$1" "${_U_N:-}" "$2" "${3:+  ${_U_D:-}$3${_U_N:-}}"; }
+ask() { echo; read -r -p "  ${_U_ACC:-}❯${_U_N:-} $1 " "$2"; }
+pause() { echo; read -r -p "  ${_U_D:-}Enter to go back${_U_N:-} " _; }
 EDITION=$(cat /etc/sysmedic/edition 2>/dev/null || echo unknown)
 VERSION=$(cat /etc/sysmedic/version 2>/dev/null || echo dev)
 
@@ -48,47 +52,49 @@ while true; do
             ;;
         5)
             clear
-            echo -e "${BOLD}=== Linux Boot Repair ===${NC}\n"
-            echo "Select a script:"
-            echo "  1) Fix GRUB bootloader"
-            echo "  2) Fix corrupt initramfs (kernel panic)"
-            echo "  3) Fix /etc/fstab (wrong UUIDs)"
-            echo "  4) Fix oversized /boot"
-            echo ""
-            read -p "  Choose [1-4]: " lfix
+            ui_banner "Linux boot repair" "writes to the customer's disk: unlock the partition first on Alt+F2 (sysmedic-unlock)"
+            ui_section "Repairs"
+            opt 1 "Fix the GRUB bootloader"
+            opt 2 "Rebuild a corrupt initramfs" "kernel panic at boot"
+            opt 3 "Fix /etc/fstab" "wrong or changed UUIDs"
+            opt 4 "Fix an over-full /boot"
+            opt 0 "Back"
+            ask "Choose:" lfix
             case "$lfix" in
                 1) [ -x "/opt/sysmedic/scripts/linux-repair/fix-grub.sh" ] && bash /opt/sysmedic/scripts/linux-repair/fix-grub.sh || echo "Script not found" ;;
                 2) [ -x "/opt/sysmedic/scripts/linux-repair/fix-kernel-panic.sh" ] && bash /opt/sysmedic/scripts/linux-repair/fix-kernel-panic.sh || echo "Script not found" ;;
                 3) [ -x "/opt/sysmedic/scripts/linux-repair/fix-fstab.sh" ] && bash /opt/sysmedic/scripts/linux-repair/fix-fstab.sh || echo "Script not found" ;;
                 4) [ -x "/opt/sysmedic/scripts/linux-repair/fix-boot.sh" ] && bash /opt/sysmedic/scripts/linux-repair/fix-boot.sh || echo "Script not found" ;;
+                *) continue ;;
             esac
-            read -p "Press Enter..."
+            pause
             ;;
         6)
             while true; do
                 clear
-                echo -e "${BOLD}=== Windows ===${NC}\n"
+                ui_banner "Windows tools" "read-only unless noted · works on the offline installation"
                 /usr/local/bin/sysmedic-win
-                echo ""
-                echo "  1) System info (version, Fast Startup, pending updates, accounts)"
-                echo "  2) Blue-screen crashes explained"
-                echo "  3) Event log: disk, hardware, power and service problems"
-                echo "  4) Autostart programs (suspicious ones flagged)"
-                echo "  5) Malware scan (ClamAV)"
-                echo ""
-                echo "  c) Full check-up: everything below + the above, saved as a report"
-                echo "  e) All event logs (apps, updates, drivers, Defender, boot times…)"
-                echo "  r) Registry evidence (missing drivers/services, hijacks, policies)"
-                echo "  s) Updates & servicing (CBS, DISM, Windows Update, upgrade logs)"
-                echo ""
-                echo "  6) Unlock a BitLocker volume (recovery key)"
-                echo "  w) Unlock BitLocker from a phone/laptop (key typed there; secure link + QR)"
-                echo "  7) Roll back a half-installed update"
-                echo "  8) Clear hibernation / Fast Startup lock"
-                echo "  9) Reset a local account password"
-                echo "  0) Back"
-                echo ""
-                read -p "  Choose: " w
+                ui_section "Look"
+                opt 1 "System info" "version, Fast Startup, pending updates, accounts"
+                opt 2 "Blue screens and crash reports" "dumps and Windows Error Reporting, explained"
+                opt 3 "Event log problems" "disk, hardware, power, services"
+                opt 4 "Autostart programs" "suspicious ones flagged"
+                opt 5 "Malware scan" "ClamAV"
+                ui_section "Deep evidence"
+                opt c "Full check-up" "everything here in one report, saved in the session"
+                opt e "All event logs" "apps, updates, drivers, Defender, boot times"
+                opt r "Registry evidence" "missing drivers/services, hijacks, policies"
+                opt s "Updates & servicing" "CBS, DISM, Windows Update, upgrade logs"
+                opt t "Traces (ETL)" "Windows Update and other components' failure codes"
+                opt b "Boot configuration (BCD)" "entries, hypervisor, test-signing, Safe Mode"
+                ui_section "Unlock & repair"
+                opt 6 "Unlock BitLocker here" "recovery key typed on this console"
+                opt w "Unlock BitLocker from a phone" "the key is typed there: secure link + QR"
+                opt 7 "Roll back a half-installed update" "writes: unlock the partition first"
+                opt 8 "Clear the hibernation / Fast Startup lock" "writes"
+                opt 9 "Reset a local account password" "writes"
+                opt 0 "Back"
+                ask "Choose:" w
                 case "$w" in
                     1) /usr/local/bin/sysmedic-win info ;;
                     2) /usr/local/bin/sysmedic-win crashes ;;
@@ -100,6 +106,8 @@ while true; do
                     e|E) /usr/local/bin/sysmedic-win evtx | less -R ;;
                     r|R) /usr/local/bin/sysmedic-win registry | less -R ;;
                     s|S) /usr/local/bin/sysmedic-win cbs | less -R ;;
+                    t|T) /usr/local/bin/sysmedic-win etl | less -R ;;
+                    b|B) /usr/local/bin/sysmedic-win bcd | less -R ;;
                     6|7|8|9)
                         read -p "  Partition (e.g. /dev/nvme0n1p3): " part
                         case "$w" in
@@ -109,32 +117,33 @@ while true; do
                             9) /usr/local/bin/sysmedic-win reset-password "$part" ;;
                         esac ;;
                     0|"") break ;;
+                    *) continue ;;
                 esac
-                read -p "  Press Enter..."
+                pause
             done
             ;;
         7)
             clear
-            echo -e "${BOLD}=== macOS Repair ===${NC}\n"
-            echo "HFS+ volumes can be mounted and repaired:"
-            echo "  modprobe hfsplus && mount -t hfsplus -o force,rw /dev/sdXN /mnt/mac"
-            echo ""
-            echo "APFS requires apfs-fuse or macOS Recovery (Cmd+R at boot)"
-            read -p "Press Enter..."
+            ui_banner "macOS" "HFS+ and APFS"
+            ui_section "HFS+ (older Macs)"
+            ui_info "Mount and repair from here" "modprobe hfsplus && mount -t hfsplus -o force,rw /dev/sdXN /mnt/mac (unlock the partition first)"
+            ui_section "APFS (2017 and later)"
+            ui_info "Read with apfs-fuse, or repair from macOS Recovery" "Cmd+R at boot on Intel Macs; hold the power button on Apple silicon"
+            pause
             ;;
         8)
             clear
-            echo -e "${BOLD}=== Data Backup ===${NC}\n"
-            if [ -d /mnt/persist ]; then
-                echo "Persistence partition is mounted at /mnt/persist"
-                echo "Available space: $(df -h /mnt/persist | tail -1 | awk '{print $4}')"
-                echo ""
-                echo "To backup: mount /dev/sdXN /mnt/target && rsync -av /mnt/target/ /mnt/persist/backups/"
+            ui_banner "Back up data" "copies the customer's files to SysMedic's drive before any repair"
+            if mountpoint -q /mnt/persist; then
+                ui_ok "SysMedic's drive is ready" "$(df -h /mnt/persist | tail -1 | awk '{print $4}') free at /mnt/persist/backups"
+                ui_section "How"
+                ui_info "Mount the customer's partition read-only, then copy" \
+                        "mkdir -p /mnt/target && mount -o ro /dev/sdXN /mnt/target && rsync -a --info=progress2 /mnt/target/Users/ /mnt/persist/backups/"
+                ui_info "Or ask the AI assistant: \"back up the user folders from C:\"" "it proposes the commands; you approve each one"
             else
-                echo "Persistence partition NOT mounted (looking for label FOG_AMB_PERSIST)"
-                echo "Retry with: mount-persist"
+                ui_warn "SysMedic's data partition isn't mounted" "retry with: mount-persist"
             fi
-            read -p "Press Enter..."
+            pause
             ;;
         9)
             clear

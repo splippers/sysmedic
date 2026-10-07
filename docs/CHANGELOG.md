@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.10.08 (night): the phone dashboard, submenus and the assistant's input
+
+- **Phone dashboard in SysMedic Night**: gradient SYSMEDIC wordmark, live strip (CPU temperature, memory, load, clock), ✔ ▲ ✖ ● on findings, monospace figures, glowing cards with spaced cyan headings; a matching light variant for daylight.
+- **Submenus restyled** (Windows tools, Linux boot repair, macOS, backup): banner, grouped sections, highlighted keys with dim notes. The Windows tools menu now also offers **t** traces (ETL) and **b** boot configuration (BCD).
+- **Typing while the offline AI answers no longer prints over its reply**: keys are kept, unprinted, and appear at the next prompt.
+
 ## 2026.10.08 (evening): the console goes high-tech
 
 - **SysMedic Night palette** for every console (`/etc/sysmedic/vtrgb`, applied at boot by setvtrgb): navy-black background, soft text, cyan and blue accents, gentle green/amber/red for status.

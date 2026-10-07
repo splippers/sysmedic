@@ -199,6 +199,30 @@ def is_read_only(cmd):
     return all(p and READ_ONLY.match(p) for p in parts)
 
 
+class quiet_keys:
+    """While the AI writes or a command runs, keys typed aren't printed over the output. They stay buffered (the
+    terminal keeps line editing on) and show up at the next prompt, so typing ahead still works."""
+    def __enter__(self):
+        self.old = None
+        try:
+            import termios
+            fd = sys.stdin.fileno()
+            if os.isatty(fd):
+                self.old = termios.tcgetattr(fd)
+                new = termios.tcgetattr(fd)
+                new[3] &= ~termios.ECHO
+                termios.tcsetattr(fd, termios.TCSANOW, new)
+        except (ImportError, OSError, ValueError):
+            self.old = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.old is not None:
+            import termios
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, self.old)   # NOW, not FLUSH: keep what was typed
+        return False
+
+
 def stream_command(cmd):
     """Run cmd, showing every line of output live on this console. Ctrl-C stops just this command."""
     env = dict(os.environ, SYSMEDIC_AI="ask", BASH_ENV="/etc/sysmedic/audit.sh", TERM="dumb",
@@ -473,7 +497,8 @@ def run_approved(call):
                 break
             if ans in ("", "y", "yes"):
                 break
-    out, status = stream_command(cmd)
+    with quiet_keys():
+        out, status = stream_command(cmd)
     if len(out) > OUTPUT_TO_MODEL:
         out = out[:4500] + "\n…[output truncated]…\n" + out[-1500:]
     return f"Command: {cmd}\n{out}\n{status}"
@@ -532,13 +557,14 @@ def assistant_turn(model, messages):
         t0 = time.time()
         content, calls = "", []
         try:
-            for chunk in with_wait_timer(ollama_chat(model, window(messages))):
-                msg = chunk.get("message", {})
-                piece = msg.get("content", "")
-                if piece:
-                    print(piece, end="", flush=True)
-                    content += piece
-                calls += msg.get("tool_calls") or []
+            with quiet_keys():
+                for chunk in with_wait_timer(ollama_chat(model, window(messages))):
+                    msg = chunk.get("message", {})
+                    piece = msg.get("content", "")
+                    if piece:
+                        print(piece, end="", flush=True)
+                        content += piece
+                    calls += msg.get("tool_calls") or []
         except KeyboardInterrupt:
             print(f"\n  {DIM}(interrupted){END}")
             messages.append({"role": "assistant", "content": content + " [interrupted by engineer]"})
@@ -646,7 +672,8 @@ def run_test_directly(model, messages, test, q):
         ans = "n"
     if ans not in ("", "y", "yes"):
         return False
-    out, status = stream_command(cmd)
+    with quiet_keys():
+        out, status = stream_command(cmd)
     if len(out) > OUTPUT_TO_MODEL:
         out = out[:4500] + "\n…[output truncated]…\n" + out[-1500:]
     messages.append({"role": "user", "content": q})
