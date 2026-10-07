@@ -29,9 +29,13 @@ while true; do
     echo -e "${BOLD}  ║ 15) Advanced toolkit                 ║${NC}"
     echo -e "${BOLD}  ║ 16) Tests (hardware & software)      ║${NC}"
     echo -e "${BOLD}  ║ 17) Repair the AI assistant          ║${NC}"
+    [ "$EDITION" = caddy ] && echo -e "${BOLD}  ║  U) Update SysMedic (from GitHub)    ║${NC}"
     echo -e "${BOLD}  ║  0) Shutdown                         ║${NC}"
     echo -e "${BOLD}  ╚══════════════════════════════════════╝${NC}"
     echo -e "  ${CYAN}SysMedic ${EDITION} edition · v${VERSION}${NC}"
+    if [ "$EDITION" = caddy ] && grep -qs '"state": "available"' /run/sysmedic/update.json; then
+        echo -e "  ${YELLOW}Update available: v$(python3 -c 'import json; print(json.load(open("/run/sysmedic/update.json"))["latest"])' 2>/dev/null) · press U${NC}"
+    fi
     echo ""
     echo -ne "  ${CYAN}Choice [0-17]:${NC} "
     read choice
@@ -209,6 +213,16 @@ while true; do
         17)
             clear
             /usr/local/bin/sysmedic-ai-repair
+            read -p "  Press Enter..."
+            ;;
+        u|U)
+            clear
+            if [ "$EDITION" = caddy ]; then
+                /usr/local/sbin/sysmedic-update apply
+                VERSION=$(cat /etc/sysmedic/version 2>/dev/null || echo dev)
+            else
+                echo "  The stick is updated from the build PC (sysmedic-deploy --stick)."
+            fi
             read -p "  Press Enter..."
             ;;
         0)

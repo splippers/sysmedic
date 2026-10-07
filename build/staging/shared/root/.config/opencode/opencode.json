@@ -146,6 +146,8 @@
       "sysmedic-hwtest inventory*": "allow",
       "sysmedic-hwtest ram-modules*": "allow",
       "sysmedic-gfx info*": "allow",
+      "sysmedic-update check*": "allow",
+      "sysmedic-update status*": "allow",
       "sysmedic-gfx video*": "allow",
       "upower *": "allow",
       "acpi*": "allow",
@@ -265,7 +267,10 @@
       "*github.com/*/releases/download*": "deny",
       "*codeload.github.com*": "deny",
       "pip download*": "deny",
-      "*pip3 download*": "deny"
+      "*pip3 download*": "deny",
+      "sysmedic-update apply*": "deny",
+      "sysmedic-update rollback*": "deny",
+      "*sysmedic-deploy*": "deny"
     },
     "edit": "ask",
     "webfetch": "allow",

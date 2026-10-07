@@ -1,0 +1,9 @@
+[Unit]
+Description=SysMedic: check GitHub for a newer signed release (never installs)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sysmedic-update check --quiet
+TimeoutStartSec=60

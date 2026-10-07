@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""sysmedic-update — keep a caddy on the latest SysMedic release from GitHub.
+
+  sysmedic-update check      is there a newer release? (what changed); also runs at boot when online
+  sysmedic-update apply      download, verify and install it (asks first; --yes to skip)
+  sysmedic-update rollback   reinstall the release that was installed before the last update
+  sysmedic-update status     installed version, latest known release, last check
+
+Releases are published by the build PC (sysmedic-deploy --release --publish) to a public GitHub repo. Each
+release's manifest is signed with SysMedic's release key; this caddy holds only the public half
+(/etc/sysmedic/release-signers), so nothing secret is stored here. Nothing is installed unless the signature
+and the bundle's checksum verify. The OpenCode program, Ollama and the AI models are not part of an update
+(the build PC's deploy updates those).
+"""
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+BASE = os.environ.get("SYSMEDIC_RELEASE_URL", "https://github.com/splippers/sysmedic-releases/releases/latest/download")
+SIGNERS = "/etc/sysmedic/release-signers"
+BUILD = "/etc/sysmedic/build.json"
+STATE = "/run/sysmedic/update.json"
+STORE = "/var/lib/sysmedic/releases"
+LOG = "/var/log/sysmedic-update.log"
+B, D, G, Y, R, CY, N = "\033[1m", "\033[2m", "\033[0;32m", "\033[1;33m", "\033[1;31m", "\033[0;36m", "\033[0m"
+
+
+def fetch(name, timeout=20):
+    req = urllib.request.Request(f"{BASE}/{name}", headers={"User-Agent": "sysmedic-update"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def installed():
+    try:
+        return json.load(open(BUILD))
+    except (OSError, ValueError):
+        v = open("/etc/sysmedic/version").read().strip() if os.path.exists("/etc/sysmedic/version") else "unknown"
+        return {"version": v, "commit": "unknown", "commit_time": 0}
+
+
+def verify(manifest, sig):
+    with tempfile.NamedTemporaryFile(suffix=".sig") as s:
+        s.write(sig)
+        s.flush()
+        p = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", SIGNERS, "-I", "sysmedic-release", "-n", "sysmedic-release",
+                            "-s", s.name], input=manifest, capture_output=True)
+    return p.returncode == 0
+
+
+def save_state(st):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    st["checked"] = time.strftime("%Y-%m-%d %H:%M")
+    json.dump(st, open(STATE, "w"))
+
+
+def latest():
+    """(manifest dict, raw bytes) of the latest signed release, or raise RuntimeError with a plain reason."""
+    if not os.path.exists(SIGNERS):
+        raise RuntimeError("this drive has no release key (/etc/sysmedic/release-signers): update it from the build PC once")
+    try:
+        raw, sig = fetch("manifest.json"), fetch("manifest.json.sig")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"no release found ({e.code})")
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError(f"offline or GitHub unreachable ({getattr(e, 'reason', e)})")
+    if not verify(raw, sig):
+        raise RuntimeError("the release's signature does NOT verify: not trusting it")
+    m = json.loads(raw)
+    if m.get("format") != 1 or m.get("edition") != "caddy":
+        raise RuntimeError("the release isn't a caddy release this version understands")
+    return m, raw
+
+
+def cmd_check(quiet=False):
+    inst = installed()
+    try:
+        m, _ = latest()
+    except RuntimeError as e:
+        save_state({"state": "unknown", "installed": inst.get("version"), "reason": str(e)})
+        if not quiet:
+            print(f"  {Y}Can't check for updates: {e}.{N}")
+        return 2
+    new = [c for c in m.get("changes", []) if c["time"] > inst.get("commit_time", 0)]
+    if m["commit"] == inst.get("commit") or m["commit_time"] <= inst.get("commit_time", 0):
+        save_state({"state": "current", "installed": inst.get("version"), "latest": m["version"]})
+        if not quiet:
+            print(f"  {G}SysMedic is up to date{N} (v{inst.get('version')}).")
+        return 0
+    save_state({"state": "available", "installed": inst.get("version"), "latest": m["version"], "tag": m["tag"],
+                "changes": [c["summary"] for c in new][:20]})
+    if not quiet:
+        print(f"  {B}Update available:{N} v{inst.get('version')} → {CY}v{m['version']}{N} ({m['size'] // 1024} KB, signed)")
+        for c in new[:15]:
+            print(f"    {D}{time.strftime('%d %b', time.localtime(c['time']))}{N}  {c['summary'][:110]}")
+        if len(new) > 15:
+            print(f"    {D}…and {len(new) - 15} more{N}")
+        print(f"  Install it: {B}sysmedic-update apply{N}")
+    return 1
+
+
+def install(m, bundle_dir):
+    """Run the release's own deploy against this caddy (sysmedic-deploy --self)."""
+    env = dict(os.environ, SYSMEDIC_VERSION=m["version"], SYSMEDIC_COMMIT=m["commit"], SYSMEDIC_COMMIT_TIME=str(m["commit_time"]))
+    env.pop("SYSMEDIC_AI", None)
+    print(f"  Installing v{m['version']}… {D}(log: {LOG}){N}")
+    with open(LOG, "a") as log:
+        log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} installing {m['tag']} (v{m['version']})\n")
+        log.flush()
+        p = subprocess.Popen([os.path.join(bundle_dir, "build/sysmedic-deploy"), "--self"], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, env=env, cwd=os.path.join(bundle_dir, "build"))
+        for line in p.stdout:
+            log.write(line)
+            if line.startswith(("\033[1m==>", "\033[1;31mERROR")):
+                print("  " + line.rstrip())
+        return p.wait()
+
+
+def audit(msg):
+    try:
+        d = os.path.realpath("/run/sysmedic/latest")
+        with open(os.path.join(d if os.path.isdir(d) else "/run/sysmedic", "audit.log"), "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} [update] {msg}\n")
+    except OSError:
+        pass
+
+
+def refuse_unless_engineer():
+    if os.environ.get("SYSMEDIC_AI"):
+        sys.exit("  The AI can't install updates: the engineer runs sysmedic-update apply (menu U).")
+    if os.geteuid() != 0:
+        sys.exit("  Run as root.")
+    if open("/etc/sysmedic/edition").read().strip() != "caddy":
+        sys.exit("  Only a caddy updates itself; the stick is updated from the build PC (sysmedic-deploy --stick).")
+
+
+def cmd_apply(yes=False):
+    refuse_unless_engineer()
+    rc = cmd_check()
+    if rc != 1:
+        return 0 if rc == 0 else 1
+    if not yes:
+        try:
+            if input("  Install it now? [Y/n] ").strip().lower() not in ("", "y", "yes"):
+                return 0
+        except EOFError:
+            return 0
+    m, raw = latest()
+    print("  Downloading…")
+    try:
+        data = fetch(m["bundle"], timeout=300)
+    except (urllib.error.URLError, OSError) as e:
+        print(f"  {R}Download failed: {e}{N}")
+        return 1
+    if hashlib.sha256(data).hexdigest() != m["sha256"] or len(data) != m["size"]:
+        print(f"  {R}The download doesn't match the signed checksum: not installing.{N}")
+        audit(f"REFUSED {m['tag']}: checksum mismatch")
+        return 1
+    dest = os.path.join(STORE, m["tag"])
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(dest)
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz") as t:
+        t.write(data)
+        t.flush()
+        with tarfile.open(t.name) as tf:
+            tf.extractall(dest, filter="data")
+    open(os.path.join(dest, "manifest.json"), "wb").write(raw)
+    prev = os.path.realpath(os.path.join(STORE, "current")) if os.path.islink(os.path.join(STORE, "current")) else ""
+    audit(f"installing {m['tag']} (v{m['version']})")
+    if install(m, dest) != 0:
+        print(f"  {R}The update stopped with an error (details in {LOG}).{N}"
+              + (f" Roll back: {B}sysmedic-update rollback{N}" if prev else ""))
+        audit(f"FAILED {m['tag']}")
+        return 1
+    for name, target in (("previous", prev), ("current", dest)):
+        link = os.path.join(STORE, name)
+        if os.path.islink(link):
+            os.unlink(link)
+        if target:
+            os.symlink(target, link)
+    keep = {os.path.realpath(os.path.join(STORE, n)) for n in ("current", "previous")}
+    for d in os.listdir(STORE):
+        p = os.path.join(STORE, d)
+        if os.path.isdir(p) and not os.path.islink(p) and os.path.realpath(p) not in keep:
+            shutil.rmtree(p, ignore_errors=True)
+    save_state({"state": "current", "installed": m["version"], "latest": m["version"]})
+    audit(f"installed {m['tag']} (v{m['version']})")
+    print(f"  {G}SysMedic updated to v{m['version']}.{N} Already-open menus and AI sessions use the new version after a restart of them.")
+    return 0
+
+
+def cmd_rollback():
+    refuse_unless_engineer()
+    prev = os.path.join(STORE, "previous")
+    if not os.path.islink(prev) or not os.path.exists(os.path.join(prev, "manifest.json")):
+        print("  Nothing to roll back to: no earlier release was installed by sysmedic-update on this caddy.")
+        return 1
+    m = json.load(open(os.path.join(prev, "manifest.json")))
+    if input(f"  Reinstall v{m['version']} ({m['tag']})? [y/N] ").strip().lower() not in ("y", "yes"):
+        return 0
+    audit(f"rolling back to {m['tag']}")
+    rc = install(m, os.path.realpath(prev))
+    if rc == 0:
+        cur = os.path.join(STORE, "current")
+        target = os.path.realpath(cur)
+        os.unlink(cur)
+        os.symlink(os.path.realpath(prev), cur)
+        os.unlink(prev)
+        os.symlink(target, prev)
+        print(f"  {G}Rolled back to v{m['version']}.{N}")
+    return rc
+
+
+def cmd_status():
+    inst = installed()
+    print(f"  Installed: v{inst.get('version')}  {D}(commit {str(inst.get('commit'))[:8]}){N}")
+    try:
+        st = json.load(open(STATE))
+    except (OSError, ValueError):
+        st = {}
+    if st:
+        msg = {"current": f"{G}up to date{N}", "available": f"{Y}update available: v{st.get('latest')}{N}",
+               "unknown": f"{D}couldn't check: {st.get('reason', '')}{N}"}.get(st.get("state"), st.get("state"))
+        print(f"  Last check ({st.get('checked')}): {msg}")
+    else:
+        print("  Not checked yet this boot: sysmedic-update check")
+    return 0
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a else "check"
+    if cmd == "check":
+        rc = cmd_check(quiet="--quiet" in a)
+        return 0 if "--quiet" in a else rc
+    if cmd == "apply":
+        return cmd_apply(yes="--yes" in a)
+    if cmd == "rollback":
+        return cmd_rollback()
+    if cmd == "status":
+        return cmd_status()
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

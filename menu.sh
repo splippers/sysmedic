@@ -463,7 +463,7 @@ menu_system() {
                 ;;
             4)
                 show_header "  UPDATE CHECK"
-                bash "$SCRIPTS/sysmedic-update.sh" update
+                /usr/local/sbin/sysmedic-update apply
                 pause
                 ;;
             0)  break ;;

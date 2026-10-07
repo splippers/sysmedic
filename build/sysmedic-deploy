@@ -5,6 +5,9 @@
 #   ./sysmedic-deploy --stick-image        rebuild the stick image only (sysmedic-v2.iso, stick-test.img)
 #   ./sysmedic-deploy --stick [/dev/sdX]   rebuild and write the stick; its sessions are backed up and restored
 #   ./sysmedic-deploy --version            print the version the shared core would get
+#   ./sysmedic-deploy --release [--publish] build + sign the caddy update bundle (release/); --publish uploads it
+#                                          to the public releases repo (RELEASE_REPO), where caddies find it
+#   ./sysmedic-deploy --self               ON A CADDY, from an unpacked release (sysmedic-update apply runs this)
 #
 # Source of truth: staging/shared/ (identical on both), staging/editions/<edition>/,
 # staging/agent/{core,caddy,stick}.md. Both drives get the same version stamp when
@@ -29,6 +32,7 @@ cleanup() {
 mnt() { sudo mount "$@"; MOUNTS+=("${@: -1}"); }
 
 version() {
+    [ -n "${SYSMEDIC_VERSION:-}" ] && { echo "$SYSMEDIC_VERSION"; return; }   # set by sysmedic-update (from the signed manifest)
     local h
     # covers everything that ends up on the drives: shared files, AI instructions, package lists
     h=$(cd "$ST" && find shared agent packages obsolete.txt -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-8)
@@ -127,6 +131,11 @@ PY
         printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
     echo "$ed" | sudo tee "$root/etc/sysmedic/edition" >/dev/null
     echo "$v" | sudo tee "$root/etc/sysmedic/version" >/dev/null
+    # what sysmedic-update compares against the latest signed release
+    local cm ct; cm=${SYSMEDIC_COMMIT:-$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)}
+    ct=${SYSMEDIC_COMMIT_TIME:-$(git -C "$repo" log -1 --format=%ct 2>/dev/null || date +%s)}
+    git -C "$repo" diff --quiet HEAD 2>/dev/null || [ -n "${SYSMEDIC_COMMIT:-}" ] || cm="$cm+uncommitted"
+    printf '{"version": "%s", "commit": "%s", "commit_time": %s}\n' "$v" "$cm" "$ct" | sudo tee "$root/etc/sysmedic/build.json" >/dev/null
     after=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* $root/etc/initramfs-tools/conf.d/* 2>/dev/null; true" | md5sum)
     HOOKS_CHANGED=0; [ "$before" = "$after" ] || HOOKS_CHANGED=1
     DEPLOYED_VERSION=$v
@@ -135,6 +144,7 @@ PY
 
 chroot_run() {   # chroot_run ROOT CMD...
     local root=$1; shift
+    if [ "$root" = / ]; then sudo "$@"; return; fi      # --self: the running caddy
     for d in dev proc sys; do mnt --bind "/$d" "$root/$d"; done
     sudo chroot "$root" "$@"
     mountpoint -q "$root/sys/firmware/efi/efivars" && sudo umount "$root/sys/firmware/efi/efivars"
@@ -144,6 +154,12 @@ chroot_run() {   # chroot_run ROOT CMD...
 # with_net_chroot ROOT CMD...: chroot with network, and services prevented from starting
 with_net_chroot() {
     local root=$1; shift
+    if [ "$root" = / ]; then                             # --self: the running caddy has its own network
+        printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null; sudo chmod 755 /usr/sbin/policy-rc.d
+        local rc=0; sudo "$@" || rc=$?
+        sudo rm -f /usr/sbin/policy-rc.d
+        return $rc
+    fi
     for d in dev dev/pts proc sys; do mnt --bind "/$d" "$root/$d"; done
     sudo mv "$root/etc/resolv.conf" "$root/etc/resolv.conf.sysmedic-deploy"
     sudo cp /etc/resolv.conf "$root/etc/resolv.conf"
@@ -210,9 +226,12 @@ install_caddy_extras() {
         printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
     sudo mkdir -p "$root/etc/systemd/system/sysinit.target.wants"
     sudo ln -sf /etc/systemd/system/sysmedic-persist.service "$root/etc/systemd/system/sysinit.target.wants/sysmedic-persist.service"
+    sudo mkdir -p "$root/etc/systemd/system/timers.target.wants"
+    sudo ln -sf /etc/systemd/system/sysmedic-update-check.timer "$root/etc/systemd/system/timers.target.wants/sysmedic-update-check.timer"
     # Offline AI on a discrete GPU: Ollama's Vulkan backend, only if it matches the caddy's Ollama exactly
-    local obin olib; obin=$( [ -x downloads/ollama/bin/ollama ] && echo downloads/ollama/bin/ollama || echo /usr/local/bin/ollama )
-    olib=$( [ -d downloads/ollama/lib/ollama ] && echo downloads/ollama/lib/ollama || echo /usr/local/lib/ollama )
+    local obin olib
+    [ "$root" = / ] && obin=/nonexistent || obin=$( [ -x downloads/ollama/bin/ollama ] && echo downloads/ollama/bin/ollama || echo /usr/local/bin/ollama )
+    [ "$root" = / ] && olib=/nonexistent || olib=$( [ -d downloads/ollama/lib/ollama ] && echo downloads/ollama/lib/ollama || echo /usr/local/lib/ollama )
     if [ -d "$olib/vulkan" ] && [ -f "$root/srv/sysmedic/ollama/bin/ollama" ]; then
         if sudo cmp -s "$obin" "$root/srv/sysmedic/ollama/bin/ollama"; then
             sudo rsync -a --delete "$olib/vulkan/" "$root/srv/sysmedic/ollama/lib/ollama/vulkan/"
@@ -271,6 +290,72 @@ deploy_caddy() {
     fi
     sync
     say "Caddy updated. Safe to unplug once this finishes."
+}
+
+# ── Self-update (on a caddy) and releases (on the build PC) ───────────────
+
+deploy_self() {
+    [ "$(id -u)" = 0 ] || die "Run as root (sysmedic-update apply does)"
+    [ -z "${SYSMEDIC_AI:-}" ] || die "The AI can't update SysMedic; the engineer runs sysmedic-update apply"
+    [ "$(cat /etc/sysmedic/edition 2>/dev/null)" = caddy ] || die "--self is for an installed caddy (the stick is updated from the build PC)"
+    local grub_before; grub_before=$(cat /etc/default/grub /etc/default/grub.d/* 2>/dev/null | md5sum)
+    install_tree / caddy
+    install_caddy_extras /
+    install_packages / caddy
+    [ "$HOOKS_CHANGED" = 1 ] && { say "An initramfs hook changed: rebuilding the initramfs"; update-initramfs -u -k all; }
+    [ "$grub_before" != "$(cat /etc/default/grub /etc/default/grub.d/* 2>/dev/null | md5sum)" ] && \
+        { say "Boot menu settings changed: updating GRUB"; update-grub 2>&1 | grep -E '^Found|done' || true; }
+    systemctl daemon-reload 2>/dev/null || true
+    sync
+    say "SysMedic updated to v$DEPLOYED_VERSION."
+}
+
+RELEASE_REPO=${RELEASE_REPO:-splippers/sysmedic-releases}
+SIGNING_KEY=${SIGNING_KEY:-$HOME/.config/sysmedic/release-signing-key}
+# Only what a caddy installs goes in the bundle (published publicly): no build tooling, notes or logs
+BUNDLE_EXCLUDE=(WIKI.md caddy-build.log ROADMAP.md auth 'build/*')
+BUNDLE_INCLUDE=(build/staging build/sysmedic-deploy build/opencode-brand.py)
+
+build_release() {
+    local publish=${1:-} repo out v cm ct tag
+    repo=$(cd "$(realpath "$ST")/../.." && pwd); out=$KIT/release
+    git -C "$repo" diff --quiet HEAD && git -C "$repo" diff --cached --quiet || die "Commit your changes first: a release is built from a commit"
+    [ -f "$SIGNING_KEY" ] || die "No signing key ($SIGNING_KEY). Create it once: ssh-keygen -t ed25519 -f $SIGNING_KEY -C sysmedic-release"
+    v=$(version); cm=$(git -C "$repo" rev-parse HEAD); ct=$(git -C "$repo" log -1 --format=%ct); tag="r$ct-${cm:0:8}"
+    rm -rf "$out"; mkdir -p "$out/tree"
+    local ex=(); for e in "${BUNDLE_EXCLUDE[@]}"; do ex+=(":(exclude)$e"); done
+    git -C "$repo" archive --format=tar HEAD -- . "${ex[@]}" | tar -x -C "$out/tree"
+    git -C "$repo" archive --format=tar HEAD -- "${BUNDLE_INCLUDE[@]}" | tar -x -C "$out/tree"
+    # never publish a secret: the same patterns the repo was checked with
+    if grep -rnIE "(TOKEN|token|api[_-]?key|apikey|secret|passw(or)?d|Bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_|xox[bp]-|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY" \
+            "$out/tree" --exclude-dir=vendor | grep -v 'ghp_your_token_here'; then
+        die "The bundle contains something that looks like a secret (above): not releasing"
+    fi
+    tar -C "$out/tree" --owner=0 --group=0 --sort=name -czf "$out/sysmedic-bundle.tar.gz" .
+    rm -rf "$out/tree"
+    python3 - "$out" "$v" "$cm" "$ct" "$tag" "$repo" <<'PY'
+import hashlib, json, os, subprocess, sys
+out, v, cm, ct, tag, repo = sys.argv[1:]
+b = os.path.join(out, "sysmedic-bundle.tar.gz")
+log = subprocess.run(["git", "-C", repo, "log", "-60", "--format=%ct%x1f%s", "--", "build/staging", "docs", "usr-local-bin", "scripts"],
+                     capture_output=True, text=True).stdout
+changes = [{"time": int(t), "summary": s} for t, s in (l.split("\x1f", 1) for l in log.splitlines() if "\x1f" in l)]
+m = {"format": 1, "edition": "caddy", "version": v, "commit": cm, "commit_time": int(ct), "tag": tag,
+     "bundle": "sysmedic-bundle.tar.gz", "sha256": hashlib.sha256(open(b, "rb").read()).hexdigest(),
+     "size": os.path.getsize(b), "changes": changes}
+json.dump(m, open(os.path.join(out, "manifest.json"), "w"), indent=1)
+PY
+    ssh-keygen -q -Y sign -f "$SIGNING_KEY" -n sysmedic-release "$out/manifest.json"
+    ssh-keygen -q -Y verify -f "$ST/shared/etc/sysmedic/release-signers" -I sysmedic-release -n sysmedic-release \
+        -s "$out/manifest.json.sig" < "$out/manifest.json" >/dev/null || die "The signature doesn't verify with staging/shared/etc/sysmedic/release-signers"
+    say "Release $tag (v$v) built and signed: $out ($(du -h "$out/sysmedic-bundle.tar.gz" | cut -f1))"
+    if [ "$publish" = --publish ]; then
+        command -v gh >/dev/null || die "gh (GitHub CLI) is needed to publish"
+        gh release view "$tag" -R "$RELEASE_REPO" >/dev/null 2>&1 && die "$tag is already published"
+        gh release create "$tag" -R "$RELEASE_REPO" --title "SysMedic v$v" --notes "Caddy update. Commit ${cm:0:8}." --latest \
+            "$out/sysmedic-bundle.tar.gz" "$out/manifest.json" "$out/manifest.json.sig" >/dev/null
+        say "Published $tag to github.com/$RELEASE_REPO: caddies will offer it (sysmedic-update)"
+    fi
 }
 
 # ── Stick ──────────────────────────────────────────────────────────────────
@@ -350,5 +435,7 @@ case "${1:-}" in
     --stick-image) build_stick_image ;;
     --stick)       deploy_stick "${2:-}" ;;
     --version)     version ;;
-    *)             sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    --self)        deploy_self ;;
+    --release)     build_release "${2:-}" ;;
+    *)             sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

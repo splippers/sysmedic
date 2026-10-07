@@ -29,8 +29,8 @@ fi
 # ──────────────────────────────────────────────
 # Check for updates (non-blocking, background)
 # ──────────────────────────────────────────────
-if [ -x "$(dirname "$0")/sysmedic-update.sh" ]; then
-    bash "$(dirname "$0")/sysmedic-update.sh" check &
+if [ -x /usr/local/sbin/sysmedic-update ]; then
+    /usr/local/sbin/sysmedic-update check --quiet &
 fi
 
 info "Collecting hardware data..."

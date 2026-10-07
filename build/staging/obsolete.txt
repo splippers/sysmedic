@@ -15,3 +15,4 @@ etc/modprobe.d/rtl8xxxu.conf
 etc/modprobe.d/8192eu.conf
 # jonotron is gone; SysMedic uses Qwen only
 opt/sysmedic/models/Modelfile
+opt/sysmedic/scripts/sysmedic-update.sh

@@ -1,0 +1,9 @@
+[Unit]
+Description=SysMedic: check for updates after boot and every 2 hours
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2h
+
+[Install]
+WantedBy=timers.target
