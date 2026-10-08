@@ -71,7 +71,33 @@ def status():
             "online": last.get("network", {}).get("online"), "ai": ai,
             "audit": lines[-40:], "backups": session.backups(), "job": job,
             "report": (d / "report.html").exists(), "session": d.name,
-            "bitlocker": bitlocker_state(), "battery": battery(), "hud": hud()}
+            "bitlocker": bitlocker_state(), "battery": battery(), "hud": hud(), "remote_ai": remote_ai()}
+
+
+def confirm_on_device(what):
+    """Remote actions wait for a keypress on the laptop's own keyboard (sysmedic-confirm, console 12)."""
+    try:
+        return subprocess.run(["/usr/local/sbin/sysmedic-confirm", "--who", "phone dashboard", "--what", what, "--timeout", "120"],
+                              capture_output=True, text=True, timeout=140).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def remote_ai():
+    try:
+        st = json.loads(subprocess.run(["/usr/local/sbin/sysmedic-remote-ai", "status", "--json"], capture_output=True,
+                                       text=True, timeout=5).stdout or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        st = {}
+    consent = False
+    try:
+        consent = "CONSENT cloud AI: yes" in Path("/run/sysmedic/latest/audit.log").read_text(errors="replace")
+    except OSError:
+        pass
+    if not st.get("on"):
+        return {"on": False}
+    return {"on": True, "port": st.get("port"), "path": st.get("path"), "fingerprint": st.get("fingerprint", "")[:23],
+            "cloud": consent}
 
 
 def hud():
@@ -179,7 +205,10 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 
 textarea{min-height:70px}button,.btn{display:inline-block;font:inherit;font-weight:600;border:0;border-radius:9px;padding:9px 14px;
  background:linear-gradient(90deg,#22d3ee,#3a86ff);color:#041018;margin:6px 6px 0 0;text-decoration:none;cursor:pointer;box-shadow:0 4px 14px -6px var(--glow)}
 button.secondary{background:var(--line);color:var(--ink);box-shadow:none}.muted{color:var(--muted)}label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
-details summary{cursor:pointer;color:var(--accent);font-size:13px;padding:6px 0}#toast{position:fixed;bottom:16px;left:16px;right:16px;text-align:center;background:var(--accent);color:#041018;font-weight:600;padding:10px;border-radius:10px;display:none}
+details summary{cursor:pointer;color:var(--accent);font-size:13px;padding:6px 0}
+.aitabs{display:flex;gap:6px;margin-bottom:8px}.tab{background:var(--line);color:var(--ink);box-shadow:none;margin:0}.tab.on{background:linear-gradient(90deg,#22d3ee,#3a86ff);color:#041018}.tab:disabled{opacity:.4}
+#aiframe{width:100%;height:68vh;min-height:420px;border:1px solid var(--line);border-radius:10px;background:#070b14}
+a{color:var(--accent)}#toast{position:fixed;bottom:16px;left:16px;right:16px;text-align:center;background:var(--accent);color:#041018;font-weight:600;padding:10px;border-radius:10px;display:none}
 </style>
 <header><div class=brand>SYSMEDIC</div><h1 id=machine>…</h1><div class=sub id=sub>connecting…</div><div class=hud id=hud></div></header>
 <main>
@@ -188,6 +217,10 @@ details summary{cursor:pointer;color:var(--accent);font-size:13px;padding:6px 0}
  <div class=stat><b id=nc>–</b><span>critical</span></div><div class=stat><b id=nw>–</b><span>warnings</span></div>
  <div class=stat><b id=nb>–</b><span>backups</span></div><div class=stat><b id=ng>–</b><span>unlocked</span></div></div></div>
 <div class=card><h2>Findings</h2><div id=findings></div></div>
+<div class=card id=aicard><h2>AI assistants</h2><div id=aibody class=muted></div>
+ <div id=aiui style="display:none"><div class=aitabs><button id=ai_offline class=tab onclick="aiMode('offline')">Offline · Qwen</button><button id=ai_cloud class=tab onclick="aiMode('cloud')">Cloud · OpenCode</button></div>
+ <iframe id=aiframe title="SysMedic AI" allow="clipboard-read; clipboard-write"></iframe>
+ <p class=muted style="font-size:12.5px;margin:8px 0 0">The same conversation as on the laptop. Anything that would change the machine waits for a key press <b>on the laptop's own keyboard</b>. Blank frame? <a id=ailink target=_blank>Open it once</a> and accept the certificate (fingerprint <span id=aifp class=mono></span>).</p></div></div>
 <div class=card id=blcard style="display:none"><h2>BitLocker</h2><div id=blvols></div>
  <p class=muted style="font-size:13px;margin:8px 0">The recovery key is typed on a separate <b>encrypted</b> page (never on this one). Your browser will warn about its certificate: it's made for this visit only, so continue. Read-only; it closes by itself after unlocking, 5 wrong keys or 15 minutes.</p>
  <button id=blbtn onclick=blUnlock()>Unlock from this phone</button></div>
@@ -210,6 +243,14 @@ details summary{cursor:pointer;color:var(--accent);font-size:13px;padding:6px 0}
 const T=new URLSearchParams(location.search).get('t')||'';const H={'Content-Type':'application/json','X-Token':T};
 const $=id=>document.getElementById(id);let jobLoaded=false;
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
+let aiCur=null,aiInfo=null;
+function aiShow(a){aiInfo=a;if(!a.on){$('aiui').style.display='none';aiCur=null;$('aiframe').removeAttribute('src');
+  $('aibody').textContent="Remote AI is off. The engineer turns it on at the laptop (menu R). Even then, anything that changes the machine needs a key press on the laptop's own keyboard.";return}
+ $('aibody').textContent='';$('aiui').style.display='block';$('ai_cloud').disabled=!a.cloud;$('ai_cloud').title=a.cloud?'':"The customer didn't consent to the cloud AI on this visit";
+ $('aifp').textContent=a.fingerprint||'';if(!aiCur)aiMode('offline')}
+function aiUrl(m){const h=location.hostname;return 'https://'+h+':'+aiInfo.port+aiInfo.path+'?arg='+m}
+function aiMode(m){if(!aiInfo||!aiInfo.on||(m=='cloud'&&!aiInfo.cloud))return;aiCur=m;$('aiframe').src=aiUrl(m);$('ailink').href=aiUrl(m);
+ for(const k of ['offline','cloud'])$('ai_'+k).classList.toggle('on',k==m)}
 function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2500)}
 function size(n){return n>1e9?(n/1e9).toFixed(1)+' GB':n>1e6?(n/1e6).toFixed(1)+' MB':n>1e3?Math.round(n/1e3)+' KB':n+' B'}
 async function refresh(){
@@ -218,6 +259,7 @@ async function refresh(){
  const h=s.hud||{};$('hud').textContent=[h.cpu_c!==undefined?'CPU '+h.cpu_c+'°C':'',h.ram?'RAM '+h.ram:'',h.load?'load '+h.load:'',new Date().toTimeString().slice(0,5)].filter(Boolean).join('  ·  ');
  $('sub').textContent=[s.oses.join(', ')||'no OS found',s.ram_gb+' GB RAM',s.firmware+(s.secure_boot?' · Secure Boot':''),'AI: '+s.ai,'scan '+(s.scan_time||'').slice(11,16)].join(' · ');
  const c=s.findings.filter(f=>f.severity=='critical').length,w=s.findings.filter(f=>f.severity=='warning').length,u=Object.values(s.guard).filter(v=>v!='locked').length;
+ aiShow(s.remote_ai||{on:false});
  $('nc').textContent=c;$('nw').textContent=w;$('nc').classList.toggle('n',c>0);$('nw').classList.toggle('n',w>0);$('nb').textContent=s.backups.length;$('ng').textContent=u;
  const F=$('findings');F.replaceChildren();for(const f of s.findings){const d=el('div','f '+f.severity,f.title);if(f.next_step&&f.severity!='ok')d.append(el('small','', '→ '+f.next_step));F.append(d)}
  const G=$('guard');G.replaceChildren();for(const [k,v] of Object.entries(s.guard))G.append(el('span','pill '+v,k.replace('/dev/','')+' '+v));
@@ -236,7 +278,7 @@ async function addNote(){const t=$('note').value.trim();if(!t)return;await post(
 async function makeReport(){$('rbtn').disabled=true;$('rstate').textContent='Re-scanning and building the report (about 30 s)…';
  try{const r=await post('api/report',{});$('rstate').textContent=r.summary;$('ropen').style.display='inline-block'}catch(e){$('rstate').textContent='Failed: '+e.message}
  $('rbtn').disabled=false;refresh()}
-async function blUnlock(){$('blbtn').disabled=true;$('blbtn').textContent='Starting the secure page…';
+async function blUnlock(){$('blbtn').disabled=true;$('blbtn').textContent='Confirm on the laptop\'s keyboard…';
  try{const r=await post('api/bitlocker/start',{});location.href=r.url}catch(e){toast('Could not start: '+e.message);$('blbtn').disabled=false;$('blbtn').textContent='Unlock from this phone'}}
 function blShow(b){if(!b||!b.volumes.length){$('blcard').style.display='none';return}$('blcard').style.display='block';
  const V=$('blvols');V.replaceChildren();let locked=0;for(const v of b.volumes){if(!v.unlocked)locked++;V.append(el('span','pill '+(v.unlocked?'locked':'WRITABLE'),v.dev.replace('/dev/','')+' '+v.size+(v.unlocked?' unlocked':' locked')))}
@@ -249,14 +291,14 @@ async function tests(){
    let sel=null,min=null;
    if(t.needs=='disk'){sel=el('select');for(const k of d.disks)sel.append(new Option(k.dev+' · '+k.size+' '+k.model,k.dev));if(!d.disks.length)sel.append(new Option('no disk found',''));info.append(sel)}
    if(t.needs=='minutes'){min=el('input');min.type='number';min.value=5;min.min=1;min.max=120;min.style.width='70px';info.append(min);info.append(el('small','','minutes'))}
-   const b=el('button','','Run');b.onclick=async()=>{b.disabled=true;try{await post('api/tests/start',{test:t.id,disk:sel?sel.value:'',minutes:min?min.value:null});toast(t.title+' started');openLog=null;tests()}catch(e){toast('Not started: '+e.message)}b.disabled=false};
+   const b=el('button','','Run');b.onclick=async()=>{b.disabled=true;toast('Confirm on the laptop\'s keyboard…');try{await post('api/tests/start',{test:t.id,disk:sel?sel.value:'',minutes:min?min.value:null});toast(t.title+' started');openLog=null;tests()}catch(e){toast('Not started: '+e.message)}b.disabled=false};
    row.append(info,b);$(t.category=='hardware'?'thw':'tsw').append(row)}}
  const R=$('runs');R.replaceChildren();
  if(!d.runs.length)R.append(el('p','muted','No tests run yet this visit.'));
  for(const r of d.runs.slice(0,12)){const box=el('div','run'),top=el('div','');
   top.append(el('span','state '+(r.state=='running'?'running':r.state=='passed'?'passed':''),r.state),' '+r.title+(r.disk?' '+r.disk:'')+' · '+r.started.slice(11,16)+(r.via?' · '+r.via:''));
   const v=el('button','',openLog==r.run?'Hide':'Show output');v.style.cssText='margin:4px 6px 0 0;padding:6px 10px';v.onclick=()=>{openLog=openLog==r.run?null:r.run;tests()};top.append(el('br'),v);
-  if(r.state=='running'){const s=el('button','','Stop');s.style.cssText='margin:4px 0 0;padding:6px 10px;background:var(--crit)';s.onclick=async()=>{await post('api/tests/stop',{run:r.run});toast('Stopped');tests()};top.append(s)}
+  if(r.state=='running'){const s=el('button','','Stop');s.style.cssText='margin:4px 0 0;padding:6px 10px;background:var(--crit)';s.onclick=async()=>{toast('Confirm on the laptop\'s keyboard…');try{await post('api/tests/stop',{run:r.run});toast('Stopped')}catch(e){toast(e.message)}tests()};top.append(s)}
   box.append(top);
   if(openLog==r.run){const pre=el('pre','log','…');box.append(pre);fetch('api/tests/log?run='+encodeURIComponent(r.run)+'&t='+T).then(x=>x.text()).then(x=>{pre.textContent=x;pre.scrollTop=pre.scrollHeight})}
   R.append(box)}}
@@ -334,6 +376,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 session.audit("phone", "JOB details updated: " + ", ".join(changed))
             return self.send(200, {"ok": True})
         if path == "/api/tests/start":
+            what = f"start the test '{body.get('test', '')}'" + (f" on {body.get('disk')}" if body.get("disk") else "") + \
+                   (f" for {body.get('minutes')} min" if body.get("minutes") else "")
+            if not confirm_on_device(what):
+                return self.send(403, "Not started: it wasn't confirmed on the laptop's keyboard.", "text/plain")
             args = ["/usr/local/bin/sysmedic-tests", "start", str(body.get("test", ""))]
             if body.get("disk"):
                 args += ["--disk", str(body["disk"])]
@@ -343,6 +389,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(200 if p.returncode == 0 else 400, {"ok": p.returncode == 0, "message": (p.stdout + p.stderr).strip()}
                              if p.returncode == 0 else (p.stdout + p.stderr).strip(), "application/json" if p.returncode == 0 else "text/plain")
         if path == "/api/tests/stop":
+            if not confirm_on_device(f"stop the test run '{body.get('run', 'all')}'"):
+                return self.send(403, "Not stopped: it wasn't confirmed on the laptop's keyboard.", "text/plain")
             subprocess.run(["/usr/local/bin/sysmedic-tests", "stop", str(body.get("run", "all"))], capture_output=True, timeout=30)
             session.audit("phone", f"test stopped: {body.get('run', 'all')}")
             return self.send(200, {"ok": True})
@@ -351,6 +399,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # at the same address the phone used to reach this dashboard
             host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
             st = blweb_state()
+            if not st.get("running") and not confirm_on_device("open the BitLocker unlock page (the key is then typed on the phone)"):
+                return self.send(403, "Not opened: it wasn't confirmed on the laptop's keyboard.", "text/plain")
             if not st.get("running"):
                 session.audit("phone", "BitLocker unlock page requested from the dashboard")
                 subprocess.Popen(["/usr/local/bin/sysmedic-win", "bitlocker-web", "--background"], start_new_session=True,

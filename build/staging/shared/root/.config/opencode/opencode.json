@@ -319,9 +319,16 @@
       "mokutil --enable*": "deny",
       "mokutil --disable*": "deny",
       "mokutil --reset*": "deny",
-      "mokutil --set*": "deny"
+      "mokutil --set*": "deny",
+      "*sysmedic-remote-ai*": "deny",
+      "*sysmedic-confirm*": "deny",
+      "*/run/sysmedic/confirm*": "deny",
+      "*remote-ai.on*": "deny",
+      "*ttyd*": "deny",
+      "tmux*": "deny",
+      "*SYSMEDIC_CONFIRMED*": "deny"
     },
-    "edit": "ask",
+    "edit": "deny",
     "webfetch": "allow",
     "external_directory": {
       "*": "ask",

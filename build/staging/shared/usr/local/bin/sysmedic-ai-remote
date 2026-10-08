@@ -1,0 +1,19 @@
+#!/bin/bash
+# sysmedic-ai-remote MODE — what the remote AI web terminal runs: attach to (or start) the shared AI session.
+# MODE is offline (Qwen, sysmedic-ask) or cloud (OpenCode; only if the customer consented at boot). The laptop's
+# console uses the same tmux sessions, so the phone and the laptop see one conversation. When the AI quits, the
+# session ends: there is no shell behind it.
+mode=${1:-offline}
+. /etc/sysmedic/audit.sh 2>/dev/null
+audit=$(_sysmedic_audit_file 2>/dev/null || echo /run/sysmedic/audit.log)
+[ -e /run/sysmedic/remote-ai.on ] || { echo "Remote AI is off: the engineer turns it on at the device (menu R)."; sleep 5; exit 1; }
+conf=/etc/sysmedic/tmux.conf
+case "$mode" in
+    cloud)
+        if ! grep -qs 'CONSENT cloud AI: yes' "$audit"; then
+            echo "The customer didn't consent to the cloud AI on this visit: use the offline assistant."; sleep 8; exit 1
+        fi
+        exec tmux -f "$conf" new-session -A -s ai-cloud "/usr/local/bin/sysmedic-ai-session cloud" ;;
+    offline|*)
+        exec tmux -f "$conf" new-session -A -s ai-offline "/usr/local/bin/sysmedic-ai-session offline" ;;
+esac

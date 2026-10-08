@@ -1,0 +1,23 @@
+#!/bin/bash
+# sysmedic-ai-session MODE [--explain] — run one AI assistant (inside the shared tmux session ai-MODE, which the
+# laptop's console and the remote AI web terminal both attach to).
+mode=${1:-offline}
+if [ "$mode" = cloud ]; then
+    t0=$(date +%s)
+    if [ "${2:-}" = --explain ]; then
+        SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode --model opencode/big-pickle \
+            --prompt 'Read /run/sysmedic/latest/summary.txt (the triage scan of this machine). Explain the findings in plain English, most urgent first, and propose a repair plan. Do not change anything yet.'
+    else
+        SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode --model opencode/big-pickle
+    fi
+    rc=$?
+    if [ "$rc" != 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ]; then
+        echo ""; echo "  OpenCode stopped straight away (exit $rc). Repair it: sysmedic-ai-repair (menu 6)."; sleep 6
+    fi
+    # Keep the cloud AI conversation with this visit (for the transcript bundle)
+    sd=$(readlink -f /run/sysmedic/latest 2>/dev/null)
+    [ -d "$sd" ] && [ -d /root/.local/share/opencode/storage ] && mkdir -p "$sd/ai" && \
+        cp -a /root/.local/share/opencode/storage "$sd/ai/opencode-$(date +%H%M%S)" 2>/dev/null
+else
+    exec /usr/local/bin/sysmedic-ask ${2:-}
+fi

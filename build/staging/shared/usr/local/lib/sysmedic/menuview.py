@@ -20,7 +20,8 @@ VERSION = open("/etc/sysmedic/version").read().strip() if os.path.exists("/etc/s
 CARDS = [
     ("Diagnose & test", [("1", "Triage scan (read-only)"), ("2", "Tests: hardware & software"),
                          ("3", "Job report for the customer"), ("4", "Phone dashboard (QR code)")]),
-    ("AI", [("5", "AI rescue assistant (OpenCode)"), ("6", "Repair the AI assistant")]),
+    ("AI", [("5", "AI rescue assistant (OpenCode)"), ("6", "Repair the AI assistant"),
+            ("R", "Remote AI in the phone dashboard: " + ("ON (changes confirmed here)" if os.path.exists("/run/sysmedic/remote-ai.on") else "off"))]),
     ("Windows & disks", [("7", "Windows tools: BitLocker, crashes…"), ("8", "Unlock a partition for repair"),
                          ("9", "Write-protect all disks again"), ("10", "Back up data")]),
     ("Other systems", [("11", "Fix Linux boot (GRUB/initramfs)"), ("12", "Fix macOS (HFS+/APFS)")]),

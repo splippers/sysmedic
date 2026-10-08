@@ -129,6 +129,7 @@ PY
     sudo ln -sf sysmedic-scan "$root/usr/local/bin/scan"
     sudo mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
     sudo ln -sf /etc/systemd/system/sysmedic-transcript.service "$root/etc/systemd/system/multi-user.target.wants/sysmedic-transcript.service"
+    sudo ln -sf /etc/systemd/system/sysmedic-confirm.service "$root/etc/systemd/system/multi-user.target.wants/sysmedic-confirm.service"
     sudo grep -q 'sysmedic/audit.sh' "$root/root/.bashrc" 2>/dev/null || \
         printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
     echo "$ed" | sudo tee "$root/etc/sysmedic/edition" >/dev/null

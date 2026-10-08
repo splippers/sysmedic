@@ -15,7 +15,7 @@ while true; do
     python3 /usr/local/lib/sysmedic/menuview.py 2>/dev/null || {
         echo "  SysMedic rescue menu (v${VERSION}): 1 AI · 2 Wi-Fi · 3 save logs · 4 scan · 5 Linux boot · 6 Windows · 7 macOS"
         echo "  8 backup · 9 shell · 10 reboot · 11 unlock · 12 protect · 13 report · 14 phone · 15 toolkit · 16 tests · 17 repair AI · 0 off"; }
-    keys=""; command -v labwc >/dev/null && keys="G"; [ "$EDITION" = caddy ] && keys="${keys:+$keys, }U"
+    keys="R"; command -v labwc >/dev/null && keys="$keys, G"; [ "$EDITION" = caddy ] && keys="$keys, U"
     echo -ne "  ${CYAN}❯${NC} Choose a number${keys:+ or $keys}: "
     read choice
     echo ""
@@ -25,7 +25,7 @@ while true; do
             clear
             if command -v opencode &>/dev/null; then
                 t0=$(date +%s)
-                SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode
+                tmux -f /etc/sysmedic/tmux.conf new-session -A -s ai-cloud "/usr/local/bin/sysmedic-ai-session cloud"
                 rc=$?
                 [ "$rc" != 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ] && \
                     { echo ""; echo "  OpenCode stopped straight away (exit $rc). Repair it with option 6."; read -p "  Press Enter..."; }
@@ -205,6 +205,18 @@ while true; do
             else
                 clear; ui_info "The graphical desktop isn't on this drive" "it's on the caddy edition; this drive has the console tools"; pause
             fi
+            ;;
+        r|R)
+            clear
+            if [ -e /run/sysmedic/remote-ai.on ]; then
+                /usr/local/sbin/sysmedic-remote-ai off
+            else
+                ui_banner "Remote AI" "the AI assistants in the phone dashboard's AI card"
+                ui_info "Every change either AI wants to make will need a keypress on THIS keyboard" "console 12 pops up with the exact command; a sniffed or stolen link can ask, never approve"
+                ask "Turn remote AI on? [y/N]" yn
+                [ "$yn" = y ] || [ "$yn" = Y ] && /usr/local/sbin/sysmedic-remote-ai on
+            fi
+            pause
             ;;
         u|U)
             clear

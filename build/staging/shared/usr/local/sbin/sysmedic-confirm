@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""sysmedic-confirm — actions asked for remotely are confirmed on the device's own keyboard.
+
+  sysmedic-confirm --who WHO --what TEXT [--timeout S]   ask; exit 0 = allowed, 1 = refused or timed out
+  sysmedic-confirm --serve                               the confirmation console (systemd, on tty12)
+
+While remote AI is on (and for the phone dashboard's actions), anything that would change the machine waits
+here: the laptop's screen switches to console 12, shows exactly what was asked and by whom, and only a key
+pressed on the laptop's keyboard allows it. A web terminal or the phone types into pseudo-terminals, not into
+console 12, so a sniffed or stolen remote session can ask but can't approve.
+"""
+import json
+import os
+import secrets
+import select
+import subprocess
+import sys
+import termios
+import time
+import tty
+
+QUEUE = "/run/sysmedic/confirm"
+VT = 12
+
+
+def audit(msg):
+    try:
+        d = os.path.realpath("/run/sysmedic/latest")
+        with open(os.path.join(d if os.path.isdir(d) else "/run/sysmedic", "audit.log"), "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} [confirm] {msg}\n")
+    except OSError:
+        pass
+
+
+def ask(who, what, timeout):
+    if not os.path.isdir(QUEUE) or not os.path.exists(os.path.join(QUEUE, "serving")):
+        print("Not run: the on-device confirmation console isn't running, so remote actions can't be confirmed.", file=sys.stderr)
+        return 1
+    rid = secrets.token_hex(8)
+    tmp = os.path.join(QUEUE, f".{rid}.tmp")
+    with open(tmp, "w") as f:
+        json.dump({"id": rid, "who": who, "what": what[:2000], "time": time.time(), "timeout": timeout}, f)
+    os.rename(tmp, os.path.join(QUEUE, f"{rid}.req"))
+    print(f"  Waiting for the engineer to confirm on the device (console 12)…", file=sys.stderr, flush=True)
+    ans = os.path.join(QUEUE, f"{rid}.ans")
+    t0 = time.time()
+    while time.time() - t0 < timeout + 10:
+        if os.path.exists(ans):
+            verdict = open(ans).read().strip()
+            os.unlink(ans)
+            if verdict == "allow":
+                return 0
+            print("Not run: the engineer refused this on the device." if verdict == "refuse"
+                  else "Not run: nobody confirmed it on the device in time.", file=sys.stderr)
+            return 1
+        time.sleep(0.3)
+    print("Not run: nobody confirmed it on the device in time.", file=sys.stderr)
+    return 1
+
+
+def fgconsole():
+    try:
+        return subprocess.run(["fgconsole"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def show(req, left):
+    B, D, Y, CY, R, N = "\033[1m", "\033[2m", "\033[1;33m", "\033[1;36m", "\033[1;31m", "\033[0m"
+    out = "\033[2J\033[H\n" + f"  {CY}▌{N}{B}SysMedic{N}  {B}Confirm on this keyboard{N}\n"
+    out += f"  {D}{'─' * 70}{N}\n\n"
+    out += f"  {Y}▲{N}  {B}A remote request wants to change this machine{N}\n\n"
+    out += f"     {D}asked by:{N} {req.get('who', '?')}\n"
+    out += f"     {D}action:{N}\n"
+    for line in str(req.get("what", "")).splitlines()[:14] or [""]:
+        out += f"       {B}{line[:160]}{N}\n"
+    out += f"\n  {CY}❯{N}  Press {B}Y{N} to allow it, {B}N{N} (or Esc) to refuse.   {D}Refuses by itself in {left} s.{N}\n"
+    out += f"\n  {D}Only this keyboard can answer: the phone and remote terminals can't type here.{N}\n"
+    sys.stdout.write(out)
+    sys.stdout.flush()
+
+
+def serve():
+    os.makedirs(QUEUE, mode=0o700, exist_ok=True)
+    os.chmod(QUEUE, 0o700)
+    open(os.path.join(QUEUE, "serving"), "w").write(str(os.getpid()))
+    fd = sys.stdin.fileno()
+    sys.stdout.write("\033[2J\033[H\n  SysMedic confirmation console: remote requests appear here.\n")
+    sys.stdout.flush()
+    while True:
+        reqs = sorted(f for f in os.listdir(QUEUE) if f.endswith(".req"))
+        if not reqs:
+            time.sleep(0.3)
+            continue
+        path = os.path.join(QUEUE, reqs[0])
+        try:
+            req = json.load(open(path))
+        except (OSError, ValueError):
+            os.unlink(path)
+            continue
+        os.unlink(path)
+        back = fgconsole()
+        subprocess.run(["chvt", str(VT)])
+        old = termios.tcgetattr(fd)
+        verdict = "timeout"
+        try:
+            tty.setcbreak(fd)
+            termios.tcflush(fd, termios.TCIFLUSH)          # keys pressed before the question don't count
+            deadline = time.time() + min(int(req.get("timeout", 180)), 600)
+            last = None
+            while time.time() < deadline:
+                left = int(deadline - time.time())
+                if left != last:
+                    show(req, left)
+                    last = left
+                if select.select([fd], [], [], 0.5)[0]:
+                    k = os.read(fd, 1).lower()
+                    if k == b"y":
+                        verdict = "allow"
+                        break
+                    if k in (b"n", b"\x1b"):
+                        verdict = "refuse"
+                        break
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        open(os.path.join(QUEUE, f"{req['id']}.ans"), "w").write(verdict)
+        audit(f"{verdict.upper()} on the device: {req.get('who')}: {str(req.get('what'))[:300]}")
+        sys.stdout.write("\033[2J\033[H\n  " + {"allow": "✔ Allowed.", "refuse": "✖ Refused.", "timeout": "✖ Not answered: refused."}[verdict] + "\n")
+        sys.stdout.flush()
+        time.sleep(0.6)
+        if back and back != str(VT):
+            subprocess.run(["chvt", back])
+
+
+def main():
+    a = sys.argv[1:]
+    if "--serve" in a:
+        return serve()
+    who = a[a.index("--who") + 1] if "--who" in a else "remote"
+    what = a[a.index("--what") + 1] if "--what" in a else ""
+    timeout = int(a[a.index("--timeout") + 1]) if "--timeout" in a else 180
+    if not what:
+        print(__doc__)
+        return 2
+    return ask(who, what, timeout)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

@@ -13,6 +13,19 @@ if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ]; then
         >> "$(_sysmedic_audit_file)" 2>/dev/null
 fi
 
+# Remote AI is on: anything the AI runs that isn't read-only waits for a keypress on the device itself
+# (console 12, sysmedic-confirm). Children of a confirmed command (e.g. a test's own shell) don't ask again.
+if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ] && [ -e /run/sysmedic/remote-ai.on ] \
+        && [ -z "${SYSMEDIC_CONFIRMED:-}" ]; then
+    if ! /usr/local/bin/sysmedic-ask --is-read-only "$BASH_EXECUTION_STRING" >/dev/null 2>&1; then
+        if /usr/local/sbin/sysmedic-confirm --who "AI ($SYSMEDIC_AI) while remote AI is on" --what "$BASH_EXECUTION_STRING"; then
+            export SYSMEDIC_CONFIRMED=1
+        else
+            exit 126
+        fi
+    fi
+fi
+
 # AI shells: a command that doesn't exist says so plainly, so a made-up tool is never mistaken for a result.
 if [ -n "${SYSMEDIC_AI:-}" ]; then
     command_not_found_handle() {

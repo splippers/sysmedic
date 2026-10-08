@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""sysmedic-remote-ai — the AI assistants in the phone/browser dashboard (menu R toggles it).
+
+  sysmedic-remote-ai on       start: HTTPS web terminal (port 8444), a new secret link, on-device confirmation
+  sysmedic-remote-ai off      stop it
+  sysmedic-remote-ai status   on or off, and the link (JSON with --json)
+
+Off by default every visit; only the engineer at the device can turn it on (the AIs can't). While it's on,
+anything either AI would do that isn't read-only waits for a keypress on this machine's own keyboard
+(sysmedic-confirm, console 12), so a sniffed or stolen link can't change anything.
+"""
+import json
+import os
+import secrets
+import signal
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+import blweb  # noqa: E402  (its certificate helper)
+
+D = "/run/sysmedic/remote-ai"
+FLAG = "/run/sysmedic/remote-ai.on"
+STATE = f"{D}/state.json"
+PORT = 8444
+THEME = json.dumps({"background": "#070b14", "foreground": "#c5d1e6", "cursor": "#22d3ee", "selectionBackground": "#1b2840",
+                    "black": "#070b14", "red": "#f25f5c", "green": "#3ddc97", "yellow": "#f6c453", "blue": "#3a86ff",
+                    "magenta": "#b388ff", "cyan": "#22d3ee", "white": "#c5d1e6", "brightBlack": "#6b7a93",
+                    "brightRed": "#ff7a7a", "brightGreen": "#5cf2b1", "brightYellow": "#ffd86b", "brightBlue": "#6aa8ff",
+                    "brightMagenta": "#cfb2ff", "brightCyan": "#67e8f9", "brightWhite": "#f2f6ff"})
+
+
+def audit(msg):
+    try:
+        d = os.path.realpath("/run/sysmedic/latest")
+        with open(os.path.join(d if os.path.isdir(d) else "/run/sysmedic", "audit.log"), "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} [remote-ai] {msg}\n")
+    except OSError:
+        pass
+
+
+def state():
+    try:
+        st = json.load(open(STATE))
+    except (OSError, ValueError):
+        return {"on": False}
+    try:
+        os.kill(st["pid"], 0)
+    except (OSError, KeyError):
+        return {"on": False}
+    st["on"] = os.path.exists(FLAG)
+    return st
+
+
+def on():
+    if os.environ.get("SYSMEDIC_AI"):
+        sys.exit("The AI can't turn on remote AI; the engineer does, at the device (menu R).")
+    if state().get("on"):
+        print("Remote AI is already on.")
+        return 0
+    if subprocess.run(["systemctl", "is-active", "--quiet", "sysmedic-confirm"]).returncode != 0:
+        subprocess.run(["systemctl", "start", "sysmedic-confirm"])
+        time.sleep(1)
+    os.makedirs(D, mode=0o700, exist_ok=True)
+    fp = blweb.make_cert(D, blweb.lan_addresses() + ["127.0.0.1"])
+    secret = secrets.token_urlsafe(12)
+    log = open(f"{D}/ttyd.log", "w")
+    p = subprocess.Popen(["ttyd", "--port", str(PORT), "--ssl", "--ssl-cert", f"{D}/cert.pem", "--ssl-key", f"{D}/key.pem",
+                          "--base-path", f"/{secret}", "--writable", "--url-arg", "--max-clients", "4",
+                          "-t", "fontSize=14", "-t", "fontFamily=DejaVu Sans Mono, Menlo, monospace", "-t", f"theme={THEME}",
+                          "-t", "titleFixed=SysMedic AI", "/usr/local/bin/sysmedic-ai-remote"],
+                         stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+    time.sleep(1.5)
+    if p.poll() is not None:
+        print("The web terminal didn't start: " + open(f"{D}/ttyd.log").read()[-300:])
+        return 1
+    json.dump({"pid": p.pid, "port": PORT, "path": f"/{secret}/", "fingerprint": fp, "since": time.strftime("%H:%M")},
+              open(STATE, "w"))
+    os.chmod(STATE, 0o600)
+    open(FLAG, "w").write(time.strftime("%Y-%m-%dT%H:%M:%S"))
+    audit("ON (HTTPS web terminal on port 8444; changes need confirming on the device)")
+    print("Remote AI is on: open the AI card on the phone dashboard. Anything that changes this machine waits for"
+          " a keypress here (console 12).")
+    return 0
+
+
+def off():
+    st = state()
+    if os.path.exists(FLAG):
+        os.unlink(FLAG)
+    if st.get("pid"):
+        try:
+            os.killpg(st["pid"], signal.SIGTERM)
+        except OSError:
+            pass
+    for f in (STATE,):
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
+    audit("OFF")
+    print("Remote AI is off.")
+    return 0
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a else "status"
+    if os.geteuid() != 0:
+        sys.exit("Run as root.")
+    if cmd == "on":
+        return on()
+    if cmd == "off":
+        if os.environ.get("SYSMEDIC_AI"):
+            sys.exit("The AI can't change remote AI; the engineer does, at the device.")
+        return off()
+    if cmd == "status":
+        st = state()
+        print(json.dumps(st) if "--json" in a else ("Remote AI is on since " + st.get("since", "?") if st.get("on") else "Remote AI is off."))
+        return 0
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

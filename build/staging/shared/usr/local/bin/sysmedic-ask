@@ -293,6 +293,8 @@ FORBIDDEN = [
                 r"\bmokutil\b(?![^|;&]*--(sb-state|list-enrolled|list-new|list-delete|pk|kek|db|dbx|test-key|help)\b)|\befivar\b[^|;&]*\s(-w|--write)"),
      "Refused: firmware, UEFI variables, boot entries and Secure Boot keys are the engineer's (BIOS setup, F2). "
      "You may read them: sysmedic-tests start firmware."),
+    (re.compile(r"\bsysmedic-remote-ai\b|\bsysmedic-confirm\b|/run/sysmedic/confirm|remote-ai\.on|\bttyd\b|\btmux\b|SYSMEDIC_CONFIRMED"),
+     "Refused: remote AI and on-device confirmation are the engineer's (menu R); you can't change or bypass them."),
     (re.compile(r"\bsysmedic-update\s+(apply|rollback)\b|\bsysmedic-deploy\b"),
      "Refused: updating SysMedic is the engineer's (menu U). You may run sysmedic-update check."),
     (re.compile(r"\bdislocker"), "Refused: BitLocker is unlocked by the engineer with sysmedic-win bitlocker (or bitlocker-web)."),
@@ -791,6 +793,9 @@ def window(messages):
 
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--is-read-only"]:          # used by the remote-AI gate (etc/sysmedic/audit.sh)
+        cmd = " ".join(args[1:])
+        sys.exit(0 if cmd and is_read_only(cmd) and not forbidden(cmd) else 1)
     model = args[args.index("--model") + 1] if "--model" in args else pick_model()
     if "--warm" in args:
         warm(model)

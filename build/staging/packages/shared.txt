@@ -17,6 +17,6 @@ stress-ng s-tui stress sysbench memtester memtest86+ edac-utils rasdaemon lm-sen
 linux-tools-generic-hwe-24.04 fio e2fsprogs f3 hdparm sdparm sg3-utils lsscsi bonnie++ ioping
 glmark2-es2-drm mesa-utils vulkan-tools mesa-vulkan-drivers intel-gpu-tools radeontop nvtop
 # On-screen graphics tests (sysmedic-gfx): sway + foot for the benchmark and telemetry panel, OpenGL/Vulkan benchmarks, video decode
-sway foot seatd vkmark glmark2-es2-wayland kmscube vainfo intel-media-va-driver mesa-va-drivers
+ttyd tmux sway foot seatd vkmark glmark2-es2-wayland kmscube vainfo intel-media-va-driver mesa-va-drivers
 upower acpi evtest libinput-tools alsa-utils v4l-utils bluez usbutils pciutils dmidecode lshw hwinfo inxi
 edid-decode read-edid fwupd powertop sysstat iotop-c

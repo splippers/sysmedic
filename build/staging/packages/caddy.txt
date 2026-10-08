@@ -1,5 +1,5 @@
 # Caddy-only extras (the workshop): deep data recovery, imaging, comfort
 safecopy fsarchiver partclone nwipe ext4magic foremost scalpel extundelete wimtools libfsapfs-utils apfsprogs dislocker
-yara chkrootkit rkhunter htop btop ncdu mc rclone sshfs pv jq p7zip-full lz4 tree lsof strace tmux
+yara chkrootkit rkhunter htop btop ncdu mc rclone sshfs pv jq p7zip-full lz4 tree lsof strace
 # Graphical desktop (menu G; prototype): labwc windows, waybar panel, launcher, files, disks, editor, the Control Centre window
 labwc waybar swaybg fuzzel thunar gnome-disk-utility mousepad adwaita-icon-theme python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1

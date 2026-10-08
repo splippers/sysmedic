@@ -1,0 +1,16 @@
+[Unit]
+Description=SysMedic: on-device confirmation of remote actions (console 12)
+After=systemd-user-sessions.service
+
+[Service]
+ExecStart=/usr/local/sbin/sysmedic-confirm --serve
+StandardInput=tty-force
+StandardOutput=tty
+TTYPath=/dev/tty12
+TTYReset=yes
+TTYVHangup=yes
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

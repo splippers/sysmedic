@@ -109,24 +109,13 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     [ "$choice" = m ] && exec /usr/local/bin/ambulance
     echo ''
 
+    # The AI runs in a shared session (tmux ai-cloud / ai-offline): the remote AI web terminal attaches to the same
+    # one, so the phone and this screen see one conversation
+    tmux -f /etc/sysmedic/tmux.conf new-session -A -s "ai-$mode" "/usr/local/bin/sysmedic-ai-session $mode --explain"
+    echo ''
     if [ "$mode" = cloud ]; then
-        t0=$(date +%s)
-        SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode --model opencode/big-pickle \
-            --prompt 'Read /run/sysmedic/latest/summary.txt (the triage scan of this machine). Explain the findings in plain English, most urgent first, and propose a repair plan. Do not change anything yet.'
-        rc=$?
-        if [ "$rc" != 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ]; then
-            echo ''
-            echo "  OpenCode stopped straight away (exit $rc). Repair it: sysmedic-ai-repair (menu 6), then type: opencode"
-        fi
-        # Keep the cloud AI conversation with this visit (for the transcript bundle)
-        sd=$(readlink -f /run/sysmedic/latest 2>/dev/null)
-        [ -d "$sd" ] && [ -d /root/.local/share/opencode/storage ] && mkdir -p "$sd/ai" && \
-            cp -a /root/.local/share/opencode/storage "$sd/ai/opencode-$(date +%H%M%S)" 2>/dev/null
-        echo ''
         echo 'OpenCode closed. Type "menu" for the rescue menu, or "sysmedic-ask" for the offline assistant.'
     else
-        /usr/local/bin/sysmedic-ask --explain
-        echo ''
         echo 'Assistant closed. Type "menu" for the rescue menu, or "sysmedic-ask" to restart it.'
     fi
     exec bash
