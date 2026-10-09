@@ -1,0 +1,159 @@
+#!/bin/bash
+# sysmedic-stick-update — write the caddy's stick ISO to a plugged-in SysMedic stick
+#   sysmedic-stick-update /dev/sdX
+#   sysmedic-stick-update            (auto-detect)
+#
+# Backs up the stick's persistence partition, writes the ISO, restores persistence.
+# The stick ISO must be at /srv/sysmedic/stick-images/sysmedic-v2.iso (copied by sysmedic-deploy --caddy).
+
+set -euo pipefail
+
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'; BOLD='\033[1m'
+info()  { echo -e "  ${CYAN}$1${NC}"; }
+ok()    { echo -e "  ${GREEN}✅ $1${NC}"; }
+warn()  { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
+fail()  { echo -e "  ${RED}❌ $1${NC}"; }
+header(){ echo -e "${BOLD}\n  ╔══════════════════════════════════════════════════════════════╗${NC}"; 
+          echo -e "${BOLD}  ║  $1${NC}"; 
+          echo -e "${BOLD}  ╚══════════════════════════════════════════════════════════════╝${NC}"; }
+
+ISO_PATH="/srv/sysmedic/stick-images/sysmedic-v2.iso"
+MAKE_STICK="/opt/sysmedic/build/make-stick.sh"
+BACKUP_DIR="/srv/sysmedic/stick-backups"
+
+confirm_yes() {
+    local prompt="${1:-Are you sure? Type 'YES' to confirm: }"
+    read -p "  $prompt" confirm
+    [ "$confirm" = "YES" ]
+}
+
+find_stick() {
+    local hd d
+    hd=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -1)
+    for d in $(lsblk -dno NAME,TRAN 2>/dev/null | awk '$2=="usb"{print $1}'); do
+        [ "$d" = "$hd" ] && continue
+        lsblk -nro LABEL "/dev/$d" 2>/dev/null | grep -qx SYSMEDIC_2404 && \
+        lsblk -nro LABEL "/dev/$d" 2>/dev/null | grep -qx FOG_AMB_PERSIST && { echo "/dev/$d"; return; }
+    done
+}
+
+main() {
+    if [ "$(id -u)" != 0 ]; then
+        fail "Must run as root"
+        exit 1
+    fi
+
+    header "  SYSMEDIC STICK UPDATE"
+
+    # Check for stick ISO on caddy
+    if [ ! -f "$ISO_PATH" ]; then
+        fail "Stick ISO not found at $ISO_PATH"
+        info "Run 'sysmedic-deploy --stick-image' on the build PC, then 'sysmedic-deploy --caddy' to copy it here."
+        exit 1
+    fi
+    ok "Found stick ISO: $ISO_PATH ($(du -h "$ISO_PATH" | cut -f1))"
+
+    # Check make-stick.sh exists
+    if [ ! -x "$MAKE_STICK" ]; then
+        fail "make-stick.sh not found at $MAKE_STICK"
+        exit 1
+    fi
+
+    # Find or get target stick
+    local dev="${1:-}"
+    if [ -z "$dev" ]; then
+        dev=$(find_stick)
+        [ -n "$dev" ] || { fail "No SysMedic stick found. Plug one in, or specify: sysmedic-stick-update /dev/sdX"; exit 1; }
+    fi
+    [ -b "$dev" ] || { fail "Not a block device: $dev"; exit 1; }
+
+    local host_disk
+    host_disk=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -1)
+    [ "${dev#/dev/}" != "$host_disk" ] || { fail "$dev is this PC's own disk!"; exit 1; }
+
+    info "Target stick: $dev ($(lsblk -dno MODEL,SERIAL,SIZE "$dev" 2>/dev/null | xargs))"
+    lsblk -o NAME,SIZE,FSTYPE,LABEL "$dev" 2>/dev/null | sed 's/^/    /'
+    echo ""
+
+    warn "This will ERASE the stick's ISO partition and REWRITE it with the caddy's ISO."
+    warn "The persistence partition (sessions, logs, backups) will be BACKED UP and RESTORED."
+    echo ""
+    if ! confirm_yes "Type 'YES' to continue: "; then
+        info "Cancelled."
+        exit 0
+    fi
+
+    # Backup persistence partition
+    mkdir -p "$BACKUP_DIR"
+    local persist part timestamp tarball
+    persist=$(lsblk -lpno NAME,LABEL "$dev" 2>/dev/null | awk '$2=="FOG_AMB_PERSIST"{print $1; exit}')
+    if [ -n "$persist" ]; then
+        info "Backing up persistence partition ($persist)…"
+        timestamp=$(date +%Y%m%d-%H%M%S)
+        tarball="$BACKUP_DIR/stick-persist-$timestamp.tar"
+        local mnt; mnt=$(mktemp -d /run/stick-backup.XXXX)
+        mount -o ro "$persist" "$mnt" 2>/dev/null || { fail "Could not mount persistence partition"; exit 1; }
+        tar -C "$mnt" -cpf "$tarball" $(cd "$mnt" && ls -d sessions logs backups private transcripts claude-review 2>/dev/null) 2>/dev/null || true
+        umount "$mnt"; rmdir "$mnt"
+        chmod 600 "$tarball"
+        local n; n=$(tar -tf "$tarball" 2>/dev/null | grep -c '^sessions/[^/]*/$' || true)
+        ok "Backed up $n session(s) → $tarball"
+    else
+        warn "No persistence partition found on stick (no FOG_AMB_PERSIST label)"
+        tarball=""
+    fi
+
+    # Unmount all partitions
+    info "Unmounting stick partitions…"
+    for p in $(lsblk -lpno NAME "$dev" 2>/dev/null | tail -n +2); do
+        findmnt -rno TARGET -S "$p" >/dev/null 2>&1 && umount "$p" 2>/dev/null || true
+    done
+
+    # Write stick ISO using make-stick.sh
+    info "Writing stick ISO to $dev…"
+    info "This takes 15–20 minutes on USB 2.0, ~2 minutes on USB 3."
+    echo ""
+
+    if ! "$MAKE_STICK" "$dev"; then
+        fail "make-stick.sh failed! The stick may be in an inconsistent state."
+        if [ -n "$tarball" ] && [ -s "$tarball" ]; then
+            info "Your persistence backup is at: $tarball"
+            info "To restore manually: mount the new persistence partition and tar -xpf $tarball"
+        fi
+        exit 1
+    fi
+
+    # Verify
+    info "Verifying written image…"
+    local size pstart
+    size=$(stat -c %s "$ISO_PATH")
+    pstart=$(( $(cat "/sys/class/block/$(lsblk -lno NAME,PARTN "$dev" 2>/dev/null | awk '$2==4{print $1}')/start" 2>/dev/null || echo 0) * 512 ))
+    [ "$pstart" -gt 1536 ] && [ "$pstart" -lt "$size" ] && size=$pstart
+    if ! cmp -s -n $((size - 1536)) -i 1536 "$dev" "$ISO_PATH"; then
+        fail "Verification failed: stick doesn't match ISO!"
+        exit 1
+    fi
+    ok "Verified: stick matches caddy's ISO"
+
+    # Restore persistence
+    if [ -n "$tarball" ] && [ -s "$tarball" ]; then
+        info "Restoring persistence data…"
+        persist=$(lsblk -lpno NAME,LABEL "$dev" 2>/dev/null | awk '$2=="FOG_AMB_PERSIST"{print $1; exit}')
+        if [ -n "$persist" ]; then
+            mnt=$(mktemp -d /run/stick-restore.XXXX)
+            mount "$persist" "$mnt" 2>/dev/null || { fail "Could not mount new persistence partition"; exit 1; }
+            tar -C "$mnt" -xpf "$tarball"
+            chmod 700 "$mnt/private" 2>/dev/null || true
+            umount "$mnt"; rmdir "$mnt"
+            sync
+            ok "Persistence restored"
+        else
+            warn "New stick has no persistence partition — backup saved at $tarball"
+        fi
+    fi
+
+    ok "Stick updated to $(cat "$ISO_PATH"/../.version 2>/dev/null || echo "latest caddy version")"
+    info "Safe to unplug. Boot the stick on any machine."
+}
+
+main "$@"

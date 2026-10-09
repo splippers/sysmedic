@@ -361,10 +361,11 @@ menu_utilities() {
         show_header "  UTILITIES"
         echo "  1)  Clone/rescue drive (ddrescue)"
         echo "  2)  Capture/Restore OS image"
+        echo "  3)  Update SysMedic stick (from caddy's ISO)"
         echo ""
         echo "  0)  Back to main menu"
         echo ""
-        read -p "  Choice [0-2]: " choice
+        read -p "  Choice [0-3]: " choice
         echo ""
 
         case "$choice" in
@@ -410,6 +411,16 @@ menu_utilities() {
             2)
                 show_header "  CAPTURE / RESTORE OS IMAGE"
                 bash "$SCRIPTS/capture-restore.sh"
+                ;;
+            3)
+                show_header "  UPDATE SYSMEDIC STICK"
+                if [ -x /usr/local/sbin/sysmedic-stick-update ]; then
+                    bash /usr/local/sbin/sysmedic-stick-update
+                else
+                    echo -e "  ${RED}sysmedic-stick-update not found${NC}"
+                    echo "  Run 'sysmedic-deploy --caddy' on the build PC to install it."
+                fi
+                pause
                 ;;
             0)  break ;;
             *)  echo -e "  ${RED}Invalid choice${NC}"; sleep 1 ;;

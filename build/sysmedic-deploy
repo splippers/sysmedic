@@ -291,6 +291,15 @@ deploy_caddy() {
         say "Boot menu settings changed: updating GRUB"
         chroot_run "$root" update-grub 2>&1 | grep -E '^Found|done' || true
     fi
+    # Copy stick ISO to caddy for in-field stick updates (if stick image was built)
+    local kit_root; kit_root=$(cd "$(realpath "$ST")/../.." && pwd)
+    if [ -f "$kit_root/build/sysmedic-v2.iso" ]; then
+        say "Copying stick ISO to caddy for field stick updates…"
+        sudo mkdir -p "$root/srv/sysmedic/stick-images"
+        sudo cp "$kit_root/build/sysmedic-v2.iso" "$root/srv/sysmedic/stick-images/"
+        sudo cp "$kit_root/build/stick-test.img" "$root/srv/sysmedic/stick-images/" 2>/dev/null || true
+        say "Stick ISO ready at /srv/sysmedic/stick-images/sysmedic-v2.iso"
+    fi
     sync
     say "Caddy updated. Safe to unplug once this finishes."
 }

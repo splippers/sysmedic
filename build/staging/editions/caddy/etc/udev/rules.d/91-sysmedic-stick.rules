@@ -1,0 +1,8 @@
+# udev rule: when a SysMedic stick is plugged in, notify the engineer
+# and offer to update it from the caddy's ISO
+
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="FOG_AMB_PERSIST", \
+    RUN+="/usr/local/sbin/sysmedic-stick-notify $devpath"
+
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="SYSMEDIC_2404", \
+    RUN+="/usr/local/sbin/sysmedic-stick-notify $devpath"

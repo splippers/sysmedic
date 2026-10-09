@@ -1,0 +1,29 @@
+#!/bin/bash
+# sysmedic-stick-notify — called by udev when a SysMedic stick is plugged in
+# Prints a notification to console 2 (engineer console) and logs it.
+
+DEVPATH="$1"
+LOG="/srv/sysmedic/logs/stick-notify.log"
+
+mkdir -p "$(dirname "$LOG")"
+
+{
+    echo "$(date -Is) stick plugged in: $DEVPATH"
+    echo "  $(lsblk -dno MODEL,SERIAL,SIZE "/dev/$(basename "$DEVPATH")" 2>/dev/null | xargs)"
+} >> "$LOG"
+
+# Notify on console 2 (engineer console) if it exists
+if [ -c /dev/tty2 ]; then
+    {
+        echo ""
+        echo -e "\033[1;36m  ╔══════════════════════════════════════════════════════════════╗\033[0m"
+        echo -e "\033[1;36m  ║  🔔  SysMedic stick detected                                 ║\033[0m"
+        echo -e "\033[1;36m  ╚══════════════════════════════════════════════════════════════╝\033[0m"
+        echo ""
+        lsblk -o NAME,SIZE,FSTYPE,LABEL "/dev/$(basename "$DEVPATH")" 2>/dev/null | sed 's/^/    /'
+        echo ""
+        echo -e "  \033[1;33mRun: sysmedic-stick-update\033[0m to update this stick from the caddy's ISO"
+        echo -e "  \033[1;33mRun: sysmedic-collect\033[0m to collect its sessions"
+        echo ""
+    } > /dev/tty2 2>/dev/null || true
+fi
