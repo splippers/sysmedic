@@ -1,0 +1,21 @@
+# SysMedic Splash Transition Service
+# Runs after plymouth quits, starts the SysMedic UI on tty1
+# This ensures a clean handoff from the splash screen to the rescue flow
+
+[Unit]
+Description=SysMedic splash-to-UI transition
+Documentation=man:sysmedic(1)
+After=plymouth-quit.service systemd-user-sessions.service getty@tty1.service
+Before=getty@tty2.service
+Wants=plymouth-quit.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/sysmedic-splash-transition
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

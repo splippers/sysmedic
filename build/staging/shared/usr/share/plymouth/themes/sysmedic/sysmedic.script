@@ -1,0 +1,153 @@
+# SysMedic Plymouth Script
+# Animated logo with progress bar during boot
+
+# Colors
+bg_colour = 0x000000;      # Black background
+fg_colour = 0x00bfff;      # SysMedic cyan
+accent_colour = 0x00ff88;  # Green accent
+dim_colour = 0x555555;     # Dim gray
+text_colour = 0xcccccc;    # Light gray
+
+# Font setup
+font = Font("Unifont Regular 16");
+small_font = Font("Unifont Regular 12");
+big_font = Font("Unifont Regular 24");
+bold_font = Font("Unifont Bold 16");
+
+# Window dimensions
+window_width = Window.GetWidth();
+window_height = Window.GetHeight();
+
+# Center positions
+center_x = window_width / 2;
+center_y = window_height / 2;
+
+# ─── Background ───
+bg_sprite = Sprite();
+bg_sprite.SetPosition(0, 0, -100);
+bg_sprite.SetImage(Image("background.png"));
+
+# ─── Animated Logo (block letters) ───
+# The logo frames - same as logo.py animation
+logo_frames = [
+"   ╔══════════════════════════════════════════════════════════════╗\n" +
+"   ║      ███████ ███   ██     ██████ █████ ███   ██║\n" +
+"   ║      ██╔════ ████  ██    ██╔════ ██╔══████╗  ██║\n" +
+"   ║      █████╗  ██╔██ ██    ██║     ███████╔██╗ ██║\n" +
+"   ║      ██╔══╝  ██║╚████    ██║     ██╔══██║╚██╗██║\n" +
+"   ║      ███████ ██║ ╚██║    ███████ ██║  ██║ ╚████║\n" +
+"   ║      ╚══════ ╚═╝  ╚═╝     ╚══════ ╚═╝  ╚═╝  ╚═══╝║\n" +
+"   ╚══════════════════════════════════════════════════════════════╝",
+
+"   ╔═══════════════════════════════════════════════════════════════╗\n" +
+"   ║      ▄▀▀▀▀ █   █ ▄▀▀▀▀ █▄ ▄█ █▀▀▀▀ █▀▀▀▄ ▀▀█▀▀ ▄▀▀▀▀ ███║\n" +
+"   ║      ▀▀▀▄  ▀▄▀   ▀▀▀▄ █ ▀ █ █▀▀▀  █   █ █   █       ███║\n" +
+"   ║      ▄▄▄▄▀   █   ▄▄▄▄▀ █   █ █▄▄▄▄ █▄▄▄▀ ▄▄█▄▄ ▀▄▄▄▄ ███║\n" +
+"   ║      ────────────────────────────────────────────────── ███║\n" +
+"   ╚══════════════════════════════════════════════════════════════╝",
+
+"   ╔═══════════════════════════════════════════════════════════════╗\n" +
+"   ║      █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█ ███████ ███║\n" +
+"   ║      █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀ █╔════ ███║\n" +
+"   ║      ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ╚═══════ ███║\n" +
+"   ╚══════════════════════════════════════════════════════════════╝",
+];
+
+logo_sprite = Sprite();
+logo_sprite.SetPosition(center_x - 300, center_y - 120, 10);
+current_frame = 0;
+
+fun animate_logo() {
+    logo_sprite.SetImage(Image.Text(logo_frames[current_frame], fg_colour, font));
+    current_frame = (current_frame + 1) % logo_frames.length;
+}
+
+# ─── Title ───
+title_text = "🩺  SysMedic Rescue System";
+title_sprite = Sprite();
+title_sprite.SetPosition(center_x - (String.Length(title_text) * 8), center_y - 160, 20);
+title_sprite.SetImage(Image.Text(title_text, fg_colour, big_font));
+
+# ─── Edition/Version ───
+edition = "caddy edition · v" + GetVersion();
+version_sprite = Sprite();
+version_sprite.SetPosition(center_x - (String.Length(edition) * 8), center_y + 100, 20);
+version_sprite.SetImage(Image.Text(edition, dim_colour, small_font));
+
+# ─── Status message ───
+status_text = "Initializing...";
+status_sprite = Sprite();
+status_sprite.SetPosition(center_x - 200, center_y + 140, 20);
+status_sprite.SetImage(Image.Text(status_text, text_colour, small_font));
+
+# ─── Progress bar ───
+progress_bar_width = 500;
+progress_bar_height = 12;
+progress_bar_x = center_x - progress_bar_width / 2;
+progress_bar_y = center_y + 180;
+
+progress_bg = Sprite();
+progress_bg.SetPosition(progress_bar_x, progress_bar_y, 10);
+progress_bg.SetImage(Image(progress_bar_width, progress_bar_height, 0x222222));
+
+progress_fg = Sprite();
+progress_fg.SetPosition(progress_bar_x, progress_bar_y, 11);
+progress_fg.SetImage(Image(0, progress_bar_height, fg_colour));
+
+progress_text_sprite = Sprite();
+progress_text_sprite.SetPosition(center_x, progress_bar_y + 25, 20);
+progress_text_sprite.SetImage(Image.Text("0%", text_colour, small_font));
+
+progress = 0.0;
+target_progress = 0.0;
+
+fun set_progress(p, msg) {
+    target_progress = p;
+    if (msg != "") {
+        status_sprite.SetImage(Image.Text(msg, text_colour, small_font));
+    }
+}
+
+fun update_progress() {
+    if (progress < target_progress) {
+        progress = progress + (target_progress - progress) * 0.1;
+        if (target_progress - progress < 0.01) {
+            progress = target_progress;
+        }
+        progress_fg.SetImage(Image(progress_bar_width * progress, progress_bar_height, fg_colour));
+        progress_text_sprite.SetImage(Image.Text(sprintf("%.0f%%", progress * 100), text_colour, small_font));
+    }
+}
+
+# ─── Boot status callbacks ───
+fun on_boot_start() {
+    set_progress(0.1, "Starting kernel...");
+}
+
+fun on_boot_progress(stage, substage) {
+    if (stage == "mount_root") set_progress(0.3, "Mounting root filesystem...");
+    else if (stage == "start_services") set_progress(0.5, "Starting services...");
+    else if (stage == "sysmedic_init") set_progress(0.7, "Initializing SysMedic...");
+    else if (stage == "scan_ready") set_progress(0.9, "Running triage scan...");
+    else if (stage == "ready") set_progress(1.0, "Ready");
+}
+
+# ─── Main loop ───
+refresh_rate = 30;  # 30 FPS for smooth animation
+frame_counter = 0;
+
+while (progress < 1.0 || status_text != "") {
+    animate_logo();
+    update_progress();
+    refresh();
+    frame_counter++;
+    if (frame_counter % refresh_rate == 0) {
+        # Slow logo animation to ~2 FPS
+    }
+}
+
+# Hold final screen briefly
+Logo.SetOpacity(0.5);
+status_sprite.SetImage(Image.Text("Boot complete. Welcome to SysMedic.", accent_colour, small_font));
+refresh();
+sleep(1);

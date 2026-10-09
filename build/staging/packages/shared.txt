@@ -1,4 +1,6 @@
 # Installed on BOTH editions (sysmedic-deploy installs anything missing). One package per line.
+# --- boot splash ---
+plymouth plymouth-label plymouth-theme-script
 # --- network ---
 iputils-ping iputils-arping iputils-tracepath traceroute mtr-tiny dnsutils whois nmap ncat tcpdump tshark termshark
 iperf3 iperf netcat-openbsd socat ethtool net-tools arp-scan nload iftop bmon nethogs iptraf-ng speedtest-cli fping

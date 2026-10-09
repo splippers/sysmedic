@@ -1,0 +1,11 @@
+# SysMedic Plymouth Theme
+# Text-mode splash with animated logo and progress
+
+[Plymouth Theme]
+Name=SysMedic
+Description=SysMedic Rescue System boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/sysmedic
+ScriptFile=/usr/share/plymouth/themes/sysmedic/sysmedic.script

@@ -40,6 +40,8 @@ build() {
       /casper/ubuntu-server-minimal.ubuntu-server.squashfs="$PWD/empty-layer.squashfs" \
       /casper/vmlinuz="$PWD/kernel/vmlinuz" /casper/initrd="$PWD/kernel/initrd" \
       /boot/grub/grub.cfg="$PWD/staging/iso/boot/grub/grub.cfg" \
+      /boot/grub/themes/sysmedic/theme.txt="$PWD/grub-theme/theme.txt" \
+      /boot/grub/themes/sysmedic/background.png="$PWD/grub-theme/background.png" \
       /boot/memtest86+x64.bin="$PWD/root/boot/memtest86+x64.bin" /boot/memtest86+x64.efi="$PWD/root/boot/memtest86+x64.efi" > xorriso.log 2>&1 || true
     # Fail loudly: a failed xorriso used to leave the previous ISO in place, unnoticed
     grep -q 'produced' xorriso.log || { grep -E 'FAILURE|SORRY|aborting' xorriso.log >&2; echo "ERROR: ISO build failed (xorriso.log)" >&2; exit 1; }

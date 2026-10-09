@@ -1,0 +1,56 @@
+#!/bin/bash
+# sysmedic-splash-transition — clean handoff from plymouth splash to SysMedic UI
+# Runs after plymouth quits, ensures tty1 shows the logo and starts the rescue flow
+
+set -euo pipefail
+
+# Wait for plymouth to fully quit
+while pidof plymouthd >/dev/null 2>&1; do
+    sleep 0.1
+done
+
+# Clear any residual plymouth output
+clear >/dev/tty1 2>/dev/null || true
+
+# Set the SysMedic Night palette on tty1
+if [ -f /etc/sysmedic/vtrgb ]; then
+    setvtrgb /etc/sysmedic/vtrgb >/dev/tty1 2>/dev/null || true
+fi
+
+# Show the looping animated logo on tty1 while sysmedic-scan runs in background
+python3 /usr/local/lib/sysmedic/logo_loop.py --tagline "RESCUE SYSTEM" \
+    --tagline "$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev)" \
+    --tagline "network: $(/usr/local/bin/sysmedic-connect --status 2>/dev/null || echo offline)" >/dev/tty1 2>&1 &
+
+LOGO_PID=$!
+
+# Start sysmedic-scan in background, capture output
+/usr/local/bin/sysmedic-scan --no-color >/run/sysmedic/scan-output.txt 2>&1 &
+SCAN_PID=$!
+
+# Wait for scan to complete (max 30s)
+for i in $(seq 1 300); do
+    if ! kill -0 $SCAN_PID 2>/dev/null; then
+        break
+    fi
+    sleep 0.1
+done
+
+# Kill the logo animation
+kill $LOGO_PID 2>/dev/null || true
+wait $LOGO_PID 2>/dev/null || true
+
+# Clear and show the scan results
+clear >/dev/tty1 2>/dev/null || true
+
+# Show results using the UI
+if [ -f /run/sysmedic/latest/summary.txt ]; then
+    cat /run/sysmedic/latest/summary.txt >/dev/tty1 2>&1
+else
+    cat /run/sysmedic/scan-output.txt >/dev/tty1 2>&1
+fi
+
+echo "" >/dev/tty1
+echo "  Press Enter to start the assistant, or 'm' for menu..." >/dev/tty1
+
+exit 0

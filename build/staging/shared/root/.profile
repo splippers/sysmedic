@@ -57,24 +57,22 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     rm -rf /root/.local/share/opencode/storage /root/.local/share/opencode/snapshot /root/.local/share/opencode/log \
            /root/.local/share/opencode/opencode.db* /root/.local/share/opencode/tool-output 2>/dev/null
 
-    # Quick network attempt — don't block
+    # Quick network attempt — don't block (splash already tried; this ensures it's up)
     command -v netplan &>/dev/null && { netplan apply 2>/dev/null || true; }
-    # First screen: get online (wired is automatic; offers Wi-Fi), so the scan and cloud AI see the internet
-    /usr/local/bin/sysmedic-connect
     clear
-    setvtrgb /etc/sysmedic/vtrgb 2>/dev/null; clear   # SysMedic Night palette (also set at boot by setvtrgb.service)
-    python3 /usr/local/lib/sysmedic/logo.py --animate --tagline "${_U_B:-}RESCUE SYSTEM${_U_N:-}" \
-        --tagline "${_U_D:-}$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev)${_U_N:-}" \
-        --tagline "${_U_ACC:-}network: $(/usr/local/bin/sysmedic-connect --status)${_U_N:-}" 2>/dev/null \
-        || ui_banner "Rescue system" "$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition"
-    ui_rule
+    setvtrgb /etc/sysmedic/vtrgb 2>/dev/null; clear
 
     /usr/local/sbin/mount-persist || true
     /usr/local/sbin/start-ollama && ui_ok "Offline AI ready" "$(/usr/local/sbin/sysmedic-ai-device status 2>/dev/null | sed 's/^ *//')"
     echo ''
 
     # Read-only triage first: the engineer (and the AI) start from facts
-    /usr/local/bin/sysmedic-scan
+    # Check if splash transition already ran the scan
+    if [ -f /run/sysmedic/latest/summary.txt ] && [ -f /run/sysmedic/latest/scan.json ]; then
+        cat /run/sysmedic/latest/summary.txt
+    else
+        /usr/local/bin/sysmedic-scan
+    fi
 
     # Phone dashboard (view + job notes); the QR code is on console 2
     setsid -f /usr/local/bin/sysmedic-dash --serve >/dev/null 2>&1 </dev/null
