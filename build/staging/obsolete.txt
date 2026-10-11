@@ -17,3 +17,11 @@ etc/modprobe.d/8192eu.conf
 opt/sysmedic/models/Modelfile
 opt/sysmedic/scripts/sysmedic-update.sh
 usr/share/consolefonts/SysMedic-Terminus22x11.psf.gz
+
+# 2026.10.11: the splash hand-off service ran a second scan at boot, before the network and clock were set up (so
+# the visit's folder got the wrong date), and wrote to tty1 while .profile was using it. It was enabled by hand on
+# the caddy; .profile owns the boot flow (Wi-Fi screen, logo, scan). The Plymouth theme and quiet GRUB stay.
+etc/systemd/system/sysmedic-splash.service
+etc/systemd/system/multi-user.target.wants/sysmedic-splash.service
+usr/local/sbin/sysmedic-splash-transition
+usr/local/lib/sysmedic/logo_loop.py
