@@ -343,10 +343,37 @@ menu() {
 }
 
 [ "$(id -u)" = 0 ] || { echo "Run as root"; exit 1; }
-case "${1:-menu}" in
-    menu) menu ;; report) report ;; cpu) cpu "${2:-5}" ;; ram) ram ;; ram-modules) ram_modules ;; ram-stress) ram_stress "${2:-10}" ;; ram-speed) ram_speed ;; firmware) firmware ;;
-    audio-music) hdr "Speakers: music and sweep"; python3 /usr/local/lib/sysmedic/audiotest.py; record "audio-music: played (engineer listened)" ;; disk) disk "${2:-}" ;; surface) surface "${2:-}" ;;
-    gpu) gpu ;; input) input ;; audio) audio ;; battery) battery ;; inventory) inventory ;;
-    -h|--help|help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
-    *) echo "sysmedic-hwtest: no such test '$1'. Real ones:"; sed -n '4,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
-esac
+
+# Source timing library
+. /usr/local/lib/sysmedic/timing.sh
+
+# Wrap main logic with timing if --time flag is given
+do_time=0
+filtered_args=()
+for arg in "$@"; do
+    if [ "$arg" = "--time" ] || [ "$arg" = "-t" ]; then
+        do_time=1
+    else
+        filtered_args+=("$arg")
+    fi
+done
+
+run_hwtest() {
+    case "${1:-menu}" in
+        menu) menu ;; report) report ;; cpu) cpu "${2:-5}" ;; ram) ram ;; ram-modules) ram_modules ;; ram-stress) ram_stress "${2:-10}" ;; ram-speed) ram_speed ;; firmware) firmware ;;
+        audio-music) hdr "Speakers: music and sweep"; python3 /usr/local/lib/sysmedic/audiotest.py; record "audio-music: played (engineer listened)" ;; disk) disk "${2:-}" ;; surface) surface "${2:-}" ;;
+        gpu) gpu ;; input) input ;; audio) audio ;; battery) battery ;; inventory) inventory ;;
+        -h|--help|help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
+        *) echo "sysmedic-hwtest: no such test '$1'. Real ones:"; sed -n '4,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    esac
+}
+
+if [ "$do_time" = 1 ]; then
+    sysmedic_time_start "sysmedic-hwtest" "${filtered_args[*]}"
+    rc=0
+    run_hwtest "${filtered_args[@]}" || rc=$?
+    sysmedic_time_end "sysmedic-hwtest" "$rc"
+    exit "$rc"
+else
+    run_hwtest "${filtered_args[@]}"
+fi

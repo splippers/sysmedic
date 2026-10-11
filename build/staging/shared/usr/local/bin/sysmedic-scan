@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
 from ui import UI  # noqa: E402
+from timing import timed_main  # noqa: E402
 
 try:
     import winlib
@@ -669,6 +670,7 @@ def render(report, color=True):
     return "\n".join(lines)
 
 
+@timed_main("sysmedic-scan")
 def main():
     args = set(sys.argv[1:])
     color = sys.stdout.isatty() and "--no-color" not in args

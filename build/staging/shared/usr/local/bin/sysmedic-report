@@ -16,6 +16,7 @@ import sys
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 import session  # noqa: E402
+from timing import timed_main  # noqa: E402
 
 SEV_ORDER = {"critical": 0, "warning": 1, "info": 2, "ok": 3}
 
@@ -234,6 +235,7 @@ def render_text(r):
     return "\n".join(out) + "\n"
 
 
+@timed_main("sysmedic-report")
 def main():
     if "--no-scan" not in sys.argv:
         print("  Re-scanning to record the machine's state after the work…", flush=True)

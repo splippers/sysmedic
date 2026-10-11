@@ -57,6 +57,7 @@ sys.path.insert(0, "/usr/local/lib/sysmedic")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
 import winlib  # noqa: E402
 from ui import UI  # noqa: E402
+from timing import timed_main  # noqa: E402
 
 def sec(title, note=""):
     """A section heading in SysMedic's style, with an optional dim note under it."""
@@ -930,6 +931,7 @@ COMMANDS = {"info": cmd_info, "crashes": cmd_crashes, "events": cmd_events, "aut
             "fix-hibernation": cmd_fix_hibernation, "reset-password": cmd_reset_password}
 
 
+@timed_main("sysmedic-win")
 def main():
     if os.geteuid() != 0:
         sys.exit("sysmedic-win must run as root")

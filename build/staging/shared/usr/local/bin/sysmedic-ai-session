@@ -5,10 +5,10 @@ mode=${1:-offline}
 if [ "$mode" = cloud ]; then
     t0=$(date +%s)
     if [ "${2:-}" = --explain ]; then
-        SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode --model opencode/big-pickle \
+        SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode \
             --prompt 'Read /run/sysmedic/latest/summary.txt (the triage scan of this machine). Explain the findings in plain English, most urgent first, and propose a repair plan. Do not change anything yet.'
     else
-        SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode --model opencode/big-pickle
+        SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode
     fi
     rc=$?
     if [ "$rc" != 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ]; then

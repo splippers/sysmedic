@@ -32,10 +32,16 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
+# Also check staging area (for deploy-time runs)
+_base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_staging_lib = os.path.join(_base, 'usr', 'local', 'lib', 'sysmedic')
+if os.path.isdir(_staging_lib):
+    sys.path.insert(0, _staging_lib)
 try:
     import session
 except ImportError:      # outside SysMedic (e.g. generating OpenCode commands at deploy time)
     session = None
+from timing import timed_main  # noqa: E402
 
 NETWORK = r"""
 echo "== Interfaces"; ip -br addr
@@ -375,8 +381,11 @@ def menu():
             print("\n  (still running in the background: sysmedic-tests status)")
 
 
-def main():
-    a = sys.argv[1:]
+@timed_main("sysmedic-tests")
+def main(args=None):
+    if args is None:
+        args = sys.argv[1:]
+    a = args
     js = "--json" in a
     a = [x for x in a if x != "--json"]
     opt = lambda name, d=None: a[a.index(name) + 1] if name in a and a.index(name) + 1 < len(a) else d  # noqa: E731

@@ -30,6 +30,7 @@ import urllib.request
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
 from ui import UI  # noqa: E402
+from timing import timed_main  # noqa: E402
 
 OLLAMA = "http://127.0.0.1:11434"
 SUMMARY = "/run/sysmedic/latest/summary.txt"
@@ -791,6 +792,7 @@ def window(messages):
     return [messages[0]] + (tail or messages[-2:])
 
 
+@timed_main("sysmedic-ask")
 def main():
     args = sys.argv[1:]
     if args[:1] == ["--is-read-only"]:          # used by the remote-AI gate (etc/sysmedic/audit.sh)
