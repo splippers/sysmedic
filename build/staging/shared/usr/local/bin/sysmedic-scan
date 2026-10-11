@@ -367,7 +367,30 @@ def inspect_linux(target, label, known_ids):
             find(sev, "boot", f"{name} ({label}): /etc/fstab mounts {spec} on {mnt}, but no such disk exists",
                  "Boot will stop at an emergency shell waiting for it." if sev == "critical" else "Marked nofail/noauto, so it won't block boot.",
                  "Menu 11 → Fix /etc/fstab, or correct the UUID (compare with 'lsblk -f').")
+    check_linux_logins(target, label, name)
     return result
+
+
+def check_linux_logins(target, label, name):
+    """Logins: PAM and NSS must agree with sssd. A half-removed directory setup (sssd disabled while pam_sss or
+    'sss' in nsswitch remain) fails account checks, including the login screen's own greeter account."""
+    wants = Path(target, "etc/systemd/system/multi-user.target.wants/sssd.service")
+    sssd_on = wants.is_symlink() or wants.exists()
+    pam = "".join(read(Path(target, "etc/pam.d", f)) for f in ("common-auth", "common-account", "common-session"))
+    pam_sss = bool(re.search(r"^[ \t]*[^#\n]*\bpam_sss\.so", pam, re.M))
+    nss = read(Path(target, "etc/nsswitch.conf"))
+    nss_sss = bool(re.search(r"^[ \t]*(passwd|group|shadow)\s*:[^#\n]*\bsss\b", nss, re.M))
+    if sssd_on or not (pam_sss or nss_sss):
+        return
+    where = " and ".join(x for x, on in (("PAM (pam_sss)", pam_sss), ("/etc/nsswitch.conf", nss_sss)) if on)
+    find("critical" if pam_sss else "warning", "os",
+         f"{name} ({label}): logins still go to sssd, but sssd is disabled",
+         f"{where} still use the directory service (sssd), which is turned off. "
+         + ("Account checks fail, so the login screen may not appear and users can't sign in. "
+            if pam_sss else "User and group lookups wait for it and can be slow. ")
+         + "Usually left by a domain or directory setup that was only partly removed.",
+         "Keep NSS and PAM in step: either re-enable sssd (if the directory is still in use), or remove it cleanly in a "
+         "chroot (pam-auth-update --remove sss, and take 'sss' out of /etc/nsswitch.conf). Back up /etc first.")
 
 
 def inspect_linux_boot(boot, label):
@@ -620,20 +643,56 @@ def collect_network():
             ids = read(dev / "vendor").strip() + ":" + read(dev / "device").strip()
             find("warning", "network", f"Wi-Fi adapter {ids.replace('0x', '')} has no driver",
                  "This kernel or firmware doesn't support it.", "Use Ethernet or USB tethering from a phone.")
+    # The clock: a wrong one fails every secure connection ("certificate not yet valid") and looks like a network fault.
+    # sysmedic-clock reads the real time from plain-HTTP Date headers, so it works even then.
+    clock_tool = next((c for c in ("/usr/local/bin/sysmedic-clock", os.path.join(os.path.dirname(os.path.abspath(__file__)), "sysmedic-clock"))
+                       if os.path.exists(c)), None)
+    rc, out, _ = run([clock_tool, "--json"], timeout=30) if clock_tool else (127, "", "")
+    try:
+        net["clock"] = json.loads(out) if rc == 0 else {}
+    except json.JSONDecodeError:
+        net["clock"] = {}
+    clock = net["clock"]
+    sys_off = clock.get("system_offset")
+    clock_wrong = sys_off is not None and abs(sys_off) > 120
     if not net["online"]:
-        # Distinguish "no internet" from "internet but DNS broken" — a common site fault worth reporting
-        rc, code, _ = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "6", "https://1.1.1.1"], timeout=10)
+        # Why not? Plain HTTP to an IP needs neither DNS nor a right clock; then test name lookup on its own
+        rc, code, _ = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "6", "http://1.1.1.1"], timeout=10)
         net["ip_reachable"] = code.strip() not in ("", "000")
+        net["dns_ok"] = run(["getent", "hosts", "opencode.ai"], timeout=10)[0] == 0
     if net["online"]:
         find("ok", "network", "Internet reachable: cloud AI available")
-    elif net.get("ip_reachable"):
+    elif clock_wrong:
+        find("warning", "network", f"SysMedic's clock is {_span(sys_off)} {'fast' if sys_off > 0 else 'slow'}, so secure connections fail",
+             "Websites' certificates look 'not yet valid' or expired: the cloud AI, updates and malware signatures can't connect. "
+             "The clock came from this machine's hardware clock.",
+             "Run: sysmedic-clock fix (corrects SysMedic's clock for this session), then sysmedic-scan again.")
+    elif net.get("ip_reachable") and not net.get("dns_ok"):
         find("warning", "network", "Internet is reachable but DNS (name lookup) is failing",
              "The network's DNS servers aren't answering. SysMedic also tries public resolvers (1.1.1.1, 9.9.9.9).",
              "Report the site's DNS fault; check 'resolvectl status'. The AI assistant will use the offline model.")
+    elif net.get("ip_reachable"):
+        find("warning", "network", "Internet is reachable but secure (HTTPS) connections fail",
+             "Names resolve and the clock is right, so something on this network is blocking or intercepting HTTPS "
+             "(a sign-in page, proxy or firewall).",
+             "Use another network or a phone hotspot. The AI assistant will use the offline model.")
     else:
         find("info", "network", "No internet: the AI assistant will use the offline model",
              "", "Plug in Ethernet, tether a phone over USB, or run 'wifi'.")
+    if clock.get("rtc_state") == "wrong":
+        off = clock["rtc_offset"]
+        find("warning", "hardware", f"This machine's hardware clock is {clock['rtc_note']}",
+             "The operating system starts with the wrong time until it syncs, and secure sites can fail meanwhile. "
+             "If it's wrong again after being unplugged, the CMOS battery is likely flat."
+             + (" It's months out, so the battery is the likely cause." if abs(off) > 30 * 86400 else ""),
+             "The engineer can set it on Alt+F2: sysmedic-clock fix --rtc")
     return net
+
+
+def _span(seconds):
+    s = abs(int(seconds))
+    h, m = divmod(s // 60, 60)
+    return f"{round(s / 86400)} days" if h >= 48 else (f"{h} h {m:02d} min" if h else f"{max(m, 1)} min")
 
 
 # ── Output ─────────────────────────────────────────────────────────────────

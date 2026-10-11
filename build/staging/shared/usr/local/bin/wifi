@@ -5,3 +5,5 @@ nmtui connect "$@"
 echo ""
 nmcli -f DEVICE,TYPE,STATE,CONNECTION device | grep -E 'DEVICE|wifi|ethernet'
 ip -4 -br addr | grep -v '^lo'
+# Once online, correct SysMedic's clock if it's wrong (secure connections fail otherwise); a no-op offline
+/usr/local/bin/sysmedic-clock --auto 2>/dev/null || true

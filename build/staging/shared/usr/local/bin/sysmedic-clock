@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""sysmedic-clock — is this machine's time right? A wrong clock breaks every secure connection
+(cloud AI, apt, malware signatures: "certificate not yet valid") and looks like a network fault.
+
+  sysmedic-clock              SysMedic's clock, the machine's hardware clock, and the real time from the network
+  sysmedic-clock --json       the same, for scripts (sysmedic-scan)
+  sysmedic-clock --auto       quietly correct SysMedic's own clock if it's more than 2 minutes out (first screen)
+  sysmedic-clock fix          correct SysMedic's own clock from the network (this session only)
+  sysmedic-clock fix --rtc    also set the machine's hardware clock (engineer only, on a console)
+
+The real time comes from the Date header of plain-HTTP answers, so it works where NTP is blocked and
+where HTTPS fails because of the clock itself. SysMedic's clock lives only in this session; the
+hardware clock belongs to the customer's machine and is only written by `fix --rtc`.
+"""
+import datetime
+import email.utils
+import http.client
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+try:
+    import session
+except ImportError:
+    session = None
+
+HOSTS = ["connectivity-check.ubuntu.com", "archive.ubuntu.com", "1.1.1.1", "9.9.9.9"]
+SLACK = 120             # seconds: certificates and apt tolerate small errors, so only fix real skew
+B, D, G, Y, R, N = "\033[1m", "\033[2m", "\033[0;32m", "\033[1;33m", "\033[1;31m", "\033[0m"
+
+
+def network_time():
+    """UTC epoch seconds from the first plain-HTTP server that answers, or None."""
+    for host in HOSTS:
+        try:
+            t0 = time.time()
+            c = http.client.HTTPConnection(host, 80, timeout=5)
+            c.request("HEAD", "/", headers={"User-Agent": "sysmedic-clock"})
+            date = c.getresponse().getheader("Date")
+            c.close()
+            if date:
+                # Half the round trip is the best guess for when the server stamped it
+                return email.utils.parsedate_to_datetime(date).timestamp() + (time.time() - t0) / 2, host
+        except (OSError, ValueError, TypeError, http.client.HTTPException):
+            continue
+    return None, None
+
+
+def rtc_time():
+    """The hardware clock, read as if it were UTC (as Linux does), or None."""
+    try:
+        return int(Path("/sys/class/rtc/rtc0/since_epoch").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def human(seconds):
+    s = abs(int(round(seconds)))
+    h, m = divmod(s // 60, 60)
+    if h >= 48:
+        return f"{round(s / 86400)} days"
+    return f"{h} h {m:02d} min" if h else (f"{m} min" if m else f"{s} s")
+
+
+def rtc_verdict(offset):
+    """offset = hardware clock minus the real UTC time."""
+    if abs(offset) <= SLACK:
+        return "ok", "keeps UTC and is correct"
+    quarters = round(offset / 900)
+    if quarters and abs(offset - quarters * 900) <= SLACK and abs(offset) <= 14 * 3600:
+        hours = quarters / 4
+        return "local", f"keeps local time (UTC{hours:+g} h): normal for Windows, not a fault"
+    return "wrong", f"{human(offset)} {'fast' if offset > 0 else 'slow'}"
+
+
+def status():
+    now = time.time()
+    net, source = network_time()
+    rtc = rtc_time()
+    out = {"system_utc": int(now), "network_utc": int(net) if net else None, "network_source": source,
+           "rtc": rtc, "system_offset": None, "rtc_offset": None, "rtc_state": None, "rtc_note": None}
+    if net:
+        out["system_offset"] = round(now - net)
+        if rtc is not None:
+            out["rtc_offset"] = round(rtc - net)
+            out["rtc_state"], out["rtc_note"] = rtc_verdict(rtc - net)
+    return out
+
+
+def audit(msg):
+    if session:
+        try:
+            tty = os.ttyname(0).replace("/dev/", "") if os.isatty(0) else ("ai" if os.environ.get("SYSMEDIC_AI") else "script")
+            session.audit(tty, f"sysmedic-clock: {msg}")
+        except OSError:
+            pass
+
+
+def set_system_clock(utc):
+    r = subprocess.run(["date", "-u", "-s", f"@{int(round(utc))}"], capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def called_by_ai():
+    if os.environ.get("SYSMEDIC_AI"):
+        return True
+    pid = os.getpid()
+    while pid > 1:
+        try:
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            args = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        if any(s in f"{comm} {args}" for s in ("opencode", "sysmedic-ask", "ollama")):
+            return True
+    return False
+
+
+def fix_rtc(st):
+    if called_by_ai():
+        audit("REFUSED fix --rtc: requested by the AI assistant")
+        sys.exit("REFUSED: setting the machine's hardware clock is for the engineer on a console (Alt+F2), not the AI.")
+    if not os.isatty(0):
+        sys.exit("REFUSED: 'sysmedic-clock fix --rtc' needs a person at a console to answer its questions.")
+    if st["rtc"] is None:
+        sys.exit("This machine has no readable hardware clock (/sys/class/rtc/rtc0).")
+    print(f"\n  The hardware clock: {B}{st['rtc_note']}{N}.")
+    print("  Windows keeps the hardware clock in local time; Linux and macOS keep it in UTC.")
+    a = input(f"  Does this machine run Windows? [{B}Y{N}/n] ").strip().lower()
+    if a in ("n", "no"):
+        cmd, how = ["hwclock", "--systohc", "--utc"], "UTC"
+    else:
+        zone = input(f"  Its time zone [{B}Europe/London{N}]: ").strip() or "Europe/London"
+        if not Path("/usr/share/zoneinfo", zone).is_file():
+            sys.exit(f"Unknown time zone '{zone}' (examples: Europe/London, Europe/Dublin, America/New_York).")
+        cmd, how = ["env", f"TZ={zone}", "hwclock", "--systohc", "--localtime"], f"local time, {zone}"
+    if input(f"  Write the correct time to this machine's hardware clock, as {how}? [y/{B}N{N}] ").strip().lower() not in ("y", "yes"):
+        print("  Left unchanged.")
+        return 0
+    r = subprocess.run(cmd + ["--adjfile=/run/sysmedic/adjtime"], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"  hwclock failed: {(r.stderr or r.stdout).strip()}")
+    audit(f"hardware clock set to the network time as {how} (was {st['rtc_note']})")
+    if session:
+        try:
+            session.add_note(f"Corrected the machine's hardware clock (it was {st['rtc_note']}). "
+                             "If it drifts again, the CMOS battery may need replacing.", "engineer")
+        except Exception:  # noqa: BLE001  (a note is nice to have, never worth failing over)
+            pass
+    print(f"  {G}✔{N} Hardware clock set ({how}). If it's wrong again after a power-off, the CMOS battery is likely flat.")
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    st = status()
+    if "--json" in args:
+        print(json.dumps(st))
+        return 0
+    if args[:1] in (["--auto"], ["fix"]):
+        auto = args[0] == "--auto"
+        if st["network_utc"] is None:
+            if not auto:
+                print("  Can't reach a time source (no internet?). Connect first: wifi (or menu 13).")
+            return 0 if auto else 1
+        off = st["system_offset"]
+        if abs(off) > SLACK:
+            if os.geteuid() != 0:
+                sys.exit("sysmedic-clock fix must run as root")
+            if set_system_clock(st["network_utc"]):
+                audit(f"SysMedic's clock corrected by {human(off)} ({'it was fast' if off > 0 else 'it was slow'}) from {st['network_source']}")
+                print(f"  {G}✔{N} SysMedic's clock was {human(off)} {'fast' if off > 0 else 'slow'}: corrected for this session"
+                      f"{D} (secure connections need it){N}")
+                st = status()
+            else:
+                print(f"  {Y}▲{N} SysMedic's clock is {human(off)} out and couldn't be set")
+                return 1
+        elif not auto:
+            print(f"  {G}✔{N} SysMedic's clock is right (within {human(off) if off else '0 s'})")
+        if st["rtc_state"] == "wrong":
+            print(f"  {Y}▲{N} This machine's hardware clock is {st['rtc_note']}"
+                  f"{D} → the engineer can set it: sysmedic-clock fix --rtc (Alt+F2){N}")
+        if "--rtc" in args:
+            return fix_rtc(st)
+        return 0
+    if args and args[0] not in ("-h", "--help", "help"):
+        sys.exit(f"Unknown option '{args[0]}'. Try: sysmedic-clock help")
+    if args:
+        print(__doc__)
+        return 0
+    fmt = lambda t: datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")  # noqa: E731
+    print(f"\n  {B}Clock{N}")
+    if st["network_utc"]:
+        print(f"    Real time (network)   {fmt(st['network_utc'])}  {D}from {st['network_source']}{N}")
+        off = st["system_offset"]
+        mark = f"{G}✔{N}" if abs(off) <= SLACK else f"{R}✖{N}"
+        print(f"    SysMedic's clock      {fmt(st['system_utc'])}  {mark} "
+              + ("right" if abs(off) <= SLACK else f"{human(off)} {'fast' if off > 0 else 'slow'} → sysmedic-clock fix"))
+    else:
+        print(f"    Real time (network)   {D}unknown: no internet{N}")
+        print(f"    SysMedic's clock      {fmt(st['system_utc'])}")
+    if st["rtc"] is not None:
+        if st["rtc_state"]:
+            mark = {"ok": f"{G}✔{N}", "local": f"{G}✔{N}", "wrong": f"{Y}▲{N}"}[st["rtc_state"]]
+            extra = " → engineer: sysmedic-clock fix --rtc" if st["rtc_state"] == "wrong" else ""
+            print(f"    Hardware clock        {fmt(st['rtc'])}  {mark} {st['rtc_note']}{extra}")
+        else:
+            print(f"    Hardware clock        {fmt(st['rtc'])}  {D}(read as UTC; can't check without internet){N}")
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

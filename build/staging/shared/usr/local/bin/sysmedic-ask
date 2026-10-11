@@ -47,7 +47,7 @@ READ_ONLY = re.compile(r"""^\s*(lsblk|blkid|findmnt|df|du|free|uname|uptime|lscp
     |ss|netstat|arp|arp-scan|nmap|curl\s+(-\w+\s+)*-[sIL]*I|speedtest-cli|iperf3\s+-c
     |smartctl\s+(-[aHiAxlc]|--(all|health|info|xall))|nvme\s+(list|smart-log|id-ctrl)|hdparm\s+-I|sensors|journalctl|dmesg
     |sysmedic-hwtest\s+(report|battery|inventory|ram-modules|firmware)\s*$|sysmedic-gfx\s+(info|video)\s*$|sysmedic-update\s+(check|status)\s*$|sysmedic-tests\s+(list|status|log|disks|wait|watch)\b|upower\s+(-e|-i\s+\S+|--dump)|acpi(\s+-\w+)*\s*$|sensors(\s+-\w+)*\s*$|inxi(\s+-[\w]+)*\s*$
-    |cat\s+/(proc|sys|run/sysmedic|etc)/|ls|stat|file|head|tail|wc|grep|sysmedic-(scan|win\s+(info|crashes|events|autoruns|evtx|registry|cbs|checkup|etl|reg|bcd)|guard\s+status|net)
+    |cat\s+/(proc|sys|run/sysmedic|etc)/|ls|stat|file|head|tail|wc|grep|sysmedic-clock(\s+(--json|help))?\s*$|sysmedic-(scan|win\s+(info|crashes|events|autoruns|evtx|registry|cbs|checkup|etl|reg|bcd)|guard\s+status|net)
     |efibootmgr\s*(-v)?\s*$|sfdisk\s+(-d|-l)|fdisk\s+-l|dumpe2fs\s+-h|ntfsinfo|mount\s+-o\s+ro\b|systemctl\s+(status|is-active|list-units))\b""", re.X)
 SHELL_META_WRITE = re.compile(r"(>|\btee\b|;\s*(rm|dd|mkfs)|\|\s*(sh|bash)\b|`|\$\()")
 
@@ -67,6 +67,7 @@ Rules:
 - To run a command, call the run_command tool. Never write "run_command" or a command call inside your text, and never list commands for the engineer to type.
 - Only use commands that exist on this Linux rescue system. Windows commands (shutdown -s, chkdsk, bootrec, dism) only work from Windows/WinRE: describe them as steps for the engineer instead.
 - Never shut down, reboot or power off this rescue computer.
+- "Certificate not yet valid" or "not valid yet" errors mean the clock is wrong, not the network: run sysmedic-clock, then sysmedic-clock fix.
 - Commands run without a keyboard: use non-interactive forms (ping -c 4, mtr -rwc 5, top -bn1, iftop -t -s 5, tcpdump -c 50, timeout 20 ...). Never start editors, pagers or full-screen tools.
 - Read-only diagnostics run straight away; anything else is shown to the engineer first.
 - Only discuss problems that appear in the scan or in output you have seen. Do not invent partitions, swap, files or problems.
@@ -298,6 +299,9 @@ FORBIDDEN = [
      "Refused: remote AI and on-device confirmation are the engineer's (menu R); you can't change or bypass them."),
     (re.compile(r"\bsysmedic-update\s+(apply|rollback)\b|\bsysmedic-deploy\b"),
      "Refused: updating SysMedic is the engineer's (menu U). You may run sysmedic-update check."),
+    (re.compile(r"\bhwclock\b[^|;&]*(--systohc|\s-w\b|--set)|\bsysmedic-clock\b[^|;&]*--rtc|\btimedatectl\s+set-(time|local-rtc)"),
+     "Refused: the machine's hardware clock is the engineer's (sysmedic-clock fix --rtc on Alt+F2). "
+     "SysMedic's own clock is corrected with: sysmedic-clock fix"),
     (re.compile(r"\bdislocker"), "Refused: BitLocker is unlocked by the engineer with sysmedic-win bitlocker (or bitlocker-web)."),
     (re.compile(r"dash\.token|blweb\.json|api/bitlocker"), "Refused: the phone dashboard's secret and BitLocker unlock are the engineer's."),
     (re.compile(r"\bpip3?\s+(install|download)\b|-m\s+pip\b|\bpipx\b|\bgit\s+clone\b|pypi\.org|pythonhosted\.org|"

@@ -14,6 +14,9 @@ via() {
     local ssid; ssid=$(nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '$1 == "yes" {print $2; exit}')
     echo "${dev:-?}${ssid:+ (Wi-Fi \"$ssid\")}"
 }
+# A wrong clock (flat CMOS battery, never-set BIOS) makes every secure connection fail ("certificate not yet
+# valid"): cloud AI, apt, signatures. Correct SysMedic's own clock from the network; the hardware clock is left alone.
+fix_clock() { /usr/local/bin/sysmedic-clock --auto 2>/dev/null || true; }
 wifi_dev() { nmcli -t -f DEVICE,TYPE device 2>/dev/null | awk -F: '$2 == "wifi" {print $1; exit}'; }
 
 if [ "${1:-}" = --status ]; then
@@ -28,6 +31,7 @@ echo ""
 echo "  ${DIM}Checking for an internet connection…${NC}"
 if wait_online 8; then
     echo "  ${GRN}Online via $(via)${NC}"
+    fix_clock
     sleep 2
     exit 0
 fi
@@ -63,6 +67,7 @@ echo ""
 echo "  ${DIM}Checking the connection…${NC}"
 if wait_online 20; then
     echo "  ${GRN}Online via $(via)${NC}"
+    fix_clock
 else
     echo "  ${YEL}Still no internet.${NC} If the network has a sign-in page (hotel, guest Wi-Fi), it can't be"
     echo "  completed from here: use a phone hotspot instead. Try again later with: wifi (or menu 13)"

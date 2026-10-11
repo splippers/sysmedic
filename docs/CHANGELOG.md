@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026.10.11 (evening): the clock, and sign-in safety
+
+From the field: a laptop whose hardware clock was 10 hours slow made every secure connection fail (the cloud AI, apt, signatures), and the scan blamed DNS. Another visit's "performance fix" left a Linux machine without a login screen.
+
+- **`sysmedic-clock`** shows SysMedic's clock, the machine's hardware clock and the real time. The real time comes from plain-HTTP Date headers, so it works where NTP is blocked and where HTTPS fails because of the clock. Once online (first screen or `wifi`), SysMedic **corrects its own clock automatically**; the customer's hardware clock is never touched except by `sysmedic-clock fix --rtc`. That command is engineer only: it asks Windows (local time, with the zone) or not (UTC). A hardware clock a whole number of hours out is recognised as Windows local time, which is normal.
+- **The scan names the real cause** when the cloud isn't reachable: SysMedic's clock, DNS, HTTPS blocked (sign-in page, proxy, firewall), or no internet. It also reports **"This machine's hardware clock is … slow"** (a likely flat CMOS battery when it's months out).
+- **NTP sync is off** (systemd-timesyncd masked): a synced Linux clock gets copied into the hardware clock every 11 minutes in UTC, which put Windows machines an hour out after a visit and erased the evidence.
+- **The scan checks Linux sign-in:** PAM or nsswitch still using sssd while sssd is disabled is reported as critical (account checks fail and the login screen may not appear), with the clean fix.
+- **The assistants:** sign-in files are one system (change them as a whole, in a chroot, with backups, then re-scan); one agreed change at a time instead of bundled "fixes"; "certificate not yet valid" means the clock. Writing the hardware clock is blocked for both.
+- **Boot:** the splash hand-off service is gone. It ran a second scan before the network and clock were ready (so the visit's folder got the wrong date) and wrote to the first console while it was in use. The Plymouth theme and quiet GRUB stay.
+- **ttyd's own service is masked** (it ran a local login terminal); the remote AI starts its own ttyd when the engineer turns it on.
+- Deploys now also remove obsolete *symlinks* (an enable link points at an absolute path, so the old check missed it).
+- `util-linux-extra` added (`hwclock`).
+
 ## 2026.10.11: boot fixes, and a smoke test before every deploy
 
 The 9 October caddy deploy broke two things on every boot. Fixed and tested in QEMU on both editions:

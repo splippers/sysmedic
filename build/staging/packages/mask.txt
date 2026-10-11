@@ -2,3 +2,8 @@
 lldpd hostapd avahi-daemon avahi-daemon.socket rpcbind rpcbind.socket nfs-client.target clamav-freshclam sysstat
 # don't announce or serve on customer networks (caddy had these masked by hand)
 smbd nmbd snmpd dropbear
+# NTP sync makes the kernel copy SysMedic's clock into the customer's hardware clock (UTC, every 11 min), which
+# puts Windows machines (local-time RTC) an hour out. sysmedic-clock sets SysMedic's clock without touching it.
+systemd-timesyncd
+# ttyd's own service would run a local login terminal; SysMedic's remote AI starts its own ttyd (TLS, token) when asked
+ttyd
