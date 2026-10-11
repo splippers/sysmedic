@@ -7,3 +7,6 @@ build/tests/fixtures/
 *.img
 __pycache__/
 build/release/
+# field-session write-ups and copies hold customer data, and the repo is published as releases: keep them local
+/sessions/
+docs/sessions/

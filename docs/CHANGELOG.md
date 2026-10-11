@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.10.11: boot fixes, and a smoke test before every deploy
+
+The 9 October caddy deploy broke two things on every boot. Fixed and tested in QEMU on both editions:
+- **The triage scan crashed at boot** (`TypeError: main() takes 0 positional arguments`), so no session folder or review bundle was written. The new timing helper (`--time` on the Python tools) now works with tools whose `main()` takes no arguments, and logging the timing can never stop a tool.
+- **The cloud assistant wouldn't start on the caddy** (`Unrecognized flag: --model`): OpenCode 2.x has no `--model`. The model comes from `opencode.json`, as it always did.
+- **The Wi-Fi first screen and the animated logo are back.** The splash-screen change had taken them out of the boot sequence, so machines without Ethernet started offline. GRUB's quiet boot and the Plymouth theme stay.
+- **The stick image builds again:** `build-iso.sh` finds the GRUB theme in the repo.
+- **Smoke test in `sysmedic-deploy`** (caddy, stick image, `--self`): after installing, every script must parse, the tools must start without a traceback, and every flag SysMedic passes to `opencode` must exist in that drive's own OpenCode (1.18 and 2.x differ). It fails the deploy loudly instead of shipping a drive that won't boot cleanly. Checked against both of the bugs above.
+- The offline assistant keeps its tested instructions; a longer rewrite was dropped because it slowed the first reply on CPU and ruled out the clock fixes.
+
 ## 2026.10.08 (late): menu in order, and a graphical desktop (prototype)
 
 - **The rescue menu is numbered in reading order**, card by card: 1 scan · 2 tests · 3 job report · 4 phone dashboard · 5 AI · 6 repair the AI · 7 Windows tools · 8 unlock · 9 re-protect · 10 backup · 11 Linux boot · 12 macOS · 13 Wi-Fi · 14 save logs · U update · G desktop · 15 toolkit · 16 shell · 17 reboot · 0 shut down. Guides and messages updated.
