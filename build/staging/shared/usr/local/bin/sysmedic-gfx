@@ -8,6 +8,10 @@
   sysmedic-gfx stress [MIN]      burn-in (default 10 min): heavy scenes in a loop; temperatures, clocks, throttling
                                  and GPU hangs are watched and recorded
   sysmedic-gfx video             hardware video decode the GPU offers (VA-API)
+  sysmedic-gfx gpus              the GPUs, numbered (1 drives the screen)
+
+  --gpu N                        run bench, stress or video on GPU N: a hybrid laptop's discrete GPU (NVIDIA/AMD)
+                                 renders and the picture still appears on the laptop's screen
 
 On-screen tests take over the laptop's screen on a spare console and give it back when they finish. Results go
 into the job report. The quick off-screen score is still `sysmedic-tests start gpu`.
@@ -21,11 +25,13 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
 import gputelemetry  # noqa: E402
+import gpus  # noqa: E402
 from ui import UI  # noqa: E402
 from timing import timed_main  # noqa: E402
 
@@ -53,11 +59,32 @@ def record(line):
         f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} {line}\n")
 
 
-def run(cmd, timeout=20):
+def run(cmd, timeout=20, env=None):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              env=dict(os.environ, **env) if env else None).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
+
+
+# ── which GPU ────────────────────────────────────────────────────────────────────
+
+def chosen_gpu():
+    """The GPU picked with --gpu N (main() puts it in SYSMEDIC_GPU), else the display GPU; None if none works."""
+    try:
+        return gpus.pick(os.environ.get("SYSMEDIC_GPU", ""))
+    except ValueError:
+        return None
+
+
+def cmd_gpus():
+    gs = gpus.list_gpus()
+    print(UI().section("GPUs") + f"\n  {D}use one for a test: --gpu N{N}")
+    for g in gs:
+        print(f"  {g['label']}   {D}{g['slot']} {g['render']}{N}")
+    if not gs:
+        print(f"  {R}No GPU with a working driver.{N}")
+    return 0
 
 
 # ── info ────────────────────────────────────────────────────────────────────────
@@ -84,12 +111,14 @@ def displays():
     return out
 
 
-def renderer():
-    gl = run(["eglinfo", "-B"]) or run(["glxinfo", "-B"])
+def renderer(env=None):
+    # Per GPU (env from gpus.env_for): EGL's surfaceless platform follows DRI_PRIME, and falls back to llvmpipe
+    # (software) when that GPU's driver can't render, which is the finding we want.
+    gl = run(["eglinfo", "-B", "-p", "surfaceless"], env=env) if env else (run(["eglinfo", "-B"]) or run(["glxinfo", "-B"]))
     names = [x.strip() for x in re.findall(r"renderer(?: string)?: (.+)", gl)]
     real = [x for x in names if not re.search(r"llvmpipe|softpipe|swrast", x, re.I)]
     m = re.match(r"(.+)", (real or names or [""])[0])
-    vk = run(["vulkaninfo", "--summary"])
+    vk = run(["vulkaninfo", "--summary"], env=env)
     vkd = re.findall(r"deviceName\s*=\s*(.+)", vk)
     return (m.group(1).strip() if m else ""), [d.strip() for d in vkd]
 
@@ -103,6 +132,20 @@ def cmd_info():
             drv = re.search(r"Kernel driver in use: (\S+)", block)
             print(f"  {first.split(': ', 1)[-1]}")
             print(f"    driver in use: {G if drv else R}{drv.group(1) if drv else 'NONE (no driver: the GPU is not working)'}{N}")
+    gs = gpus.list_gpus()
+    if len(gs) > 1:
+        print(UI().section("Each GPU's renderer") + f"\n  {D}choose one for a test with --gpu N{N}")
+        for g in gs:
+            print(f"  {g['label']}")
+            if not shutil.which("eglinfo"):
+                print(f"    {D}OpenGL: can't check (eglinfo isn't installed){N}")
+                continue
+            ggl, _ = renderer(gpus.env_for(g))
+            used = ggl and not re.search(r"llvmpipe|softpipe|swrast", ggl, re.I)
+            print(f"    OpenGL: {G if used else R}{ggl or 'no renderer'}{N}"
+                  + ("" if used else f"  {R}(this GPU can't render: driver or firmware problem){N}"))
+            record(f"gfx info: GPU {g['n']} {g['name']} ({g['driver']}): "
+                   + (f"renders ({ggl})" if used else f"CAN'T RENDER ({ggl or 'no renderer'})"))
     gl, vk = renderer()
     soft = re.search(r"llvmpipe|softpipe|swrast", gl, re.I)
     print(f"  OpenGL renderer: {R if soft else ''}{gl or 'unknown'}{N}")
@@ -246,7 +289,8 @@ def on_screen(plan, label):
         return None
     rundir = os.path.join(session_dir(), "gfx", datetime.datetime.now().strftime("%H%M%S") + "-" + label)
     os.makedirs(rundir, exist_ok=True)
-    json.dump({"plan": plan, "label": label}, open(f"{rundir}/plan.json", "w"))
+    g = chosen_gpu()
+    json.dump({"plan": plan, "label": label, "gpu": g}, open(f"{rundir}/plan.json", "w"))
     h = fb_geometry()[1] or 1080
     open(f"{rundir}/sway.conf", "w").write(SWAY_CONF.format(self=SELF, rundir=rundir, font=max(10, min(18, h // 72))))
     xdg = "/run/user/0"
@@ -262,19 +306,40 @@ def on_screen(plan, label):
     return rundir
 
 
+def clean_line(line):
+    """vkmark 2017.08 leaves VkApplicationInfo.apiVersion at 0 and newer Vulkan stacks print an ERROR about it; the run
+    is fine. Say so, so nobody reads it as a failed Vulkan test."""
+    if "VUID-VkApplicationInfo-apiVersion" in line:
+        return ("NOTE: vkmark 2017.08 doesn't set the Vulkan API version, and the Vulkan driver prints an error about it."
+                " It's harmless: the vkmark results below are valid.\n")
+    return line
+
+
 def cmd_runner(rundir):
-    plan = json.load(open(f"{rundir}/plan.json"))["plan"]
+    meta = json.load(open(f"{rundir}/plan.json"))
+    plan, g = meta["plan"], meta.get("gpu")
+    genv = gpus.env_for(g) if g else {}
     log = open(f"{rundir}/bench.log", "a", buffering=1)
+    if g:
+        log.write(f"### GPU {g['label']}\n")
     for i, step in enumerate(plan, 1):
         json.dump({"step": i, "of": len(plan), "title": step["title"], "started": time.time(), "until": time.time() + step["timeout"]},
                   open(f"{rundir}/status.json", "w"))
         log.write(f"### {step['title']}\n")
         try:
-            p = subprocess.run(step["cmd"], stdout=log, stderr=subprocess.STDOUT, timeout=step["timeout"],
-                               env=dict(os.environ, vblank_mode="0"))
-            log.write(f"### exit {p.returncode}\n")
-        except subprocess.TimeoutExpired:
-            log.write("### stopped (time limit)\n" if step.get("loop") else "### TIMEOUT\n")
+            p = subprocess.Popen(step["cmd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+                                 env=dict(os.environ, vblank_mode="0", **genv))
+            timer = threading.Timer(step["timeout"], p.kill)
+            timer.start()
+            for line in p.stdout:                  # streamed: the telemetry panel reads FPS from this log live
+                log.write(clean_line(line))
+            rc = p.wait()
+            timed_out = not timer.is_alive() and rc < 0
+            timer.cancel()
+            if timed_out:
+                log.write("### stopped (time limit)\n" if step.get("loop") else "### TIMEOUT\n")
+            else:
+                log.write(f"### exit {rc}\n")
         except OSError as e:
             log.write(f"### could not start: {e}\n")
     json.dump({"done": True}, open(f"{rundir}/status.json", "w"))
@@ -310,11 +375,13 @@ def bar(frac, width, warm=False):
 
 
 def cmd_telemetry(rundir):
-    s = gputelemetry.Sampler()
-    gpu_name = ""
-    lspci = run(["lspci"])
-    m = re.search(r"(?:VGA compatible controller|3D controller): (.+)", lspci)
-    gpu_name = (m.group(1) if m else "GPU")[:60]
+    g = json.load(open(f"{rundir}/plan.json")).get("gpu")
+    s = gputelemetry.Sampler(card=g["card"] if g else None)
+    if g:
+        gpu_name = g["name"][:60]
+    else:
+        m = re.search(r"(?:VGA compatible controller|3D controller): (.+)", run(["lspci"]))
+        gpu_name = (m.group(1) if m else "GPU")[:60]
     hist = {"fps": [], "gpu_temp": [], "cpu_temp": [], "watts": [], "gpu_busy": []}
     thr0 = None
     out = open(f"{rundir}/telemetry.csv", "w", newline="", buffering=1)
@@ -378,7 +445,18 @@ def summarize(rundir, kind):
     rows = list(csv.DictReader(open(f"{rundir}/telemetry.csv"))) if os.path.exists(f"{rundir}/telemetry.csv") else []
     kern = json.load(open(f"{rundir}/kernel.json")) if os.path.exists(f"{rundir}/kernel.json") else {}
     f = lambda k: [float(r[k]) for r in rows if r.get(k) not in ("", "None", None)]  # noqa: E731
-    print("\n" + UI().banner(f"Graphics {kind.lower()} results"))
+    g = (json.load(open(f"{rundir}/plan.json")) if os.path.exists(f"{rundir}/plan.json") else {}).get("gpu")
+    print("\n" + UI().banner(f"Graphics {kind.lower()} results", g["label"] if g else ""))
+    used = re.findall(r"GL_RENDERER:\s*(.+)", log) + re.findall(r"Device Name:\s*(.+)", log)
+    elsewhere = ""
+    vendor_words = {"10de": r"nvidia|geforce|quadro|nvk|nouveau", "8086": r"intel", "1002": r"amd|radeon"}
+    others = [x for x in gpus.list_gpus() if g and x["slot"] != g["slot"]]
+    if g and used and g["vendor"] in vendor_words and others and all(o["vendor"] != g["vendor"] for o in others):
+        off = [u.strip() for u in used if not re.search(vendor_words[g["vendor"]], u, re.I)]
+        if off:
+            elsewhere = off[0]
+            print(f"  {Y}Asked for GPU {g['n']} ({g['name']}), but it rendered on: {elsewhere}.{N}")
+            print(f"  {D}GPU {g['n']}'s driver can't render (missing firmware or driver): see sysmedic-gfx info.{N}")
     for name, score in re.findall(r"(glmark2|vkmark) Score: (\d+)", log):
         print(f"  {name} score: {B}{score}{N}")
     if kind == "Benchmark":
@@ -426,9 +504,10 @@ def summarize(rundir, kind):
     print(f"  {D}Telemetry: {rundir}/telemetry.csv{N}")
     ok = not hang and not bad
     scores = " ".join(f"{n} {s}" for n, s in re.findall(r"(glmark2|vkmark) Score: (\d+)", log))
-    record(f"gfx {kind.lower()}: {scores or 'no score'}; max temp {max(t) if t else '?'}; "
+    record(f"gfx {kind.lower()}{' on ' + g['name'] if g else ''}: {scores or 'no score'}"
+           f"{'; rendered on ' + elsewhere + ' instead' if elsewhere else ''}; max temp {max(t) if t else '?'}; "
            f"{'GPU HANG' if hang else 'no hangs'}{'; software rendering' if soft else ''}")
-    return 0 if ok else 1
+    return 0 if ok and not elsewhere else 1
 
 
 def cmd_bench():
@@ -449,9 +528,10 @@ def cmd_stress(minutes):
 
 
 def cmd_video():
-    out = run(["vainfo"], timeout=20)
+    g = chosen_gpu()
+    out = run(["vainfo", "--display", "drm", "--device", g["render"]] if g and g["render"] else ["vainfo"], timeout=20)
     drv = re.search(r"Driver version: (.+)", out)
-    print(UI().section("Hardware video decode (VA-API)"))
+    print(UI().section("Hardware video decode (VA-API)") + (f"\n  {D}GPU {g['label']}{N}" if g else ""))
     if not drv:
         print(f"  {Y}No VA-API driver answered: video is decoded by the CPU (normal for some GPUs or without a driver).{N}")
         record("gfx video: no VA-API driver")
@@ -464,19 +544,29 @@ def cmd_video():
     for fam in ("H264", "HEVC", "VP8", "VP9", "AV1", "MPEG2", "VC1", "JPEG"):
         if fam in codecs:
             print(f"  {fam:6} {', '.join(sorted(codecs[fam]))}")
-    record(f"gfx video: {drv.group(1).strip()[:60]}; " + ", ".join(f for f in codecs))
+    record(f"gfx video{' on ' + g['name'] if g else ''}: {drv.group(1).strip()[:60]}; " + ", ".join(f for f in codecs))
     return 0
 
 
 @timed_main("sysmedic-gfx")
 def main():
     a = sys.argv[1:]
+    if "--gpu" in a:
+        i = a.index("--gpu")
+        sel = a[i + 1] if i + 1 < len(a) else ""
+        del a[i:i + 2]
+        try:
+            os.environ["SYSMEDIC_GPU"] = str(gpus.pick(sel)["n"])
+        except ValueError as e:
+            sys.exit(f"sysmedic-gfx: {e}")
     cmd = a[0] if a else "-h"
     if cmd in ("-h", "--help", "help"):
         print(__doc__)
         return 0
     if os.geteuid() != 0:
         sys.exit("sysmedic-gfx must run as root")
+    if cmd == "gpus":
+        return cmd_gpus()
     if cmd == "info":
         return cmd_info()
     if cmd == "display":

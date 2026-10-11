@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.10.11 (night): test either GPU on hybrid laptops
+
+From the field: on an Intel + NVIDIA laptop the graphics tests only ever used the Intel chip, and a vkmark warning was taken for a failed Vulkan test.
+
+- **`--gpu N`** for `gpu-bench`, `gpu-stress` and `gpu-video` (`sysmedic-tests start gpu-bench --gpu 2`, `sysmedic-gfx --gpu 2 bench`). The chosen GPU renders (Mesa's DRI_PRIME for OpenGL, MESA_VK_DEVICE_SELECT for Vulkan, its render node for VA-API), and the picture still appears on the laptop's screen. `sysmedic-tests gpus` / `sysmedic-gfx gpus` number them; 1 is the GPU driving the screen.
+- **Phone dashboard and console menu** offer a GPU choice for those tests when the machine has more than one.
+- **`sysmedic-gfx info` checks each GPU can render.** One whose driver or firmware isn't working falls back to software (llvmpipe) and is reported as "can't render". The results say so too if a test asked for one GPU but ran on another.
+- **Telemetry follows the GPU under test.** It used to read whichever GPU was `card0`, which on hybrid laptops is often the idle discrete one, so clocks and temperatures were missing.
+- **vkmark's "apiVersion has value of 0" line** is now labelled as harmless. vkmark 2017.08 doesn't set the field, and newer Vulkan stacks complain; the scores are valid.
+
 ## 2026.10.11 (evening): the clock, and sign-in safety
 
 From the field: a laptop whose hardware clock was 10 hours slow made every secure connection fail (the cloud AI, apt, signatures), and the scan blamed DNS. Another visit's "performance fix" left a Linux machine without a login screen.

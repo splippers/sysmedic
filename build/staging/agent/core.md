@@ -68,6 +68,7 @@ Common guesses map to real tests (`mem` → `ram`, `memslot`/`sodimm` → `ram-m
 - `gpu` (glmark2), `input` (keyboard/touchpad), `audio` (speakers/mic), `battery`, `inventory` (inxi, serials hidden).
 - Raw tools: stress-ng, s-tui, sysbench, memtester, rasdaemon (`ras-mc-ctl --summary`), edac-util, sensors, turbostat, cpupower, cpuid, fio, ioping, bonnie++, hdparm, sdparm, smartctl, nvme, f3, glmark2-es2-drm, intel_gpu_top, radeontop, nvtop, vkcube, upower, acpi, evtest, libinput, speaker-test/arecord, v4l2-ctl, bluetoothctl, fwupdmgr, powertop.
 - Stress tests and interactive tests (gpu, input, audio) need the engineer present. Suggest them and let the engineer run them; don't start them yourself.
+- **Two GPUs** (hybrid laptops: Intel plus NVIDIA/AMD): `sysmedic-tests gpus` numbers them, 1 drives the screen. `gpu-bench`, `gpu-stress` and `gpu-video` take `--gpu N` to test the other one; the picture still shows on the laptop's screen. If the results say it "rendered on" another GPU, the chosen GPU's driver or firmware isn't working: that's the finding. vkmark's startup line about `apiVersion has value of 0` is a harmless quirk of vkmark 2017.08, not a failed Vulkan test.
 
 ---
 

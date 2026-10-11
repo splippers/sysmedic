@@ -290,8 +290,9 @@ async function tests(){
   for(const t of d.tests){const row=el('div','t'),info=el('div','',t.title);info.append(el('small','',t.what+' · about '+t.estimate+(t.person?' · you: '+t.person:'')));
    let sel=null,min=null;
    if(t.needs=='disk'){sel=el('select');for(const k of d.disks)sel.append(new Option(k.dev+' · '+k.size+' '+k.model,k.dev));if(!d.disks.length)sel.append(new Option('no disk found',''));info.append(sel)}
+   let gsel=null;if(t.gpu_choice&&d.gpus&&d.gpus.length>1){gsel=el('select');for(const g of d.gpus)gsel.append(new Option(g.label,String(g.n)));info.append(gsel)}
    if(t.needs=='minutes'){min=el('input');min.type='number';min.value=5;min.min=1;min.max=120;min.style.width='70px';info.append(min);info.append(el('small','','minutes'))}
-   const b=el('button','','Run');b.onclick=async()=>{b.disabled=true;toast('Confirm on the laptop\'s keyboard…');try{await post('api/tests/start',{test:t.id,disk:sel?sel.value:'',minutes:min?min.value:null});toast(t.title+' started');openLog=null;tests()}catch(e){toast('Not started: '+e.message)}b.disabled=false};
+   const b=el('button','','Run');b.onclick=async()=>{b.disabled=true;toast('Confirm on the laptop\'s keyboard…');try{await post('api/tests/start',{test:t.id,disk:sel?sel.value:'',minutes:min?min.value:null,gpu:gsel?gsel.value:''});toast(t.title+' started');openLog=null;tests()}catch(e){toast('Not started: '+e.message)}b.disabled=false};
    row.append(info,b);$(t.category=='hardware'?'thw':'tsw').append(row)}}
  const R=$('runs');R.replaceChildren();
  if(!d.runs.length)R.append(el('p','muted','No tests run yet this visit.'));
@@ -377,7 +378,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(200, {"ok": True})
         if path == "/api/tests/start":
             what = f"start the test '{body.get('test', '')}'" + (f" on {body.get('disk')}" if body.get("disk") else "") + \
-                   (f" for {body.get('minutes')} min" if body.get("minutes") else "")
+                   (f" for {body.get('minutes')} min" if body.get("minutes") else "") + \
+                   (f" on GPU {body.get('gpu')}" if body.get("gpu") else "")
             if not confirm_on_device(what):
                 return self.send(403, "Not started: it wasn't confirmed on the laptop's keyboard.", "text/plain")
             args = ["/usr/local/bin/sysmedic-tests", "start", str(body.get("test", ""))]
@@ -385,6 +387,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 args += ["--disk", str(body["disk"])]
             if body.get("minutes"):
                 args += ["--minutes", str(body["minutes"])]
+            if body.get("gpu"):
+                args += ["--gpu", str(body["gpu"])]
             p = subprocess.run(args, capture_output=True, text=True, timeout=30, env=dict(os.environ, SYSMEDIC_TESTS_VIA="phone"))
             return self.send(200 if p.returncode == 0 else 400, {"ok": p.returncode == 0, "message": (p.stdout + p.stderr).strip()}
                              if p.returncode == 0 else (p.stdout + p.stderr).strip(), "application/json" if p.returncode == 0 else "text/plain")
@@ -427,7 +431,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 def tests_state():
     run = lambda *a: json.loads(subprocess.run(["/usr/local/bin/sysmedic-tests", *a, "--json"], capture_output=True, text=True,  # noqa: E731
                                                timeout=20).stdout or "[]")
-    return {"tests": run("list"), "runs": run("status"), "disks": run("disks")}
+    return {"tests": run("list"), "runs": run("status"), "disks": run("disks"), "gpus": run("gpus")}
 
 
 def show_qr():

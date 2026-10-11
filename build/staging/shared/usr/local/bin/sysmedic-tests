@@ -7,14 +7,16 @@ read-only mount.
 
   sysmedic-tests menu                          pick a test, watch it live (menu 2)
   sysmedic-tests list [--json]                 the catalogue
-  sysmedic-tests start TEST [--disk /dev/X] [--minutes N]
+  sysmedic-tests start TEST [--disk /dev/X] [--minutes N] [--gpu N]
                                                start a test in the background; prints its run id
+                                               (--gpu: gpu-bench, gpu-stress, gpu-video on a hybrid laptop's other GPU)
   sysmedic-tests status [RUN] [--json]         running and finished tests (latest first)
   sysmedic-tests watch RUN|TEST                show its output live until it finishes
   sysmedic-tests wait RUN|TEST [--timeout S]   wait for it to finish (default 540 s), then show the result
   sysmedic-tests log RUN|TEST [-n LINES]       the output so far
   sysmedic-tests stop RUN|TEST|all             stop a running test
   sysmedic-tests disks [--json]                disks you can test (not SysMedic's own)
+  sysmedic-tests gpus [--json]                 the GPUs, numbered for --gpu (1 drives the screen)
 
 Runs and their output are kept in the visit's session folder (tests/), so they're part of the
 job report and the review bundle.
@@ -41,6 +43,10 @@ try:
     import session
 except ImportError:      # outside SysMedic (e.g. generating OpenCode commands at deploy time)
     session = None
+try:
+    import gpus
+except ImportError:
+    gpus = None
 from timing import timed_main  # noqa: E402
 
 NETWORK = r"""
@@ -70,6 +76,9 @@ GPU = ("echo '== GPU'; lspci | grep -iE 'vga compatible|3d controller|display co
        "if [ $rc = 124 ] || [ $rc = 137 ]; then echo 'FAILED: the 3D benchmark stalled and was stopped after 150 s.'; "
        "echo 'A healthy GPU finishes in about a minute: suspect the graphics driver or GPU. Driver messages:'; "
        "dmesg 2>/dev/null | grep -iE 'i915|amdgpu|nouveau|gpu hang|drm' | grep -iE 'err|hang|fail|reset|timeout' | tail -8; exit 1; fi")
+
+# Tests that can run on a chosen GPU (--gpu N): the on-screen ones render there and show on the laptop's screen
+GPU_CHOICE = ("gpu-bench", "gpu-stress", "gpu-video")
 
 TESTS = {
     "health":    ("hardware", "Health report", "Temperatures, fans, throttling, battery, SMART of every disk, hardware errors",
@@ -238,7 +247,7 @@ def unknown_test(name):
             + f" Real tests: {', '.join(TESTS)}")
 
 
-def start(test, disk="", minutes=None, via="console"):
+def start(test, disk="", minutes=None, via="console", gpu=""):
     test = real_test(test) or test
     if test not in TESTS:
         raise ValueError(unknown_test(test))
@@ -252,6 +261,14 @@ def start(test, disk="", minutes=None, via="console"):
     minutes = int(minutes or 5)
     if not 1 <= minutes <= 120:
         raise ValueError("minutes must be 1–120")
+    genv, glabel = {}, ""
+    if gpu:
+        if test not in GPU_CHOICE:
+            raise ValueError(f"--gpu applies to {', '.join(GPU_CHOICE)}")
+        if gpus is None:
+            raise ValueError("GPU selection isn't available on this drive")
+        g = gpus.pick(gpu)
+        genv, glabel = gpus.env_for(g), g["name"]
     cmd = cmd.replace("{disk}", shlex.quote(disk)).replace("{minutes}", str(minutes))
     stamp = datetime.datetime.now().strftime("%H%M%S")
     run_id = f"{test}-{stamp}"
@@ -259,15 +276,16 @@ def start(test, disk="", minutes=None, via="console"):
     wrapped = f"exec 2>&1; echo \"► {title} · started $(date '+%H:%M:%S')\"; {{ {cmd}\n}}; rc=$?; echo; " \
               f"if [ $rc = 0 ]; then echo \"✔ {title} · finished $(date '+%H:%M:%S')\"; " \
               f"else echo \"✖ {title} · failed (exit $rc) · $(date '+%H:%M:%S')\"; fi; echo $rc > {shlex.quote(str(log.with_suffix('.rc')))}"
-    env = dict(os.environ, TERM="dumb", PAGER="cat", SYSTEMD_PAGER="", SYSMEDIC_TEST_VIA=via)
+    env = dict(os.environ, TERM="dumb", PAGER="cat", SYSTEMD_PAGER="", SYSMEDIC_TEST_VIA=via, **genv)
     p = subprocess.Popen(["bash", "-c", wrapped], stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                          start_new_session=True, env=env, cwd="/root")
     rec = {"run": run_id, "test": test, "title": title, "category": cat, "disk": disk, "minutes": minutes if needs == "minutes" else None,
-           "pid": p.pid, "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log), "via": via}
+           "pid": p.pid, "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log), "via": via,
+           "gpu": glabel}
     (runs_dir() / f"{run_id}.json").write_text(json.dumps(rec))
     if session:
         try:
-            session.audit("tests", f"started {title}{(' ' + disk) if disk else ''} via {via} ({run_id})")
+            session.audit("tests", f"started {title}{(' ' + disk) if disk else ''}{(' on ' + glabel) if glabel else ''} via {via} ({run_id})")
         except Exception:  # noqa: BLE001
             pass
     return rec
@@ -314,6 +332,9 @@ def opencode_commands():
                          "(if there are several and the engineer didn't say which, test each in turn). $ARGUMENTS")
         if needs == "minutes":
             parts.append("Duration in minutes: use the number in '$ARGUMENTS' if there is one, otherwise 5.")
+        if t in GPU_CHOICE:
+            parts.append("On a laptop with two GPUs (`sysmedic-tests gpus`), add `--gpu N` to test the other one "
+                         "(e.g. the NVIDIA/AMD chip); if '$ARGUMENTS' names a GPU, use it.")
         if person:
             parts.append(f"Before starting, tell the engineer what to do: {person}. Ask them afterwards what they saw or heard.")
         parts.append(howto.format(start=start_cmd, test=t))
@@ -366,10 +387,15 @@ def menu():
             disk = ds[int(pick) - 1]["dev"]
         if v[4] == "minutes":
             minutes = input("  Minutes [5]: ").strip() or "5"
+        gpu = ""
+        if t in GPU_CHOICE and gpus and len(gpus.list_gpus()) > 1:
+            for g in gpus.list_gpus():
+                print(f"   {g['label']}")
+            gpu = input("  Which GPU [1]: ").strip()
         if v[6]:
             print(f"  {C['y']}You'll need to {v[6]}.{C['e']}")
         try:
-            r = start(t, disk, minutes)
+            r = start(t, disk, minutes, gpu=gpu)
         except ValueError as e:
             print(f"  {e}"); input("  Press Enter…"); continue
         print(f"  Started {r['title']}. Showing its output live; Ctrl-C returns to the menu (the test keeps running).\n")
@@ -395,7 +421,9 @@ def main(args=None):
         return
     if cmd == "catalogue":   # markdown, for the AI instructions (sysmedic-deploy)
         print("\n".join(f"- `{t}`: {v[1]} ({v[5]}): {v[2].rstrip('.')}." + (" Needs `--disk /dev/X` (a whole disk, never a partition)." if v[4] == "disk" else "")
-                         + (" Optional `--minutes N`." if v[4] == "minutes" else "") for t, v in TESTS.items()))
+                         + (" Optional `--minutes N`." if v[4] == "minutes" else "")
+                         + (" Optional `--gpu N` for a hybrid laptop's other GPU (`sysmedic-tests gpus`)." if t in GPU_CHOICE else "")
+                         for t, v in TESTS.items()))
         return
     if cmd == "opencode-commands":
         print(json.dumps(opencode_commands(), indent=2))
@@ -410,7 +438,8 @@ def main(args=None):
         return
     if cmd == "list":
         if js:
-            print(json.dumps([{"id": t, "category": v[0], "title": v[1], "what": v[2], "needs": v[4], "estimate": v[5], "person": v[6]}
+            print(json.dumps([{"id": t, "category": v[0], "title": v[1], "what": v[2], "needs": v[4], "estimate": v[5], "person": v[6],
+                               "gpu_choice": t in GPU_CHOICE}
                               for t, v in TESTS.items()], indent=1))
             return
         ui = UI()
@@ -427,9 +456,12 @@ def main(args=None):
     elif cmd == "disks":
         ds = disks()
         print(json.dumps(ds) if js else "\n".join(f"  {d['dev']:14} {d['size']:>8}  {d['model']} {d['tran']}" for d in ds) or "  no disks to test")
+    elif cmd == "gpus":
+        gs = gpus.list_gpus() if gpus else []
+        print(json.dumps(gs) if js else "\n".join(f"  {g['label']}" for g in gs) or "  no GPU with a working driver")
     elif cmd == "start":
         try:
-            r = start(a[1] if len(a) > 1 else "", opt("--disk", ""), opt("--minutes"), via=os.environ.get("SYSMEDIC_TESTS_VIA") or ("ai" if os.environ.get("SYSMEDIC_AI") else "console"))
+            r = start(a[1] if len(a) > 1 else "", opt("--disk", ""), opt("--minutes"), gpu=opt("--gpu", ""), via=os.environ.get("SYSMEDIC_TESTS_VIA") or ("ai" if os.environ.get("SYSMEDIC_AI") else "console"))
         except (ValueError, IndexError) as e:
             sys.exit(f"  {e}")
         print(json.dumps(r) if js else f"  Started {r['title']} ({r['run']}). Watch: sysmedic-tests log {r['test']}")
@@ -459,7 +491,7 @@ def main(args=None):
             print("  No tests run yet this visit. sysmedic-tests list")
         for r in rs:
             sev = {"running": "run", "passed": "ok"}.get(r["state"], "fail")
-            print(UI().item(sev, f"{r['title']}{(' ' + r['disk']) if r.get('disk') else ''}  " + UI().c("dim", f"{r['state']} · {r['run']} · started {r['started'][11:19]}")))
+            print(UI().item(sev, f"{r['title']}{(' ' + r['disk']) if r.get('disk') else ''}{(' on ' + r['gpu']) if r.get('gpu') else ''}  " + UI().c("dim", f"{r['state']} · {r['run']} · started {r['started'][11:19]}")))
     elif cmd == "wait":
         key = a[1] if len(a) > 1 else "latest"
         limit, t0 = int(opt("--timeout", 540)), time.time()

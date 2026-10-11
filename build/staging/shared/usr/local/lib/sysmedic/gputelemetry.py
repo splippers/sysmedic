@@ -27,7 +27,7 @@ def _num(path, scale=1.0):
 
 
 def gpu_cards():
-    """[(card path, driver)] for real GPUs (not simpledrm), primary first."""
+    """[(card path, driver)] for real GPUs (not simpledrm), in card order (not necessarily the display GPU first)."""
     out = []
     for c in sorted(glob.glob("/sys/class/drm/card[0-9]")):
         drv = os.path.basename(os.path.realpath(os.path.join(c, "device/driver")))
@@ -45,9 +45,16 @@ def _hwmon(dev, names):
 class Sampler:
     """Call sample() about once a second; each call returns one dict of readings."""
 
-    def __init__(self):
+    def __init__(self, card=None):
         self.cards = gpu_cards()
-        self.card, self.driver = self.cards[0] if self.cards else (None, None)
+        if card is None:                # the GPU driving the display (card numbering doesn't say which: on hybrid
+            try:                        # laptops card0 is often the idle discrete GPU)
+                import gpus
+                card = gpus.pick("")["card"]
+            except (ImportError, ValueError):
+                card = None
+        match = [c for c in self.cards if c[0] == card]
+        self.card, self.driver = match[0] if match else (self.cards[0] if self.cards else (None, None))
         self.prev = {}
         self.t0 = time.time()
 
