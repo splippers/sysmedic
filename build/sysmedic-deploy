@@ -148,10 +148,46 @@ PY
 chroot_run() {   # chroot_run ROOT CMD...
     local root=$1; shift
     if [ "$root" = / ]; then sudo "$@"; return; fi      # --self: the running caddy
+    local rc=0 d
     for d in dev proc sys; do mnt --bind "/$d" "$root/$d"; done
-    sudo chroot "$root" "$@"
+    sudo chroot "$root" "$@" || rc=$?
     mountpoint -q "$root/sys/firmware/efi/efivars" && sudo umount "$root/sys/firmware/efi/efivars"
-    for d in sys proc dev; do sudo umount "$root/$d"; MOUNTS=("${MOUNTS[@]/$root\/$d}"); done
+    # A child the command left behind (e.g. OpenCode's server) can keep these busy for a moment: retry, then detach
+    for d in sys proc dev; do
+        sudo umount "$root/$d" 2>/dev/null || { sleep 2; sudo umount "$root/$d" 2>/dev/null; } || sudo umount -l "$root/$d"
+        MOUNTS=("${MOUNTS[@]/$root\/$d}")
+    done
+    return $rc
+}
+
+# smoke_test ROOT: after installing, check the scripts parse, the tools start, and every opencode flag we pass exists
+# in that root's own OpenCode (1.18 and 2.x differ). Catches the boot-breakers that reached a field caddy on 2026-10-09
+# (sysmedic-scan crashing at every boot; "Unrecognized flag: --model").
+smoke_test() {
+    local root=$1 f out bad=0 flag oc_help
+    say "Smoke test"
+    for f in "$root"/usr/local/bin/sysmedic-* "$root"/usr/local/sbin/sysmedic-* "$root"/opt/sysmedic/*.sh "$root"/root/.profile; do
+        sudo test -f "$f" || continue
+        case "$(sudo head -c 64 "$f")" in
+            *python*) out=$(sudo python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1], "exec")' "$f" 2>&1) ;;
+            *bash*|*/sh*) out=$(sudo bash -n "$f" 2>&1) ;;
+            *) case "$f" in */.profile) out=$(sudo bash -n "$f" 2>&1) ;; *) continue ;; esac ;;
+        esac || { echo "    syntax: ${f#$root}: $out"; bad=1; }
+    done
+    # Each tool's harmless mode: it must not die with a Python traceback
+    for f in "sysmedic-scan --last" "sysmedic-tests list" "sysmedic-gfx -h" "sysmedic-win help" "sysmedic-ask --is-read-only ls"; do
+        out=$(chroot_run "$root" env SYSMEDIC_SMOKE=1 timeout 60 /usr/local/bin/$f 2>&1 </dev/null || true)
+        grep -q '^Traceback' <<<"$out" && { echo "    $f crashed:"; tail -4 <<<"$out" | sed 's/^/      /'; bad=1; }
+    done
+    if [ -x "$root/usr/local/bin/opencode" ]; then
+        oc_help=$(chroot_run "$root" env HOME=/tmp timeout 60 /usr/local/bin/opencode --help 2>&1 </dev/null || true)
+        for flag in $(sudo grep -rhoE '\bopencode( +--?[a-z-]+)+' "$root"/usr/local/bin/sysmedic-* "$root"/opt/sysmedic/*.sh "$root"/root/.profile 2>/dev/null \
+                      | grep -oE ' --[a-z-]+' | sort -u); do
+            grep -qE -- "(^|[ ,])$flag\b" <<<"$oc_help" || { echo "    opencode on this edition has no $flag flag"; bad=1; }
+        done
+    fi
+    [ "$bad" = 0 ] || die "Smoke test failed (above). Fix build/staging and deploy again; this target has the new files but may not boot cleanly."
+    echo "    scripts parse, tools start, opencode flags exist"
 }
 
 # with_net_chroot ROOT CMD...: chroot with network, and services prevented from starting
@@ -283,6 +319,7 @@ deploy_caddy() {
     install_tree "$root" caddy
     install_caddy_extras "$root"
     install_packages "$root" caddy
+    smoke_test "$root"
     if [ "$HOOKS_CHANGED" = 1 ]; then
         say "An initramfs hook changed: rebuilding the caddy's initramfs"
         chroot_run "$root" update-initramfs -u -k all
@@ -314,6 +351,7 @@ deploy_self() {
     install_tree / caddy
     install_caddy_extras /
     install_packages / caddy
+    smoke_test /
     [ "$HOOKS_CHANGED" = 1 ] && { say "An initramfs hook changed: rebuilding the initramfs"; update-initramfs -u -k all; }
     [ "$grub_before" != "$(cat /etc/default/grub /etc/default/grub.d/* 2>/dev/null | md5sum)" ] && \
         { say "Boot menu settings changed: updating GRUB"; update-grub 2>&1 | grep -E '^Found|done' || true; }
@@ -378,6 +416,7 @@ build_stick_image() {
     install_tree "$STICK_ROOT" stick
     install_packages "$STICK_ROOT" stick
     sudo rm -f "$STICK_ROOT/opt/sysmedic/menu.sh"      # the stick uses rescue-menu.sh like the caddy
+    smoke_test "$STICK_ROOT"
     if [ "$HOOKS_CHANGED" = 1 ]; then
         kv=$(ls "$STICK_ROOT/usr/lib/modules" | sort -V | tail -1)
         say "An initramfs hook changed: rebuilding the stick's initrd for $kv"
@@ -385,6 +424,9 @@ build_stick_image() {
         sudo cp "$STICK_ROOT/boot/initrd.img-$kv" "$KIT/kernel/initrd"
         sudo rm -f "$STICK_ROOT"/boot/initrd.img*
     fi
+    for d in dev proc sys; do      # never pack the build PC's /dev, /proc or /sys into the image
+        ! mountpoint -q "$STICK_ROOT/$d" || die "$STICK_ROOT/$d is still mounted: unmount it before building the ISO"
+    done
     say "Building the stick ISO"
     ./build-iso.sh | tail -2
     rm -f stick-test.img; truncate -s "$(sudo blockdev --getsize64 "${STICK_DEV:-/dev/null}" 2>/dev/null || echo 15376318464)" stick-test.img
