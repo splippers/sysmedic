@@ -1,4 +1,4 @@
-# SysMedic caddy: UK keyboard
+# SysMedic (both editions): UK keyboard
 XKBMODEL="pc105"
 XKBLAYOUT="gb"
 XKBVARIANT=""

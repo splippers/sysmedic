@@ -298,8 +298,13 @@ def on_screen(plan, label):
     before = run(["fgconsole"]).strip()
     dmesg0 = run(["dmesg"])
     env = f"LIBSEAT_BACKEND=builtin XDG_RUNTIME_DIR={xdg} WLR_RENDERER_ALLOW_SOFTWARE=1 WLR_NO_HARDWARE_CURSORS=1"
-    print(f"  {CY}The test is on the laptop's screen now; it switches back when it finishes.{N}")
-    subprocess.run(["openvt", "-s", "-w", "--", "sh", "-c", f"{env} sway -c {rundir}/sway.conf > {rundir}/sway.log 2>&1"])
+    vt = run(["fgconsole", "--next-available"]).strip()
+    where = f"console {vt}" if vt.isdigit() else "a spare console"
+    print(f"  {CY}The test is on the laptop's screen now ({where}); it switches back here when it finishes.{N}")
+    if vt.isdigit() and before.isdigit():
+        print(f"  {D}Back here early: Ctrl+Alt+F{before}. Back to the test: Alt+F{vt}.{N}")
+    subprocess.run(["openvt", "-s", "-w"] + (["-c", vt] if vt.isdigit() else [])
+                   + ["--", "sh", "-c", f"{env} sway -c {rundir}/sway.conf > {rundir}/sway.log 2>&1"])
     if before.isdigit():
         subprocess.run(["chvt", before])
     json.dump({"hang": gputelemetry.gpu_hang_lines(dmesg0)}, open(f"{rundir}/kernel.json", "w"))

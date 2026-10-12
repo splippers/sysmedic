@@ -53,6 +53,7 @@ install_tree() {
     local root=$1 ed=$2 before after v
     v=$(version)
     before=$(sudo sh -c "cat $root/etc/initramfs-tools/hooks/* $root/etc/initramfs-tools/conf.d/* 2>/dev/null; true" | md5sum)
+    local kbd_before; kbd_before=$(sudo cat "$root/etc/default/keyboard" 2>/dev/null | md5sum)
     # Leftovers from older builds that break things (staging/obsolete.txt)
     grep -vE '^\s*(#|$)' "$ST/obsolete.txt" 2>/dev/null | while read -r f; do
         { [ -e "$root/$f" ] || [ -L "$root/$f" ]; } && { sudo rm -f "$root/$f"; say "Removed obsolete /$f"; }
@@ -74,6 +75,10 @@ s = open(p).read()
 assert "<!-- SYSMEDIC TESTS -->" in s, "core.md lost its <!-- SYSMEDIC TESTS --> marker"
 open(p, "w").write(s.replace("<!-- SYSMEDIC TESTS -->", t))
 EOF
+    # Keyboard layout changed: rebuild the console's cached keymap, or the old layout stays in use
+    if [ "$kbd_before" != "$(sudo cat "$root/etc/default/keyboard" 2>/dev/null | md5sum)" ]; then
+        chroot_run "$root" setupcon --save-only && say "Keyboard layout: $(sudo grep -h '^XKBLAYOUT' "$root/etc/default/keyboard")"
+    fi
     sudo install -D -o root -g root -m 644 "$WORK/agent.md" "$root/opt/sysmedic/SYSMEDIC-AGENT.md"
     # The documentation (repo docs/ + README) goes on the drive for offline reading: sysmedic-help
     local repo; repo=$(cd "$(realpath "$ST")/../.." && pwd)
