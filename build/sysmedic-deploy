@@ -328,6 +328,7 @@ deploy_caddy() {
         say "Boot menu settings changed: updating GRUB"
         chroot_run "$root" update-grub 2>&1 | grep -E '^Found|done' || true
     fi
+    [ -n "$esp" ] && removable_boot "$root/boot/efi"
     # Copy stick ISO to caddy for in-field stick updates (if stick image was built)
     local kit_root; kit_root=$(cd "$(realpath "$ST")/../.." && pwd)
     if [ -f "$kit_root/build/sysmedic-v2.iso" ]; then
@@ -339,6 +340,24 @@ deploy_caddy() {
     fi
     sync
     say "Caddy updated. Safe to unplug once this finishes."
+}
+
+# removable_boot ESP: make the USB boot path (EFI/BOOT) start SysMedic directly. Without grubx64.efi next to it,
+# shim runs fbx64.efi, which writes an "ubuntu" boot entry into the customer's firmware and puts it first in
+# BootOrder, on every machine the caddy boots. So: shim, GRUB, MokManager and GRUB's pointer config side by
+# side, and no fallback.
+removable_boot() {
+    local esp=$1 f changed=0 sudo=sudo
+    [ "$(id -u)" = 0 ] && sudo=
+    $sudo test -f "$esp/EFI/ubuntu/shimx64.efi" -a -f "$esp/EFI/ubuntu/grubx64.efi" || { echo "    no EFI/ubuntu boot files: left as is"; return 0; }
+    $sudo mkdir -p "$esp/EFI/BOOT"
+    for f in "shimx64.efi:BOOTX64.EFI" grubx64.efi:grubx64.efi mmx64.efi:mmx64.efi grub.cfg:grub.cfg; do
+        $sudo test -f "$esp/EFI/ubuntu/${f%%:*}" || continue
+        $sudo cmp -s "$esp/EFI/ubuntu/${f%%:*}" "$esp/EFI/BOOT/${f#*:}" && continue
+        $sudo cp "$esp/EFI/ubuntu/${f%%:*}" "$esp/EFI/BOOT/${f#*:}"; changed=1
+    done
+    $sudo test -f "$esp/EFI/BOOT/fbx64.efi" && { $sudo rm -f "$esp/EFI/BOOT/fbx64.efi"; changed=1; }
+    [ "$changed" = 1 ] && say "USB boot path updated: starts SysMedic directly, writes no boot entries to the machine" || true
 }
 
 # ── Self-update (on a caddy) and releases (on the build PC) ───────────────
@@ -355,6 +374,7 @@ deploy_self() {
     [ "$HOOKS_CHANGED" = 1 ] && { say "An initramfs hook changed: rebuilding the initramfs"; update-initramfs -u -k all; }
     [ "$grub_before" != "$(cat /etc/default/grub /etc/default/grub.d/* 2>/dev/null | md5sum)" ] && \
         { say "Boot menu settings changed: updating GRUB"; update-grub 2>&1 | grep -E '^Found|done' || true; }
+    mountpoint -q /boot/efi && removable_boot /boot/efi
     systemctl daemon-reload 2>/dev/null || true
     sync
     say "SysMedic updated to v$DEPLOYED_VERSION."

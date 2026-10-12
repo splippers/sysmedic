@@ -216,6 +216,9 @@ EOF
     in_chroot "$m" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --uefi-secure-boot --no-nvram >/dev/null
     in_chroot "$m" grub-install --target=x86_64-efi --efi-directory=/boot/efi --uefi-secure-boot --removable --no-nvram >/dev/null
     in_chroot "$m" update-grub 2>&1 | grep -E '^Found linux' || true
+    # No fallback on the USB path: shim would run fbx64.efi, which writes a boot entry into every machine it boots on
+    sudo rm -f "$m/boot/efi/EFI/BOOT/fbx64.efi"
+    sudo cp "$m/boot/efi/EFI/ubuntu/grub.cfg" "$m/boot/efi/EFI/BOOT/grub.cfg"
     chroot_leave "$m"
     say "Offline AI (Ollama + Qwen), ClamAV signatures, OpenCode"
     copy_ollama "$m/srv/sysmedic"

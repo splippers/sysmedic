@@ -4,6 +4,7 @@
 
 - **Boot menu restored** (fd3e19b): the silent-boot GRUB (forced 1920×1080, theme, hidden 1-second menu) hung before the menu on firmware without that video mode. Back to the plain 8-second menu, on the caddy and the stick.
 - **The scan explains a Secure Boot refusal.** A Dell Pro 13 Plus wouldn't boot SysMedic with Secure Boot on: its firmware trusts only Windows (Dell's "Enable Microsoft UEFI CA" is off, as on many Secured-core laptops), so it rejects every third-party bootloader. A shim signed with Microsoft's 2023 CA wouldn't help, because that CA isn't trusted either. The scan now reads the firmware's trust list and names the BIOS setting, with the BitLocker catch (changing it means one recovery-key prompt).
+- **The caddy no longer writes to the machine's firmware.** Booted from a laptop's boot menu, the caddy's shim ran Ubuntu's fallback helper (fbx64.efi). That helper added an "Ubuntu" boot entry to the customer's firmware and put it first in the boot order, on every machine. Deploys now put GRUB on the USB boot path and remove the helper. Tested in QEMU with Secure Boot: before, a new "Ubuntu" entry appeared first in the boot order; after, the firmware's entries were unchanged. Machines already visited may still have a stale "Ubuntu" entry; it's harmless, and can be removed in the BIOS boot settings.
 - **BitLocker warning:** with Secure Boot off and a BitLocker volume present, the scan says to turn Secure Boot back on before Windows starts, otherwise Windows asks for the recovery key.
 
 ## 2026.10.12: what fills a disk
