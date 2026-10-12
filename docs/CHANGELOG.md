@@ -2,6 +2,7 @@
 
 ## 2026.10.12 (late): customer data encrypted, battery on the menu
 
+- **SysMedic branding on the AI screen:** a SysMedic bar across the top (cyan SYSMEDIC block, the assistant in use, then the machine, vault state, battery and time), on the laptop and in the phone's remote AI terminal; the OpenCode theme in SysMedic's cyan and blue (agent label, borders, headings, links; red only for errors). The console now gets SysMedic's full 16-colour palette through tmux: it had been squeezed to 8 colours, so dim text vanished and bright colours were dulled.
 - **Secure Boot advice names the exact setting** for the machine's maker (Dell, Lenovo, HP, Surface; generic otherwise), from the firmware's own identification.
 - **Boot entries left by older SysMedic drives** ("Ubuntu", pointing at a SysMedic drive or at a disk that isn't connected) are listed by the scan with the commands to remove them (engineer only; SysMedic never writes to the firmware itself).
 - **Battery on the rescue menu:** charge, charging state and health (with cycle count) under the live strip, yellow when worn (under 80%) or low, red when it needs replacing (under 60%) or at 15% on battery. Same reading as the phone dashboard (`power.py`).
