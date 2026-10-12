@@ -60,14 +60,28 @@ Each visit's `audit.log` records, with timestamps:
 
 | Data | Location | Contains customer data? |
 |---|---|---|
-| Session folder (scans, audit, job, report, backups, AI conversations) | `/mnt/persist/sessions/<time>-<model>/` (caddy: `/srv/sysmedic/sessions/`) | Yes |
-| Serial numbers | `/mnt/persist/private/` (root-only) | Yes |
-| Console transcripts (output only) | `/mnt/persist/transcripts/` | Yes |
-| Review bundles | `claude-review.md` in the session + `/mnt/persist/claude-review/` | Yes |
+| Session folder (scans, audit, job, report, AI conversations) | `/mnt/persist/sessions/<time>-<model>/` | Yes: **in the vault** |
+| Backups of customer files | `/mnt/persist/backups/` | Yes: **in the vault** |
+| Serial numbers | `/mnt/persist/private/` (root-only) | Yes: **in the vault** |
+| Console transcripts (output only) | recorded in memory, saved to `/mnt/persist/transcripts/` | Yes: **in the vault** |
+| Review bundles | `claude-review.md` in the session + `/mnt/persist/claude-review/` | Yes: **in the vault** |
+| SysMedic, offline AI models, virus signatures, `logs/` | SysMedic's drive, outside the vault | No |
 | Wi-Fi passwords, BitLocker keys | **Never stored** | — |
 | Cloud AI history | Wiped at each boot; a copy of the visit's conversation is kept in the session | Yes |
 
-**Encryption:** the stick's persistence partition and the caddy are **not encrypted**. A lost drive exposes the above. Treat the drives as customer-data media.
+## The encrypted vault (`sysmedic-vault`)
+
+Everything above marked "in the vault" lives in an encrypted LUKS2 container on SysMedic's own drive (`/mnt/persist/vault.luks`; Argon2id; on the caddy it's in `/srv/sysmedic`). A lost drive gives away nothing without the passphrase.
+
+- **One passphrase per drive,** typed on the first screen at boot. Hidden as you type; never logged, recorded or shown to the AI (both assistants are refused `sysmedic-vault`).
+- **A recovery key** (8 groups of 6 digits) is made at setup and shown **once**, on a private console that isn't recorded. Write it down and keep it away from the drive. It opens the vault in place of the passphrase.
+- **Not unlocked** (Enter at the prompt): SysMedic works as usual, but this visit is kept **in memory** and lost at shutdown. Nothing is ever written unencrypted. Unlock later with `sysmedic-vault unlock` (Alt+F2, or menu **V**): the visit so far moves into the vault.
+- **While open,** console transcripts are saved every 30 s and the review bundle every 5 minutes, so a laptop that dies mid-job loses seconds, not the visit's record.
+- **Forgotten passphrase *and* recovery key:** after three wrong tries the unlock screen offers **r = erase it and start again**, or run `sysmedic-vault reset`. Typing `ERASE` destroys the vault's keys, so everything in it is gone for good, then a new vault is set up.
+- **Change the passphrase:** `sysmedic-vault passphrase`, with the current one or the recovery key (the recovery key keeps working).
+- **First setup moves existing data in** (sessions, backups, serials, transcripts and bundles saved before encryption), then deletes the unencrypted copies and trims the drive. Flash memory can keep fragments of deleted data until they're overwritten, so a drive that held customer data before encryption should still be treated with care.
+- **Deploys** back the vault up as the encrypted file: the build PC never holds a readable copy. To read a drive's vault on the build PC: `sudo sysmedic-vault mount FILE DIR` (read-only), then `sysmedic-vault umount DIR`.
+- **The caddy collecting a stick's data** copies only into its own vault (unlocked), and asks for the stick's passphrase on Alt+F2: `sysmedic-collect`.
 
 ## Things that never happen by themselves
 

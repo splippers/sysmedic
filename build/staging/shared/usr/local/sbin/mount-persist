@@ -6,7 +6,8 @@
 PERSIST_DIR="/mnt/persist"
 PERSIST_LABEL="FOG_AMB_PERSIST"
 
-mountpoint -q "$PERSIST_DIR" && exit 0
+# Customer data goes into the encrypted vault, or into memory while it's locked: never unencrypted
+mountpoint -q "$PERSIST_DIR" && { /usr/local/sbin/sysmedic-vault prepare 2>/dev/null; exit 0; }
 
 # udev may still be enumerating the USB stick early in boot
 for _ in $(seq 1 10); do
@@ -26,5 +27,6 @@ fi
 
 mkdir -p "$PERSIST_DIR"
 mount -o noatime "$PERSIST_DEV" "$PERSIST_DIR" 2>/dev/null || { echo "  Could not mount $PERSIST_DEV"; exit 1; }
-mkdir -p "$PERSIST_DIR/logs" "$PERSIST_DIR/backups" "$PERSIST_DIR/sessions"
+mkdir -p "$PERSIST_DIR/logs"
+/usr/local/sbin/sysmedic-vault prepare 2>/dev/null
 echo "  Persistence mounted: $PERSIST_DEV → $PERSIST_DIR ($(df -h --output=avail "$PERSIST_DIR" | tail -1 | tr -d ' ') free)"

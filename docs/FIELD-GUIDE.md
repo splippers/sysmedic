@@ -26,10 +26,11 @@ From boot to sign-off. On the drive: `sysmedic-help field`.
 1. Console 1 (tty1) and console 2 (tty2) log in automatically. **Both are recorded** for later review (output only, never keystrokes).
 2. **Network first.** If Ethernet or tethering is already online, this passes by itself. Otherwise it lists the Wi-Fi networks nearby: press **Enter** to pick one (password asked there; kept in memory only, forgotten at shutdown) or **s** to carry on offline. It continues offline by itself after 60 s.
 3. The banner shows the **edition and version** and how SysMedic is connected, e.g. `caddy edition · v2026.10.04-…` · `Network: online via wlp0s20f3 (Wi-Fi "Office")`.
-4. The **triage scan** runs (read-only, under a minute). Findings are ordered critical → warning → note → OK, each with a next step.
-5. The **phone dashboard** address appears (QR code on console 2).
-6. **Cloud AI consent:** if there's internet, you're asked whether the customer consents. Only **y** enables the cloud AI; anything else, or no answer within 60 s, means offline.
-7. Press **Enter** to start the assistant, or **m** for the rescue menu.
+4. **Encrypted vault:** type the drive's passphrase (hidden). Enter skips it: SysMedic works, but this visit stays in memory and is lost at shutdown, unless you unlock later (Alt+F2: `sysmedic-vault unlock`, or menu **V**). The first time, it offers to set the vault up: a passphrase, and a recovery key to write down (see [Safety and privacy](SAFETY-AND-PRIVACY.md#the-encrypted-vault-sysmedic-vault)).
+5. The **triage scan** runs (read-only, under a minute). Findings are ordered critical → warning → note → OK, each with a next step.
+6. The **phone dashboard** address appears (QR code on console 2).
+7. **Cloud AI consent:** if there's internet, you're asked whether the customer consents. Only **y** enables the cloud AI; anything else, or no answer within 60 s, means offline.
+8. Press **Enter** to start the assistant, or **m** for the rescue menu.
 
 Low RAM: the cloud AI needs 4 GB and an AVX-capable CPU, and the offline AI needs 6 GB. Below that you get the rescue menu instead.
 
@@ -57,6 +58,7 @@ Low RAM: the cloud AI needs 4 GB and an AVX-capable CPU, and the offline AI need
 | D | **Disk space**: what fills each disk, and what could safely go (`sysmedic-du`) |
 | 11 / 12 | Fix Linux boot (GRUB, initramfs, fstab, oversized /boot) / macOS (HFS+/APFS) |
 | 13 / 14 | **Wi-Fi** / save extra logs to this session |
+| V | **Encrypted vault**: status, unlock, or set it up |
 | U | Update SysMedic **(caddy)** |
 | G | Graphical desktop **(caddy)** |
 | 15 | Advanced toolkit **(caddy)**: stress/burn-in, OS imaging, macOS, extra Windows repairs. On the stick it tells you to use the caddy |
@@ -107,6 +109,8 @@ Scan the QR code on console 2 (or run `sysmedic-dash`). The phone must be on the
 |---|---|
 | Everything slow; scan warns "USB 2.0" | Power off, move SysMedic to a USB 3 port/cable |
 | Won't boot with Secure Boot on (newer Dell/Lenovo/HP business laptops) | The firmware only trusts Windows. BIOS setup → Secure Boot → enable **"Microsoft UEFI CA"** (Lenovo: "Allow Microsoft 3rd Party UEFI CA"), or turn Secure Boot off for the visit. Either way, with BitLocker: have the recovery key, and **turn Secure Boot back on before Windows starts** |
+| Forgot the vault passphrase | Use the recovery key at the passphrase prompt. Lost both: three wrong tries, then **r** (or `sysmedic-vault reset`) erases the vault and sets up a new one; its data is lost |
+| Scan says "kept in memory only" | The vault is locked: `sysmedic-vault unlock` on Alt+F2 before shutting down, or the visit is lost |
 | Black screen after boot | Boot menu → *safe graphics* |
 | No Wi-Fi adapter | Check the scan for "couldn't load its firmware"; use Ethernet/tethering; **(caddy)** try the 6.8 kernel under Advanced options |
 | Cloud AI won't start / asks to "connect to the console" | Check internet; the free tier needs no login. Use the offline assistant meanwhile |

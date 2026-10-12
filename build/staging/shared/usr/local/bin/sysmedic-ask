@@ -299,6 +299,8 @@ FORBIDDEN = [
      "Refused: remote AI and on-device confirmation are the engineer's (menu R); you can't change or bypass them."),
     (re.compile(r"\bsysmedic-update\s+(apply|rollback)\b|\bsysmedic-deploy\b"),
      "Refused: updating SysMedic is the engineer's (menu U). You may run sysmedic-update check."),
+    (re.compile(r"\bsysmedic-vault\b|vault\.luks|vault-keys|\bcryptsetup\b[^|;&]*sysmedic-vault"),
+     "Refused: the encrypted vault is the engineer's (Alt+F2: sysmedic-vault). Its passphrase is never typed by or shown to the AI."),
     (re.compile(r"\bhwclock\b[^|;&]*(--systohc|\s-w\b|--set)|\bsysmedic-clock\b[^|;&]*--rtc|\btimedatectl\s+set-(time|local-rtc)"),
      "Refused: the machine's hardware clock is the engineer's (sysmedic-clock fix --rtc on Alt+F2). "
      "SysMedic's own clock is corrected with: sysmedic-clock fix"),

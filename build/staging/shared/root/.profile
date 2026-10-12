@@ -14,7 +14,8 @@ if [ -t 0 ] && [ -z "$SYSMEDIC_TTY" ] && command -v script >/dev/null; then
     case "$(tty)" in /dev/tty1|/dev/tty2)
         export SYSMEDIC_TTY=$(tty)
         mountpoint -q /mnt/persist || /usr/local/sbin/mount-persist >/dev/null 2>&1 || true
-        if mountpoint -q /mnt/persist; then tdir=/mnt/persist/transcripts; else tdir=/run/sysmedic/transcripts; fi
+        # Recorded in memory; saved into the encrypted vault when it's unlocked and at shutdown (sysmedic-vault)
+        tdir=/run/sysmedic/transcripts
         mkdir -p "$tdir"
         export SYSMEDIC_TRANSCRIPT="$tdir/$(date +%Y%m%d-%H%M%S)-${SYSMEDIC_TTY#/dev/}.log"
         exec script -q -f -e --log-out "$SYSMEDIC_TRANSCRIPT" -c "bash -l"
@@ -34,6 +35,7 @@ if [ -t 0 ] && [ "$console" = /dev/tty2 ]; then
     _cmd 'sysmedic-guard status' 'which disks are write-protected'
     _cmd 'sysmedic-unlock /dev/X' 'allow writes to one partition (backs it up first)'
     _cmd 'sysmedic-lock' 'protect everything again'
+    _cmd 'sysmedic-vault' "encrypted vault for this visit's data: $(cat /run/sysmedic/vault.state 2>/dev/null || echo unknown) (unlock / setup)"
     _cmd 'sysmedic-note "text"' 'add a note to the job report (sysmedic-report builds it)'
     _cmd 'sysmedic-note --feedback "…"' 'something SysMedic should do better (for the review)'
     _cmd 'sysmedic-help' 'the guides: field guide, BitLocker, hardware tests…'
@@ -70,6 +72,7 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     ui_rule
 
     /usr/local/sbin/mount-persist || true
+    /usr/local/sbin/sysmedic-vault unlock --boot || true      # customer data: encrypted vault, or memory only
     /usr/local/sbin/start-ollama && ui_ok "Offline AI ready" "$(/usr/local/sbin/sysmedic-ai-device status 2>/dev/null | sed 's/^ *//')"
     echo ''
 

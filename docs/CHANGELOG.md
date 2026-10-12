@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.10.12 (late): customer data encrypted
+
+- **Encrypted vault** (`sysmedic-vault`): sessions, backups, serial numbers, console transcripts and review bundles live in a LUKS2 container on SysMedic's drive (caddy and stick). SysMedic, the offline AI and the virus signatures stay outside it, so booting and the offline AI need no passphrase.
+- **First screen:** the drive's passphrase. Skip it and SysMedic still works, with this visit kept in memory only (said in the scan, menu and console 2) until `sysmedic-vault unlock`. Nothing is written unencrypted any more.
+- **Setup** (offered at boot the first time, or menu **V**): a passphrase and a one-time recovery key, shown on a private console so it never lands in a transcript. Data from before is moved in and the unencrypted copies deleted.
+- **Forgotten passphrase and recovery key:** after three wrong tries, **r** erases the vault (typed `ERASE`) and sets up a new one (`sysmedic-vault reset`).
+- **Saved as it goes:** while the vault is open, transcripts every 30 s and the review bundle every 5 minutes. In testing, shutdown unmounted the vault before its save step ran, so the record no longer depends on a clean shutdown; a dying battery loses seconds.
+- **Deploys** back up the stick's vault still encrypted; the caddy collects a stick's data only into its own unlocked vault (and asks for the stick's passphrase). Both AI assistants are refused the vault.
+
 ## 2026.10.12 (night): Beethoven and a volume control
 
 - **Speaker test with more music** (field request): besides *Ode to Joy* (left, right, both), the *Moonlight Sonata* (deep bass: rattle), *Für Elise* (treble: crackle) and the *Fifth Symphony* (loud attacks: distortion), then the sweep. All synthesised on the drive; each part is levelled so the test itself never clips (clipping would sound like a damaged speaker).

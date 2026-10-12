@@ -26,7 +26,11 @@ CARDS = [
                          ("9", "Write-protect all disks again"), ("10", "Back up data"),
                          ("D", "Disk space: what fills each disk")]),
     ("Other systems", [("11", "Fix Linux boot (GRUB/initramfs)"), ("12", "Fix macOS (HFS+/APFS)")]),
-    ("Connect & save", [("13", "Wi-Fi"), ("14", "Save extra logs to this session")]
+    ("Connect & save", [("13", "Wi-Fi"), ("14", "Save extra logs to this session"),
+                        ("V", "Encrypted vault: " + {"open": "open (this visit is saved)", "ram": "LOCKED: this visit is in memory only",
+                                                     "ram-none": "not set up: this visit is in memory only", "none": "not set up"}
+                         .get((open("/run/sysmedic/vault.state").read().strip() if os.path.exists("/run/sysmedic/vault.state") else ""),
+                              "no data partition"))]
      + ([("U", "Update SysMedic (from GitHub)")] if EDITION == "caddy" else [])),
     ("Desktop & tools", ([("G", "Graphical desktop (windows & mouse)")] if shutil.which("labwc") else [])
      + [("15", "Advanced toolkit"), ("16", "Shell (type exit to return)"), ("17", "Reboot"), ("0", "Shut down")]),

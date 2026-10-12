@@ -1,0 +1,582 @@
+#!/usr/bin/env python3
+"""sysmedic-vault — customer data on SysMedic's drive, encrypted (LUKS2).
+
+Sessions, backups, serial numbers, console transcripts and review bundles live in an encrypted container on
+SysMedic's own data partition (/mnt/persist/vault.luks). SysMedic itself, the offline AI and the virus signatures
+stay outside it, so the drive boots and the AI works without the passphrase.
+
+  sysmedic-vault                status: open, locked (this visit kept in memory) or not set up
+  sysmedic-vault unlock         type the passphrase; this visit so far moves from memory into the vault
+  sysmedic-vault setup          create the vault (first time): passphrase, recovery key, moves existing data in
+  sysmedic-vault passphrase     change the passphrase (needs the current one or the recovery key)
+  sysmedic-vault lock           save and close (shutdown does this)
+  sysmedic-vault reset          passphrase AND recovery key forgotten: erase the vault (its data is lost) and set up anew
+  sysmedic-vault status --json
+
+Not unlocked, SysMedic works as usual but this visit stays in memory: unlock before shutting down to keep it.
+On the build PC: sysmedic-vault mount FILE DIR (read-only) and sysmedic-vault umount DIR, to read a drive's vault.
+"""
+import fcntl
+import getpass
+import json
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+try:
+    import session
+except ImportError:
+    session = None
+
+PERSIST = Path("/mnt/persist")
+CONTAINER = PERSIST / "vault.luks"
+MAPPER = "sysmedic-vault"
+RUN = Path("/run/sysmedic")
+FS = RUN / "vault-fs"                 # the opened vault's filesystem
+RAM = RUN / "ram"                     # stand-ins while it's locked
+TRANSCRIPTS = RUN / "transcripts"     # consoles are recorded here, then saved into the vault
+STATE = RUN / "vault.state"
+DATA = ["sessions", "backups", "private", "transcripts", "claude-review"]
+MIN_PASS = 10
+B, D, G, Y, R, CY, N = "\033[1m", "\033[2m", "\033[0;32m", "\033[1;33m", "\033[1;31m", "\033[0;36m", "\033[0m"
+
+
+def run(cmd, inp=None, check=False):
+    r = subprocess.run(cmd, input=inp, capture_output=True, text=True)
+    if check and r.returncode:
+        raise RuntimeError(f"{cmd[0]} failed: {(r.stderr or r.stdout).strip()[:300]}")
+    return r
+
+
+def mounted(path):
+    target = os.path.realpath(str(path))
+    try:
+        return any(line.split()[4] == target for line in open("/proc/self/mountinfo"))
+    except OSError:
+        return False
+
+
+def log(msg):
+    """Steps and results (no customer data) on the data partition, outside the vault: for shutdown problems."""
+    try:
+        with open(PERSIST / "logs" / "vault.log", "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n")
+    except OSError:
+        pass
+
+
+def shutting_down():
+    r = run(["systemctl", "is-system-running"])
+    return r.stdout.strip() == "stopping"
+
+
+def audit(msg):
+    if session:
+        try:
+            tty = os.ttyname(0).replace("/dev/", "") if os.isatty(0) else "vault"
+            session.audit(tty, "sysmedic-vault: " + msg)
+        except OSError:
+            pass
+
+
+def state():
+    if not mounted(PERSIST):
+        return "absent"
+    if Path("/dev/mapper", MAPPER).exists() and mounted(FS):
+        return "open"
+    if not CONTAINER.exists():
+        return "none" if not any(mounted(PERSIST / d) for d in DATA) else "ram-none"
+    return "ram" if any(mounted(PERSIST / d) for d in DATA) else "locked"
+
+
+def write_state():
+    st = state()
+    try:
+        RUN.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(st + "\n")
+    except OSError:
+        pass
+    return st
+
+
+def bind(src, dst):
+    Path(dst).mkdir(parents=True, exist_ok=True)
+    run(["mount", "--bind", str(src), str(dst)], check=True)
+
+
+def unbind(dst):
+    for _ in range(3):
+        if not mounted(dst):
+            return
+        if run(["umount", str(dst)]).returncode == 0:
+            return
+        time.sleep(1)
+    run(["umount", "-l", str(dst)])
+
+
+# ── Boot: nothing unencrypted is written ───────────────────────────────────
+
+def prepare():
+    """Called when /mnt/persist is mounted: unless the vault is open, RAM stands in for the data folders."""
+    if not mounted(PERSIST):
+        return 0
+    TRANSCRIPTS.mkdir(parents=True, exist_ok=True)
+    if state() == "open":
+        return 0
+    for d in DATA:
+        (RAM / d).mkdir(parents=True, exist_ok=True)
+        if not mounted(PERSIST / d):
+            bind(RAM / d, PERSIST / d)
+    os.chmod(RAM / "private", 0o700)
+    write_state()
+    return 0
+
+
+def adopt():
+    """The vault is open at FS: move what this visit kept in memory into it, and put it in place."""
+    for d in DATA:
+        (FS / d).mkdir(exist_ok=True)
+        if mounted(PERSIST / d):
+            src = PERSIST / d                       # the RAM stand-in (or an older bind)
+            run(["cp", "-a", "--no-clobber", f"{src}/.", f"{FS / d}/"])
+            unbind(PERSIST / d)
+        bind(FS / d, PERSIST / d)
+        shutil.rmtree(RAM / d, ignore_errors=True)
+    os.chmod(FS / "private", 0o700)
+    save_transcripts()
+    write_state()
+    # Keep saving while it's open: a laptop that dies mid-job, or a shutdown that unmounts the vault before
+    # its stop step runs (seen in testing), then loses seconds, not the visit's record
+    if not keeper_running():
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "keep"], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if Path("/run/systemd/system").exists():
+        run(["systemctl", "start", "--no-block", "sysmedic-vault.service"])
+
+
+KEEPER = RUN / "vault-keeper.pid"
+
+
+def keeper_running():
+    try:
+        pid = int(KEEPER.read_text())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def keep():
+    """While the vault is open: transcripts every 30 s, the review bundle every 5 min, synced to disk each time."""
+    KEEPER.write_text(str(os.getpid()))
+    last_bundle = 0.0
+    while state() == "open":
+        try:
+            save_transcripts()
+            if time.time() - last_bundle > 300:
+                r = run(["/usr/local/bin/sysmedic-transcript", "--quiet"])
+                if r.returncode:
+                    log(f"keep: review bundle failed: {(r.stderr or r.stdout).strip()[-300:]}")
+                last_bundle = time.time()
+            os.sync()
+        except OSError as e:
+            log(f"keep: {e}")
+        time.sleep(30)
+    KEEPER.unlink(missing_ok=True)
+    return 0
+
+
+def save_transcripts():
+    """Console recordings are written in memory; copy their current state into the vault."""
+    if state() != "open" or not TRANSCRIPTS.is_dir():
+        return
+    (FS / "transcripts").mkdir(exist_ok=True)
+    for f in TRANSCRIPTS.iterdir():
+        if f.is_file():
+            shutil.copy2(f, FS / "transcripts" / f.name)
+
+
+def open_container(passphrase):
+    r = run(["cryptsetup", "open", "--type", "luks2", str(CONTAINER), MAPPER], inp=passphrase + "\n")
+    if r.returncode:
+        return False
+    FS.mkdir(parents=True, exist_ok=True)
+    run(["mount", "-o", "noatime", f"/dev/mapper/{MAPPER}", str(FS)], check=True)
+    return True
+
+
+def ask_passphrase(prompt):
+    try:
+        return getpass.getpass(prompt)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+
+
+# ── Commands ───────────────────────────────────────────────────────────────
+
+def unlock(boot=False):
+    st = state()
+    if st == "absent":
+        print("  SysMedic's data partition isn't mounted (mount-persist): nothing to unlock.")
+        return 0 if boot else 1
+    if st == "open":
+        if not boot:
+            print(f"  {G}✔{N} The vault is already open.")
+        return 0
+    if st in ("none", "ram-none"):
+        if not sys.stdin.isatty():
+            return 0
+        print(f"\n  {B}Customer data on this drive isn't encrypted yet.{N}")
+        print(f"  {D}Set up the encrypted vault (2 minutes): a passphrase for this drive, and a recovery key to write down.{N}")
+        a = input(f"  {CY}❯{N} Set it up now? [Y/n] ").strip().lower()
+        if a in ("", "y", "yes"):
+            return setup()
+        print(f"  {Y}▲{N} Not set up: this visit is kept in memory only, and lost at shutdown. Later: sysmedic-vault setup")
+        return 0
+    print(f"\n  {B}Encrypted vault{N} {D}(sessions, backups, transcripts on this drive){N}")
+    for attempt in range(3):
+        p = ask_passphrase("  Passphrase (Enter = skip, this visit stays in memory): ")
+        if not p:
+            break
+        if open_container(p):
+            adopt()
+            audit("vault unlocked")
+            print(f"  {G}✔{N} Vault open: this visit is saved, encrypted.")
+            return 0
+        print(f"  {R}✖{N} Wrong passphrase." + ("" if attempt == 2 else " Try again."))
+    else:
+        # Three wrong tries: offer the way out for a forgotten passphrase AND recovery key
+        print(f"  {D}Forgotten both the passphrase and the recovery key? The vault can be erased and set up again;"
+              f" everything in it is lost.{N}")
+        try:
+            a = input(f"  {CY}❯{N} r = erase it and start again · Enter = carry on without it: ").strip().lower()
+        except EOFError:
+            a = ""
+        if a == "r":
+            return reset()
+    audit("vault left locked: this visit kept in memory")
+    print(f"  {Y}▲{N} Vault locked: this visit is kept in memory and lost at shutdown. Unlock later: sysmedic-vault unlock (Alt+F2)")
+    return 0 if boot else 1
+
+
+def reset():
+    """Forgotten passphrase and recovery key: destroy the vault's keys (its data becomes unreadable for good),
+    delete it, and set up a new one."""
+    st = state()
+    if st == "open":
+        print("  The vault is open, so its passphrase is known: nothing to reset. (To change it: sysmedic-vault passphrase)")
+        return 1
+    if not CONTAINER.exists():
+        print("  There's no vault on this drive: sysmedic-vault setup")
+        return 1
+    if not sys.stdin.isatty():
+        sys.exit("REFUSED: erasing the vault needs a person at the console.")
+    print(f"\n  {R}{B}Erase the encrypted vault{N}")
+    print("  Everything in it (earlier visits' sessions, backups, transcripts) becomes unreadable for good:")
+    print("  without the passphrase or the recovery key nobody can open it, and this destroys the keys too.")
+    print("  Then you'll set up a new vault with a new passphrase and recovery key.\n")
+    if input(f"  {CY}❯{N} Type ERASE to erase it, anything else to cancel: ").strip() != "ERASE":
+        print("  Cancelled: nothing changed.")
+        return 1
+    r = run(["cryptsetup", "luksErase", "--batch-mode", str(CONTAINER)])
+    CONTAINER.unlink(missing_ok=True)
+    run(["sync"])
+    run(["fstrim", str(PERSIST)])
+    audit("vault ERASED by the engineer (passphrase and recovery key forgotten)")
+    log(f"reset: keys destroyed ({'ok' if r.returncode == 0 else r.stderr.strip()[:120]}), container deleted")
+    print(f"  {G}✔{N} Erased. Now the new vault:")
+    time.sleep(1)
+    return setup()
+
+
+def recovery_key():
+    return "-".join(f"{secrets.randbelow(10**6):06d}" for _ in range(8))
+
+
+def recorded():
+    """True on a console that's being recorded (script): the recovery key must not end up in a transcript."""
+    return bool(os.environ.get("SYSMEDIC_TRANSCRIPT"))
+
+
+def on_private_console(args):
+    """Re-run on a spare console that isn't recorded, then come back."""
+    before = run(["fgconsole"]).stdout.strip()
+    env = {k: v for k, v in os.environ.items() if k not in ("SYSMEDIC_TRANSCRIPT", "SYSMEDIC_TTY")}
+    print(f"  {D}Switching to a private console (not recorded) for the recovery key…{N}")
+    subprocess.run(["openvt", "-s", "-w", "--", sys.executable, os.path.abspath(__file__), *args, "--here"], env=env)
+    if before.isdigit():
+        subprocess.run(["chvt", before])
+    return 0 if state() == "open" else 1
+
+
+def setup(here=False):
+    if state() == "absent":
+        print("  SysMedic's data partition isn't mounted: can't set up the vault.")
+        return 1
+    if CONTAINER.exists():
+        print("  The vault already exists. Unlock it: sysmedic-vault unlock")
+        return 1
+    if recorded() and not here:
+        return on_private_console(["setup"])
+    os.system("clear")
+    print(f"\n  {B}SysMedic: encrypted vault for customer data{N}\n")
+    print("  Sessions, backups, serial numbers and transcripts will be encrypted on this drive.")
+    print("  SysMedic, the offline AI and the virus signatures stay outside it, so booting needs no passphrase.\n")
+    print(f"  {Y}One passphrase for this drive.{N} Without it (or the recovery key) the data can't be read by anyone,")
+    print("  including us. Choose something long that you'll remember: four or five words works well.\n")
+    while True:
+        p1 = ask_passphrase(f"  New passphrase ({MIN_PASS}+ characters, Enter = cancel): ")
+        if not p1:
+            print("  Cancelled: nothing changed.")
+            time.sleep(2)
+            return 1
+        if len(p1) < MIN_PASS:
+            print(f"  {R}✖{N} At least {MIN_PASS} characters.")
+            continue
+        if ask_passphrase("  The same again: ") != p1:
+            print(f"  {R}✖{N} They don't match.")
+            continue
+        break
+    st = os.statvfs(PERSIST)
+    free = st.f_bavail * st.f_frsize
+    size = int(min(free - max(1 << 30, free // 10), 400 << 30)) // (1 << 20) * (1 << 20)
+    if size < 512 << 20:
+        print(f"  {R}✖{N} Not enough free space on SysMedic's drive for a vault ({free >> 20} MB free).")
+        time.sleep(4)
+        return 1
+    rkey = recovery_key()
+    keydir = Path("/run/sysmedic/vault-keys")
+    keydir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    k1, k2 = keydir / "p", keydir / "r"
+    try:
+        k1.write_text(p1)
+        k2.write_text(rkey)
+        os.chmod(k1, 0o600)
+        os.chmod(k2, 0o600)
+        print(f"\n  Creating a {size >> 30} GB vault (a minute or two)…")
+        run(["fallocate", "-l", str(size), str(CONTAINER)], check=True)
+        os.chmod(CONTAINER, 0o600)
+        # Argon2id with a modest memory cost: the drive must unlock on 4 GB laptops too
+        run(["cryptsetup", "luksFormat", "--batch-mode", "--type", "luks2", "--pbkdf", "argon2id",
+             "--pbkdf-memory", "262144", "--iter-time", "2000", "--label", "SYSMEDIC_VAULT", "--key-slot", "0",
+             "--key-file", str(k1), str(CONTAINER)], check=True)
+        run(["cryptsetup", "luksAddKey", "--batch-mode", "--pbkdf", "argon2id", "--pbkdf-memory", "262144",
+             "--key-slot", "1", "--key-file", str(k1), str(CONTAINER), str(k2)], check=True)
+        run(["cryptsetup", "open", "--type", "luks2", "--key-file", str(k1), str(CONTAINER), MAPPER], check=True)
+        run(["mkfs.ext4", "-q", "-L", "sysmedic-vault", "-m", "0", f"/dev/mapper/{MAPPER}"], check=True)
+        FS.mkdir(parents=True, exist_ok=True)
+        run(["mount", "-o", "noatime", f"/dev/mapper/{MAPPER}", str(FS)], check=True)
+    except (RuntimeError, OSError) as e:
+        print(f"  {R}✖{N} {e}")
+        if Path("/dev/mapper", MAPPER).exists():
+            run(["umount", str(FS)])
+            run(["cryptsetup", "close", MAPPER])
+        CONTAINER.unlink(missing_ok=True)
+        time.sleep(6)
+        return 1
+    finally:
+        for k in (k1, k2):
+            if k.exists():
+                k.write_text("0" * 64)
+                k.unlink()
+    moved = migrate_plain()
+    adopt()
+    audit("vault created" + (f"; {moved} existing item(s) moved in and the unencrypted copies deleted" if moved else ""))
+    os.system("clear")
+    print(f"\n  {G}✔{N} {B}Vault created and open.{N}" + (f" {moved} existing item(s) moved in; the unencrypted copies are deleted." if moved else ""))
+    print(f"\n  {B}Recovery key{N} {D}(write it down now and keep it away from the drive; it is shown only once):{N}\n")
+    print(f"      {B}{rkey}{N}\n")
+    print(f"  {D}It opens the vault if the passphrase is forgotten: sysmedic-vault unlock accepts it in place of the passphrase.{N}")
+    last = rkey.split("-")[-1]
+    while input(f"\n  {CY}❯{N} To confirm you've written it down, type its last 6 digits: ").strip() != last:
+        print(f"  {Y}▲{N} That's not it. The key again: {B}{rkey}{N}")
+    os.system("clear")
+    print(f"\n  {G}✔{N} Done. Customer data on this drive is now encrypted.\n")
+    time.sleep(2)
+    return 0
+
+
+def migrate_plain():
+    """Data written before the vault existed (plain folders under the RAM stand-ins): move it in, delete it."""
+    moved = 0
+    for d in DATA:
+        was_bound = mounted(PERSIST / d)
+        if was_bound:
+            unbind(PERSIST / d)                       # look underneath the RAM stand-in
+        plain = PERSIST / d
+        if plain.is_dir() and not mounted(plain):
+            items = list(plain.iterdir())
+            if items:
+                (FS / d).mkdir(exist_ok=True)
+                r = run(["cp", "-a", "--no-clobber", f"{plain}/.", f"{FS / d}/"])
+                if r.returncode == 0:
+                    for it in items:
+                        (shutil.rmtree if it.is_dir() and not it.is_symlink() else os.unlink)(it)
+                    moved += len(items)
+                else:
+                    print(f"  {Y}▲{N} Couldn't move {plain}: left as it is ({r.stderr.strip()[:120]})")
+        if was_bound:
+            bind(RAM / d, PERSIST / d)
+    if moved:
+        run(["sync"])
+        run(["fstrim", str(PERSIST)])                 # tell the flash the deleted blocks are free (if it listens)
+    return moved
+
+
+def passphrase():
+    """Slot 0 holds the passphrase, slot 1 the recovery key. Either one authorises a new passphrase in slot 0."""
+    if state() not in ("open", "locked", "ram"):
+        print("  No vault on this drive yet: sysmedic-vault setup")
+        return 1
+    old = ask_passphrase("  Current passphrase or recovery key: ")
+    if not old:
+        return 1
+    while True:
+        p1 = ask_passphrase(f"  New passphrase ({MIN_PASS}+ characters): ")
+        if len(p1) < MIN_PASS:
+            print(f"  {R}✖{N} At least {MIN_PASS} characters.")
+            continue
+        if ask_passphrase("  The same again: ") != p1:
+            print(f"  {R}✖{N} They don't match.")
+            continue
+        break
+    keydir = Path("/run/sysmedic/vault-keys")
+    keydir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    k_old, k_new = keydir / "o", keydir / "n"
+    pb = ["--pbkdf", "argon2id", "--pbkdf-memory", "262144"]
+    try:
+        k_old.write_text(old)
+        k_new.write_text(p1)
+        test = lambda slot: run(["cryptsetup", "open", "--test-passphrase", "--key-slot", slot, "--key-file", str(k_old),  # noqa: E731
+                                 str(CONTAINER)]).returncode == 0
+        if test("0"):
+            r = run(["cryptsetup", "luksChangeKey", "--batch-mode", *pb, "--key-slot", "0", "--key-file", str(k_old),
+                     str(CONTAINER), str(k_new)])
+        elif test("1"):                                   # the recovery key: replace the passphrase, keep the key
+            run(["cryptsetup", "luksKillSlot", "--batch-mode", "--key-file", str(k_old), str(CONTAINER), "0"])
+            r = run(["cryptsetup", "luksAddKey", "--batch-mode", *pb, "--key-slot", "0", "--key-file", str(k_old),
+                     str(CONTAINER), str(k_new)])
+        else:
+            r = None
+    finally:
+        for k in (k_old, k_new):
+            if k.exists():
+                k.write_text("0" * 64)
+                k.unlink()
+    if not r or r.returncode:
+        print(f"  {R}✖{N} Not changed: that passphrase or key doesn't open this vault.")
+        return 1
+    audit("vault passphrase changed")
+    print(f"  {G}✔{N} Passphrase changed. The recovery key still works.")
+    return 0
+
+
+def lock(quiet=False):
+    # One at a time: unmounting below makes systemd stop sysmedic-vault.service, whose stop step is this
+    fd = os.open(RUN / "vault.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    st = state()
+    log(f"lock: state {st}, shutting down: {shutting_down()}")
+    if st != "open":
+        return 0
+    n = len(list(TRANSCRIPTS.iterdir())) if TRANSCRIPTS.is_dir() else 0
+    save_transcripts()
+    run(["sync"])
+    for d in DATA:
+        unbind(PERSIST / d)
+    unbind(FS)
+    r = run(["cryptsetup", "close", MAPPER])
+    log(f"lock: {n} transcript(s) saved; close: {'ok' if r.returncode == 0 else r.stderr.strip()[:200]}")
+    if r.returncode and not quiet:
+        print(f"  {Y}▲{N} Couldn't close the vault cleanly: {r.stderr.strip()[:200]}")
+    if not quiet:
+        print(f"  {G}✔{N} Vault saved and locked.")
+    if mounted(PERSIST) and not shutting_down():
+        prepare()                                     # back to RAM stand-ins, so nothing lands unencrypted
+    write_state()
+    return 0
+
+
+def status(as_json=False):
+    st = state()
+    info = {"state": st, "container": str(CONTAINER) if CONTAINER.exists() else None}
+    if st == "open":
+        s = os.statvfs(FS)
+        info.update(size=s.f_blocks * s.f_frsize, free=s.f_bavail * s.f_frsize)
+    if as_json:
+        print(json.dumps(info))
+        return 0
+    words = {"open": f"{G}✔{N} Open: this visit is saved, encrypted",
+             "ram": f"{Y}▲{N} Locked: this visit is kept in memory (lost at shutdown). sysmedic-vault unlock",
+             "locked": f"{Y}▲{N} Locked",
+             "none": f"{Y}▲{N} Not set up: customer data on this drive isn't encrypted. sysmedic-vault setup",
+             "ram-none": f"{Y}▲{N} Not set up: this visit is kept in memory. sysmedic-vault setup",
+             "absent": f"{D}SysMedic's data partition isn't mounted{N}"}
+    print("  Vault: " + words[st] + (f" {D}({info['free'] >> 30} GB free of {info['size'] >> 30} GB){N}" if st == "open" else ""))
+    return 0
+
+
+# ── Build PC: read a drive's vault ─────────────────────────────────────────
+
+def external_mount(container, target):
+    name = "sysmedic-vault-ro-" + secrets.token_hex(3)
+    p = ask_passphrase(f"  Passphrase or recovery key for {container}: ")
+    r = run(["cryptsetup", "open", "--readonly", "--type", "luks2", container, name], inp=p + "\n")
+    if r.returncode:
+        sys.exit("  Wrong passphrase (or not a SysMedic vault).")
+    Path(target).mkdir(parents=True, exist_ok=True)
+    run(["mount", "-o", "ro,noload", f"/dev/mapper/{name}", target], check=True)
+    print(f"  Mounted read-only at {target}. Close it with: sysmedic-vault umount {target}")
+    return 0
+
+
+def external_umount(target):
+    src = run(["findmnt", "-no", "SOURCE", target]).stdout.strip()
+    run(["umount", target], check=True)
+    if src.startswith("/dev/mapper/sysmedic-vault-ro-"):
+        run(["cryptsetup", "close", os.path.basename(src)])
+    print("  Closed.")
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    if os.environ.get("SYSMEDIC_AI"):
+        sys.exit("REFUSED: the vault is the engineer's (passphrases are never typed by or shown to the AI).")
+    if os.geteuid() != 0:
+        sys.exit("sysmedic-vault must run as root")
+    cmd = args[0] if args else "status"
+    if cmd in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    if cmd == "status":
+        return status("--json" in args)
+    if cmd == "prepare":
+        return prepare()
+    if cmd == "unlock":
+        return unlock(boot="--boot" in args)
+    if cmd == "setup":
+        return setup(here="--here" in args)
+    if cmd == "passphrase":
+        return passphrase()
+    if cmd == "keep":
+        return keep()
+    if cmd == "reset":
+        return reset()
+    if cmd == "lock":
+        return lock(quiet="--quiet" in args)
+    if cmd == "mount" and len(args) == 3:
+        return external_mount(args[1], args[2])
+    if cmd == "umount" and len(args) == 2:
+        return external_umount(args[1])
+    sys.exit(f"Unknown command '{cmd}'. Try: sysmedic-vault help")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

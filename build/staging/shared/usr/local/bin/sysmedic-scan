@@ -746,6 +746,19 @@ def session_dir(system):
     return d
 
 
+def where_saved(d):
+    """The vault decides whether this visit survives a shutdown (sysmedic-vault)."""
+    try:
+        vault = (RUN_DIR / "vault.state").read_text().strip()
+    except OSError:
+        vault = ""
+    if vault == "open":
+        return f"saved, encrypted, in {d}"
+    if vault in ("ram", "ram-none") or not str(d).startswith("/mnt/persist"):
+        return f"kept in memory only ({d}): unlock the vault to keep it (Alt+F2: sysmedic-vault unlock)"
+    return f"saved in {d}"
+
+
 def render(report, color=True):
     ui = UI(color=color)
     s = report["system"]
@@ -760,7 +773,7 @@ def render(report, color=True):
                                  f["next_step"] if sev in ("critical", "warning") else ""))
     lines += ["", ui.chips(counts),
               "  " + ui.c("dim", f"{report['time'][:16].replace('T', ' ')} · SysMedic {s.get('sysmedic_edition', 'dev')} "
-                                 f"v{s.get('sysmedic_version', 'dev')} · saved in {report['session_dir']}")]
+                                 f"v{s.get('sysmedic_version', 'dev')} · " + where_saved(report['session_dir']))]
     return "\n".join(lines)
 
 

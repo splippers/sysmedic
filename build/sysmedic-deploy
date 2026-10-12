@@ -135,6 +135,7 @@ PY
     sudo mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
     sudo ln -sf /etc/systemd/system/sysmedic-transcript.service "$root/etc/systemd/system/multi-user.target.wants/sysmedic-transcript.service"
     sudo ln -sf /etc/systemd/system/sysmedic-confirm.service "$root/etc/systemd/system/multi-user.target.wants/sysmedic-confirm.service"
+    sudo ln -sf /etc/systemd/system/sysmedic-vault.service "$root/etc/systemd/system/multi-user.target.wants/sysmedic-vault.service"
     sudo grep -q 'sysmedic/audit.sh' "$root/root/.bashrc" 2>/dev/null || \
         printf '\n# SysMedic: log console commands to the session audit trail\n. /etc/sysmedic/audit.sh\n' | sudo tee -a "$root/root/.bashrc" >/dev/null
     echo "$ed" | sudo tee "$root/etc/sysmedic/edition" >/dev/null
@@ -180,7 +181,7 @@ smoke_test() {
         esac || { echo "    syntax: ${f#$root}: $out"; bad=1; }
     done
     # Each tool's harmless mode: it must not die with a Python traceback
-    for f in "sysmedic-scan --last" "sysmedic-clock help" "sysmedic-du help" "sysmedic-tests list" "sysmedic-tests gpus" "sysmedic-gfx -h" "sysmedic-gfx gpus" "sysmedic-win help" "sysmedic-ask --is-read-only ls"; do
+    for f in "sysmedic-scan --last" "sysmedic-clock help" "sysmedic-du help" "../sbin/sysmedic-vault help" "sysmedic-tests list" "sysmedic-tests gpus" "sysmedic-gfx -h" "sysmedic-gfx gpus" "sysmedic-win help" "sysmedic-ask --is-read-only ls"; do
         out=$(chroot_run "$root" env SYSMEDIC_SMOKE=1 timeout 60 /usr/local/bin/$f 2>&1 </dev/null || true)
         grep -q '^Traceback' <<<"$out" && { echo "    $f crashed:"; tail -4 <<<"$out" | sed 's/^/      /'; bad=1; }
     done
@@ -482,11 +483,15 @@ deploy_stick() {
     tarball=$KIT/stick-sessions-backup/stick-persist-$(date +%Y%m%d-%H%M%S).tar
     if [ -n "$persist" ]; then
         mnt -o ro "$persist" "$WORK/persist"
-        sudo tar -C "$WORK/persist" -cpf "$tarball" $(cd "$WORK/persist" && sudo ls -d sessions logs backups private transcripts claude-review 2>/dev/null) 2>/dev/null || true
+        sudo tar -C "$WORK/persist" -cpf "$tarball" $(cd "$WORK/persist" && sudo ls -d vault.luks sessions logs backups private transcripts claude-review 2>/dev/null) 2>/dev/null || true
         sudo umount "$WORK/persist"; MOUNTS=("${MOUNTS[@]/$WORK\/persist}")
         sudo chmod 600 "$tarball"
         n=$(sudo tar -tf "$tarball" | grep -c '^sessions/[^/]*/$' || true)
-        say "Backed up the stick's data ($n session(s)) → $tarball"
+        if sudo tar -tf "$tarball" | grep -qx vault.luks; then
+            say "Backed up the stick's encrypted vault$( [ "$n" -gt 0 ] && echo " and $n unencrypted older session(s)") → $tarball"
+        else
+            say "Backed up the stick's data ($n session(s), not encrypted yet) → $tarball"
+        fi
     fi
     say "Writing the stick (about 15–20 minutes on a USB 2.0 stick)"
     ./make-stick.sh "$dev" | tail -1

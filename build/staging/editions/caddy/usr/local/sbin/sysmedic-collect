@@ -8,9 +8,13 @@
 # Runs automatically when a SysMedic stick is plugged in (udev → sysmedic-collect@.service).
 # The stick is mounted read-only; nothing on it is changed or deleted. Only files the
 # caddy doesn't already have are copied.
+#
+# Customer data only ever goes into the caddy's encrypted vault (/mnt/persist, sysmedic-vault): with the vault
+# locked, nothing is collected. A stick with its own vault needs its passphrase, so that's collected on a
+# console (Alt+F2: sysmedic-collect), not automatically.
 set -uo pipefail
-DEST=/srv/sysmedic
-LOG=$DEST/logs/collect.log
+DEST=/mnt/persist
+LOG=/srv/sysmedic/logs/collect.log
 
 say() {
     echo "  $*"
@@ -35,7 +39,11 @@ else
     while read -r p; do parts+=("$p"); done < <(blkid -t LABEL=FOG_AMB_PERSIST -o device 2>/dev/null)
 fi
 
-mkdir -p "$DEST/logs"
+mkdir -p /srv/sysmedic/logs
+if [ "$(cat /run/sysmedic/vault.state 2>/dev/null)" != open ]; then
+    say "SysMedic stick plugged in: unlock this caddy's vault first (sysmedic-vault unlock), then run sysmedic-collect"
+    exit 0
+fi
 found=0
 for part in "${parts[@]}"; do
     is_sysmedic_stick "$part" || continue
@@ -45,13 +53,32 @@ for part in "${parts[@]}"; do
         say "Couldn't mount the SysMedic stick ($part) read-only"; rmdir "$mnt"; continue
     fi
     total=0
-    for d in sessions transcripts claude-review private; do
-        [ -d "$mnt/$d" ] || continue
-        mkdir -p "$DEST/$d"
-        n=$(rsync -a --ignore-existing --out-format='%n' "$mnt/$d/" "$DEST/$d/" 2>/dev/null | grep -cv '/$')
-        total=$((total + n))
+    srcs=("$mnt")                                  # older sticks: data not encrypted yet
+    vmnt=""
+    if [ -f "$mnt/vault.luks" ]; then
+        if [ -t 0 ]; then
+            vname=sysmedic-collect-$$
+            echo "  The stick's data is in its encrypted vault."
+            if cryptsetup open --readonly --type luks2 "$mnt/vault.luks" "$vname"; then
+                vmnt=$(mktemp -d /run/sysmedic-collect-vault.XXXX)
+                mount -o ro,noload "/dev/mapper/$vname" "$vmnt" && srcs+=("$vmnt")
+            else
+                say "Stick's vault not opened: its encrypted data wasn't collected"
+            fi
+        else
+            say "SysMedic stick plugged in: its data is encrypted. To collect it, on Alt+F2: sysmedic-collect (asks the stick's passphrase)"
+        fi
+    fi
+    for src in "${srcs[@]}"; do
+        for d in sessions transcripts claude-review private; do
+            [ -d "$src/$d" ] || continue
+            mkdir -p "$DEST/$d"
+            n=$(rsync -a --ignore-existing --out-format='%n' "$src/$d/" "$DEST/$d/" 2>/dev/null | grep -cv '/$')
+            total=$((total + n))
+        done
     done
     chmod 700 "$DEST/private" 2>/dev/null
+    if [ -n "$vmnt" ]; then umount "$vmnt"; rmdir "$vmnt"; cryptsetup close "$vname"; fi
     umount "$mnt"; rmdir "$mnt"
     say "Collected $total new file(s) from the SysMedic stick ($part) into $DEST"
 done

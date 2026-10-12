@@ -1,6 +1,6 @@
 [Unit]
 Description=SysMedic: bundle the session transcript at shutdown (claude-review.md)
-After=local-fs.target mnt-persist.mount
+After=local-fs.target mnt-persist.mount sysmedic-vault.service
 RequiresMountsFor=/mnt/persist
 
 [Service]

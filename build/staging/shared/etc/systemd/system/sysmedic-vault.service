@@ -1,0 +1,18 @@
+[Unit]
+Description=SysMedic: save and lock the encrypted vault at shutdown
+After=local-fs.target
+Before=sysmedic-transcript.service
+# The vault's mounts appear at run time: without this, shutdown unmounts them in parallel with ExecStop below,
+# and nothing gets saved. With it they stay until the vault has saved and locked; the transcript bundler
+# (After= this unit) runs before both.
+RequiresMountsFor=/run/sysmedic/vault-fs /mnt/persist/sessions /mnt/persist/backups /mnt/persist/private /mnt/persist/transcripts /mnt/persist/claude-review
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/sbin/sysmedic-vault lock --quiet
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
