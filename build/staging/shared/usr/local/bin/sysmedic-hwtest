@@ -14,7 +14,7 @@
 #   sysmedic-hwtest gpu             3D benchmark/stress without a desktop (glmark2-es2-drm)
 #   sysmedic-hwtest input           keyboard / touchpad / buttons (libinput debug-events)
 #   sysmedic-hwtest audio           speaker left/right test, then a 5 s microphone recording
-#   sysmedic-hwtest audio-music     extended speaker test: synthesised music (Ode to Joy) left/right/both, then a bass-to-treble sweep
+#   sysmedic-hwtest audio-music     speaker test with Beethoven (synthesised): pick pieces, change the volume (--all, --track, --volume)
 #   sysmedic-hwtest battery         battery health: design vs full capacity, cycles
 #   sysmedic-hwtest inventory       full hardware inventory (inxi, serials filtered)
 #
@@ -361,7 +361,7 @@ done
 run_hwtest() {
     case "${1:-menu}" in
         menu) menu ;; report) report ;; cpu) cpu "${2:-5}" ;; ram) ram ;; ram-modules) ram_modules ;; ram-stress) ram_stress "${2:-10}" ;; ram-speed) ram_speed ;; firmware) firmware ;;
-        audio-music) hdr "Speakers: music and sweep"; python3 /usr/local/lib/sysmedic/audiotest.py; record "audio-music: played (engineer listened)" ;; disk) disk "${2:-}" ;; surface) surface "${2:-}" ;;
+        audio-music) hdr "Speakers: music and sweep"; python3 /usr/local/lib/sysmedic/audiotest.py "${@:2}"; record "audio-music: played (engineer listened)" ;; disk) disk "${2:-}" ;; surface) surface "${2:-}" ;;
         gpu) gpu ;; input) input ;; audio) audio ;; battery) battery ;; inventory) inventory ;;
         -h|--help|help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
         *) echo "sysmedic-hwtest: no such test '$1'. Real ones:"; sed -n '4,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;

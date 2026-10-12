@@ -111,8 +111,8 @@ TESTS = {
                   "sysmedic-gfx stress {minutes}", "minutes", "10 min", "watch the laptop's screen for artefacts"),
     "gpu-video": ("hardware", "Video decode", "Which video formats the GPU decodes in hardware (VA-API)",
                   "sysmedic-gfx video", "", "5 s", ""),
-    "audio-music": ("hardware", "Speakers with music", "Beethoven's Ode to Joy (synthesised) left, right and both, then a bass-to-treble sweep: rattle, buzz, distortion, a weak side",
-                  "sysmedic-hwtest audio-music", "", "45 s", "listen at the laptop"),
+    "audio-music": ("hardware", "Speakers with music", "Beethoven synthesised on the drive: Ode to Joy left, right and both; Moonlight Sonata (bass), Für Elise (treble), the Fifth (loud attacks); then a bass-to-treble sweep: a weak side, rattle, buzz, distortion. On the console: pick pieces and change the volume while they play",
+                  "sysmedic-hwtest audio-music --all", "", "80 s", "listen at the laptop"),
     "battery":   ("hardware", "Battery health", "Design vs current capacity, wear, charge cycles, adapter",
                   "sysmedic-hwtest battery", "", "5 s", ""),
     "inventory": ("hardware", "Hardware inventory", "Full component list (serial numbers hidden)",
@@ -354,6 +354,9 @@ def opencode_commands():
     return cmds
 
 
+AT_THE_KEYBOARD = {"audio-music"}      # from this menu they run in the foreground; the phone and the AI run them as usual
+
+
 def menu():
     ids = list(TESTS)
     while True:
@@ -394,6 +397,10 @@ def menu():
             gpu = input("  Which GPU [1]: ").strip()
         if v[6]:
             print(f"  {C['y']}You'll need to {v[6]}.{C['e']}")
+        if t in AT_THE_KEYBOARD:     # needs this keyboard while it runs (pieces, volume): not in the background
+            subprocess.run(["sysmedic-hwtest", t])
+            input("\n  Press Enter…")
+            continue
         try:
             r = start(t, disk, minutes, gpu=gpu)
         except ValueError as e:

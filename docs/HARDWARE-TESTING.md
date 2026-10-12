@@ -34,7 +34,17 @@ On both editions. Results are appended to the session's `hwtest.log` and appear 
 
 **Firmware (`firmware`)**: BIOS version and date, Secure Boot state (and Setup Mode: keys cleared) with the setup-screen steps to turn it on, TPM presence and version, firmware updates available from LVFS (reports only; installing is the engineer's), UEFI boot entries.
 
-**Speakers with music (`audio-music`)**: Beethoven's Ode to Joy synthesised on the drive (nothing downloaded): left only, right only, both with a bass line, then a 16 s sweep from 40 Hz to 12 kHz. Listen for a weak or dead side, harshness, and rattle or buzz at some point in the sweep (loose parts after a drop).
+**Speakers with music (`audio-music`)**: Beethoven, synthesised on the drive (nothing downloaded or bundled; all public domain), each piece chosen to show a different fault:
+
+| Piece | Listen for |
+|---|---|
+| *Ode to Joy*: left only, right only, then both with a bass line | a weak or dead side |
+| *Moonlight Sonata*, opening: slow octaves deep in the bass | rattle or buzz under the low notes |
+| *Für Elise*: quick high notes | harsh, crackling or muffled treble |
+| *Symphony No. 5*, opening: loud, sudden chords | distortion or rattle on the big notes |
+| Sweep 40 Hz → 12 kHz (16 s) | the point where a loose part buzzes |
+
+On the console (Tests menu, or `sysmedic-hwtest audio-music`) you pick pieces and change the volume while they play: **↑/↓** (or +/−) in 5% steps, **m** mute, **space** next, **q** stop. Try a suspect speaker quiet and loud: rattle often only starts above a certain volume. The phone dashboard and the AI play the whole programme (about 80 s) at 80%; `--track moonlight,fifth` and `--volume 60` choose.
 
 **Graphics battery (`sysmedic-gfx`, also tests `gpu-info`, `gpu-display`, `gpu-bench`, `gpu-stress`, `gpu-video`):**
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.10.12 (night): Beethoven and a volume control
+
+- **Speaker test with more music** (field request): besides *Ode to Joy* (left, right, both), the *Moonlight Sonata* (deep bass: rattle), *Für Elise* (treble: crackle) and the *Fifth Symphony* (loud attacks: distortion), then the sweep. All synthesised on the drive; each part is levelled so the test itself never clips (clipping would sound like a damaged speaker).
+- **Volume control while it plays:** ↑/↓ or +/−, m to mute, space for the next piece, q to stop. From the Tests menu it runs at the keyboard; the phone and the AI play the whole programme. Checked in QEMU by recording the virtual sound card: the level follows the keys, and mute is silent. It also fixes the old fixed 80% setting, which failed silently on cards whose volume control has no mute switch.
+
 ## 2026.10.12 (evening): Secure Boot on Secured-core laptops; the boot menu is back
 
 - **Boot menu restored** (fd3e19b): the silent-boot GRUB (forced 1920×1080, theme, hidden 1-second menu) hung before the menu on firmware without that video mode. Back to the plain 8-second menu, on the caddy and the stick.
