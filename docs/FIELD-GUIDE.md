@@ -106,6 +106,7 @@ Scan the QR code on console 2 (or run `sysmedic-dash`). The phone must be on the
 | Symptom | Do this |
 |---|---|
 | Everything slow; scan warns "USB 2.0" | Power off, move SysMedic to a USB 3 port/cable |
+| Won't boot with Secure Boot on (newer Dell/Lenovo/HP business laptops) | The firmware only trusts Windows. BIOS setup → Secure Boot → enable **"Microsoft UEFI CA"** (Lenovo: "Allow Microsoft 3rd Party UEFI CA"), or turn Secure Boot off for the visit. Either way, with BitLocker: have the recovery key, and **turn Secure Boot back on before Windows starts** |
 | Black screen after boot | Boot menu → *safe graphics* |
 | No Wi-Fi adapter | Check the scan for "couldn't load its firmware"; use Ethernet/tethering; **(caddy)** try the 6.8 kernel under Advanced options |
 | Cloud AI won't start / asks to "connect to the console" | Check internet; the free tier needs no login. Use the offline assistant meanwhile |

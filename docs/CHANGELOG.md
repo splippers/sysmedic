@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.10.12 (evening): Secure Boot on Secured-core laptops; the boot menu is back
+
+- **Boot menu restored** (fd3e19b): the silent-boot GRUB (forced 1920×1080, theme, hidden 1-second menu) hung before the menu on firmware without that video mode. Back to the plain 8-second menu, on the caddy and the stick.
+- **The scan explains a Secure Boot refusal.** A Dell Pro 13 Plus wouldn't boot SysMedic with Secure Boot on: its firmware trusts only Windows (Dell's "Enable Microsoft UEFI CA" is off, as on many Secured-core laptops), so it rejects every third-party bootloader. A shim signed with Microsoft's 2023 CA wouldn't help, because that CA isn't trusted either. The scan now reads the firmware's trust list and names the BIOS setting, with the BitLocker catch (changing it means one recovery-key prompt).
+- **BitLocker warning:** with Secure Boot off and a BitLocker volume present, the scan says to turn Secure Boot back on before Windows starts, otherwise Windows asks for the recovery key.
+
 ## 2026.10.12: what fills a disk
 
 From the field: a "disk full" job meant the AI hand-writing `du` loops for half an hour, and Docker's images couldn't be cleaned from the rescue boot.

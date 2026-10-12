@@ -170,7 +170,7 @@ passwd root
 
 ### Firmware
 
-`sysmedic-tests start firmware` (or `sysmedic-hwtest firmware`): BIOS version, Secure Boot on/off (and Setup Mode) with how to turn it on, TPM, firmware updates available (fwupd/LVFS, reports only), UEFI boot entries. **You never change firmware, UEFI variables, boot entries or Secure Boot keys** (fwupdmgr install/update, efibootmgr writes, writing efivarfs, mokutil imports are blocked): that's the engineer, in firmware setup (F2 on Dell).
+`sysmedic-tests start firmware` (or `sysmedic-hwtest firmware`): BIOS version, Secure Boot on/off (and Setup Mode) with how to turn it on, TPM, firmware updates available (fwupd/LVFS, reports only), UEFI boot entries. **SysMedic won't boot with Secure Boot on** when the firmware's db holds only Windows CAs (Windows Production PCA 2011, Windows UEFI CA 2023) and neither third-party CA (Microsoft Corporation UEFI CA 2011 / Microsoft UEFI CA 2023): the scan reports it. That's the BIOS setting "Microsoft UEFI CA" switched off (Secured-core), not a signing fault in SysMedic; a newer-signed shim wouldn't help. The engineer's fix is that BIOS setting, which changes PCR7 and so triggers one BitLocker recovery prompt. And with Secure Boot off, Windows with BitLocker asks for the recovery key: Secure Boot must be back on before Windows starts. **You never change firmware, UEFI variables, boot entries or Secure Boot keys** (fwupdmgr install/update, efibootmgr writes, writing efivarfs, mokutil imports are blocked): that's the engineer, in firmware setup (F2 on Dell).
 
 ### Windows: use sysmedic-win first
 

@@ -36,6 +36,9 @@ SEVERITIES = ["critical", "warning", "info", "ok"]
 RUN_DIR = Path("/run/sysmedic")
 PERSIST_SESSIONS = Path("/mnt/persist/sessions")
 SECURE_BOOT_VAR = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+DB_VAR = "/sys/firmware/efi/efivars/db-d719b2cb-3d3a-4596-a3bc-dad00e67656f"
+# The CAs that sign third-party bootloaders (shim, so SysMedic and every Linux). The Windows CAs only sign Windows.
+THIRD_PARTY_CAS = (b"Microsoft Corporation UEFI CA 2011", b"Microsoft UEFI CA 2023")
 
 findings = []
 
@@ -490,6 +493,37 @@ def inspect_esp(target, label):
     return {"esp": True, "loaders": loaders, "windows_bootmgr": has_bootmgr, "windows_bcd": has_bcd}
 
 
+def check_secure_boot(system, fsresults):
+    """Why Secure Boot had to be off, and the BitLocker trap when it is."""
+    if system.get("firmware") != "UEFI":
+        return
+    sb = system.get("secure_boot")
+    try:
+        db = Path(DB_VAR).read_bytes()
+    except OSError:
+        db = None
+    bitlocker = any(f.get("fstype") == "BitLocker" for f in fsresults)
+    windows = bitlocker or any(f.get("kind") == "windows" for f in fsresults)
+    if db and not any(ca in db for ca in THIRD_PARTY_CAS):
+        system["third_party_uefi_ca"] = False
+        find("info", "boot", "This PC's firmware only trusts Windows: \"Microsoft UEFI CA\" is switched off",
+             "SysMedic (like any Linux) can only boot here with Secure Boot off. A newer-signed SysMedic wouldn't help: "
+             "the firmware trusts neither the 2011 nor the 2023 third-party CA. Usual on Secured-core business laptops.",
+             "To use SysMedic with Secure Boot on: BIOS setup → Secure Boot → enable \"Microsoft UEFI CA\" (Dell; Lenovo: "
+             "\"Allow Microsoft 3rd Party UEFI CA\")"
+             + (". That changes what BitLocker checks, so Windows will ask for the recovery key once: only with the key in hand."
+                if bitlocker else "."))
+    elif db:
+        system["third_party_uefi_ca"] = True
+    if sb is False and bitlocker:
+        find("warning", "boot", "Secure Boot is off and this machine uses BitLocker: turn Secure Boot back on before Windows starts",
+             "If it was on before the visit, Windows starting with it off won't unlock the disk by itself; it asks for the 48-digit recovery key.",
+             "Before handing back: BIOS setup → Secure Boot → On (keys unchanged), then start Windows.")
+    elif sb is False and windows:
+        find("info", "boot", "Secure Boot is off",
+             "If you switched it off for SysMedic, switch it back on before handing back (Windows 11 expects it).")
+
+
 def collect_filesystems(disks):
     known = {"UUID": set(), "PARTUUID": set(), "LABEL": set()}
     for d in disks:
@@ -768,6 +802,7 @@ def main():
     stage("health", health, disks)
     fsresults = stage("filesystems", collect_filesystems, disks)
     stage("boot", assess_boot, fsresults, system)
+    stage("Secure Boot", check_secure_boot, system, fsresults)
     network = stage("network", collect_network)
     if live:
         print("\r\033[K  " + ui.c("ok", "✔") + f"  Scanned in {time.time() - t0:.0f} s   " + ui.c("dim", " · ".join(done)) + "\n", flush=True)
