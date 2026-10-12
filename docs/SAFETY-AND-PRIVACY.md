@@ -38,6 +38,17 @@ The AI is also instructed **never to reproduce credentials** it finds (passwords
 
 The AI is instructed not to shut down or reboot the rescue machine, never to suggest moving SysMedic's drive while running, not to call a machine virtual without `systemd-detect-virt`, and to record its own mistakes with `sysmedic-note --feedback`.
 
+## What the cloud AI sees (`sysmedic-redact`)
+
+**Why:** OpenCode Zen's free models (Big Pickle among them) state that data collected during the free period may be used to improve the model. So nothing identifying should reach them, and a model that never trains on data is the better choice when there's a paid key.
+
+- **Cleaned on the laptop first.** Everything a cloud-AI command prints passes through `sysmedic-redact` before the cloud sees it. Identities become placeholders that keep their meaning, the same all visit: `USER_1`, `OWNER_NAME`, `PC_NAME`, `COMPANY_NAME`, `AD_DOMAIN`, `DOMAIN_SID`, `WDS_SERVER`, `SCCM_SERVER`, `WSUS_SERVER`, `DC_SERVER`, `PROXY_SERVER`, `FILE_SERVER_1`, `PRINT_SERVER_1`, `INTUNE_TENANT_ID`, `INTUNE_DEVICE_ID`, `INTUNE_ENROLLMENT_ID`, `EMAIL_1`, `PHONE_1`, `WIFI_1`, `MAC_1`, `PUBLIC_IP_1`, `SERIAL`, `PRODUCT_KEY`, `RECOVERY_KEY`, and `FILE_1` for the customer's own files (Documents, Desktop, Downloads, Pictures, OneDrive…). Private network addresses are kept: they identify no one and network diagnosis needs them.
+- **Learned locally:** the names to look for come from the offline Windows registry (computer name, owner, organisation, profiles, domain, Windows Update server, Intune/Entra enrolment, proxy), the customer's Linux home folders and the scan. The mapping stays in memory on the laptop (`/run/sysmedic/redact.json`, root only). The engineer can see it: `sysmedic-redact --show`; the AI can't.
+- **The customer's own folders are closed to the AI** (`C:\Users`, `/home`) until the engineer records the customer's explicit agreement: `sysmedic-consent users` (typed YES at the laptop, logged in the audit trail and the job notes; `sysmedic-consent revoke users` withdraws it). The AI can't record or fake it.
+- **The AI only reads through the cleaned shell:** OpenCode's own file and search tools are off, web search is off, and fetching a web page needs the engineer's approval.
+- **Review bundles** (`claude-review.md`) are cleaned the same way.
+- **Limits, honestly:** the cleaner replaces what it knows or can recognise. A name it has never seen, inside free text (a document title in an event log, a person's name in a file), can get through. Once the customer has agreed to their folders being read, a bare file name in a folder listing can't always be recognised as personal. The offline assistant (Qwen) keeps everything on the laptop: use it when that matters.
+
 ## Customer consent and the cloud
 
 - With internet, SysMedic asks **"Does the customer consent to cloud AI? [y/N]"**. Only `y` enables it, and the answer is recorded in the audit log and the job report.

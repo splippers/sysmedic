@@ -37,6 +37,10 @@ PERSONAL = ("documents", "desktop", "downloads", "pictures", "videos", "music", 
 
 # ── Learning (local only) ──────────────────────────────────────────────────
 
+JUNK = re.compile(r"(?i)^(not (specified|applicable|available)|to be filled by o\.?e\.?m\.?|default string|system serial number|"
+                  r"none|n/?a|0+|1234567890|chassis serial number|ubuntu|ubuntu-server|root|sysmedic)$")
+
+
 def windows_roots():
     roots = []
     try:
@@ -44,7 +48,7 @@ def windows_roots():
             f = line.split()
             if len(f) > 2 and f[2] in ("ntfs", "ntfs3", "fuseblk"):
                 mnt = f[1].replace("\\040", " ")
-                if Path(mnt, "Windows", "System32", "config").is_dir() or Path(mnt, "Windows", "System32", "Config").is_dir():
+                if Path(mnt, "Windows", "System32").is_dir() or Path(mnt, "Users").is_dir():
                     roots.append(mnt)
     except OSError:
         pass
@@ -58,6 +62,8 @@ def learn():
     def add(value, role):
         if isinstance(value, str):
             v = value.strip().strip("\\").strip()
+            if JUNK.match(v):
+                return
             if len(v) >= 3 and v.lower() not in ("administrator", "default", "public", "system", "user", "windows"):
                 found.setdefault(v, role)
 
@@ -120,14 +126,17 @@ def learn():
                     add(d.name, "USER")
         except OSError:
             pass
-    # Linux on the machine, and the scan's own view
-    for home in ("/home",):
-        try:
-            for d in Path(home).iterdir():
-                if d.is_dir() and d.name not in ("ubuntu", "lost+found"):
-                    add(d.name, "USER")
-        except OSError:
-            pass
+    # Linux installations on the customer's disks (mounted elsewhere; "/" and its /home are SysMedic's own)
+    try:
+        for line in open("/proc/mounts"):
+            f = line.split()
+            if len(f) > 2 and f[1] not in ("/", "/cdrom", "/mnt/persist") and f[2] in ("ext4", "ext3", "xfs", "btrfs") \
+                    and not f[1].startswith(("/rofs", "/run/sysmedic/vault", "/media/cdrom")) and Path(f[1], "etc/os-release").exists():
+                for d in Path(f[1], "home").iterdir():
+                    if d.is_dir() and d.name != "lost+found":
+                        add(d.name, "USER")
+    except OSError:
+        pass
     try:
         for f in json.load(open("/run/sysmedic/latest/scan.json")).get("filesystems", []):
             for k in ("computer_name", "hostname"):
@@ -139,7 +148,7 @@ def learn():
         try:
             for f in p.glob("*.json"):
                 for v in json.load(open(f)).values():
-                    if isinstance(v, str) and len(v) >= 5:
+                    if isinstance(v, str) and len(v) >= 5 and not JUNK.match(v.strip()):
                         found.setdefault(v, "SERIAL")
         except (OSError, ValueError, AttributeError):
             pass
@@ -225,9 +234,14 @@ class Cleaner:
     def __init__(self):
         self.m = load()
         self.changed = False
+        self.compile()
+
+    def compile(self):
         fixed = sorted(self.m["fixed"].items(), key=lambda kv: -len(kv[0]))
-        self.fixed_rx = re.compile("|".join(re.escape(k) for k, _ in fixed), re.I) if fixed else None
+        # whole words only: a user "Bob" mustn't eat "Bobcat"
+        self.fixed_rx = re.compile("|".join(r"(?<![\w.-])" + re.escape(k) + r"(?![\w-])" for k, _ in fixed), re.I) if fixed else None
         self.lookup = {k.lower(): v for k, v in fixed}
+        self.dirty = False
 
     def token(self, real, role):
         """The placeholder for a newly seen value, remembered for the rest of the visit."""
@@ -237,7 +251,7 @@ class Cleaner:
         p = numbered(self.m, role)
         self.m["fixed"][real] = p
         self.lookup[real.lower()] = p
-        self.changed = True
+        self.changed = self.dirty = True                      # recompiled before the next line
         return p
 
     def unc(self, mt):
@@ -281,6 +295,8 @@ class Cleaner:
         return self.token(mt.group(0), "PUBLIC_IP")
 
     def line(self, s):
+        if self.dirty:
+            self.compile()
         s = UNC.sub(self.unc, s)
         if self.fixed_rx:
             s = self.fixed_rx.sub(lambda mt: self.lookup.get(mt.group(0).lower(), mt.group(0)), s)

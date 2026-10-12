@@ -13,6 +13,11 @@ import session  # noqa: E402
 args = sys.argv[1:]
 if not args:
     sys.exit(__doc__)
+if args[0] in ("-h", "--help", "help"):
+    print(__doc__)
+    sys.exit(0)
+if args[0].startswith("-") and args[0] not in ("--feedback", "--job"):
+    sys.exit(f"Unknown option '{args[0]}' (a note can't start with '-').\n" + __doc__)   # never saved as a note
 who = ("ai:" + os.environ["SYSMEDIC_AI"]) if os.environ.get("SYSMEDIC_AI") else \
       (os.environ.get("SYSMEDIC_TTY") or (os.ttyname(0) if os.isatty(0) else "/script")).replace("/dev/", "").lstrip("/")
 if args[0] == "--feedback":

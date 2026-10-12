@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.10.13: what the cloud AI sees
+
+From the field: OpenCode Zen's free models (Big Pickle included) may use data from the free period to improve the model, and customer data must never become training data.
+
+- **`sysmedic-redact`:** every cloud-AI command's output is cleaned on the laptop before the cloud sees it. Role placeholders that keep the meaning (`USER_1`, `PC_NAME`, `COMPANY_NAME`, `AD_DOMAIN`, `WDS_SERVER`, `SCCM_SERVER`, `WSUS_SERVER`, `INTUNE_TENANT_ID`, `EMAIL_1`, `FILE_1`, …), learned locally from the offline registry; the map never leaves the laptop. Review bundles are cleaned too.
+- **The customer's own folders are closed to the AI** until the engineer records the customer's agreement: `sysmedic-consent users`.
+- **OpenCode reads only through the cleaned shell:** its file/search tools and web search are off; web fetches need approval.
+- **The consent screen says it plainly:** the free model's provider may use what it sees; answering n keeps everything on the laptop (offline assistant).
+- `sysmedic-note --help` shows help instead of saving "--help" as a job note.
+
 ## 2026.10.12 (late): customer data encrypted, battery on the menu
 
 - **SysMedic branding on the AI screen:** a SysMedic bar across the top (cyan SYSMEDIC block, the assistant in use, then the machine, vault state, battery and time), on the laptop and in the phone's remote AI terminal; the OpenCode theme in SysMedic's cyan and blue (agent label, borders, headings, links; red only for errors). The console now gets SysMedic's full 16-colour palette through tmux: it had been squeezed to 8 colours, so dim text vanished and bright colours were dulled.
