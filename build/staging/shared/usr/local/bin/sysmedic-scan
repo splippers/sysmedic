@@ -493,6 +493,20 @@ def inspect_esp(target, label):
     return {"esp": True, "loaders": loaders, "windows_bootmgr": has_bootmgr, "windows_bcd": has_bcd}
 
 
+def third_party_ca_setting(maker):
+    """Where this vendor's firmware hides the switch that trusts non-Windows bootloaders."""
+    m = maker.lower()
+    if "dell" in m:
+        return "BIOS setup (F2) → Secure Boot → turn on \"Enable Microsoft UEFI CA\""
+    if "lenovo" in m:
+        return "BIOS setup (F1 or Enter, then F1) → Security → Secure Boot → turn on \"Allow Microsoft 3rd Party UEFI CA\""
+    if "hp" in m or "hewlett" in m:
+        return "BIOS setup (F10) → Advanced → Secure Boot Configuration → turn on \"Enable MS UEFI CA key\""
+    if "microsoft" in m:
+        return "UEFI settings (hold Volume Up at power-on) → Security → Secure Boot → choose \"Microsoft & 3rd party CA\""
+    return "BIOS setup → Secure Boot → allow the \"Microsoft UEFI CA\" / \"3rd party CA\" (the name varies by maker)"
+
+
 def check_secure_boot(system, fsresults):
     """Why Secure Boot had to be off, and the BitLocker trap when it is."""
     if system.get("firmware") != "UEFI":
@@ -509,8 +523,7 @@ def check_secure_boot(system, fsresults):
         find("info", "boot", "This PC's firmware only trusts Windows: \"Microsoft UEFI CA\" is switched off",
              "SysMedic (like any Linux) can only boot here with Secure Boot off. A newer-signed SysMedic wouldn't help: "
              "the firmware trusts neither the 2011 nor the 2023 third-party CA. Usual on Secured-core business laptops.",
-             "To use SysMedic with Secure Boot on: BIOS setup → Secure Boot → enable \"Microsoft UEFI CA\" (Dell; Lenovo: "
-             "\"Allow Microsoft 3rd Party UEFI CA\")"
+             "To use SysMedic with Secure Boot on: " + third_party_ca_setting(system.get("manufacturer", ""))
              + (". That changes what BitLocker checks, so Windows will ask for the recovery key once: only with the key in hand."
                 if bitlocker else "."))
     elif db:
@@ -618,6 +631,34 @@ def assess_boot(fsresults, system):
         system["uefi_boot_entries"] = [f"{n} {d.split(chr(9))[0].strip()}" for n, d in entries]
         if rc == 0 and not entries:
             find("warning", "boot", "The firmware has no UEFI boot entries", "", "efibootmgr / bcdboot can recreate them.")
+        stale_boot_entries(linux)
+
+
+def stale_boot_entries(linux_installed):
+    """Boot entries an older SysMedic drive left in this machine's firmware ("Ubuntu", first in the boot order):
+    ones pointing at SysMedic's own drive, and Ubuntu entries pointing at a disk that isn't connected."""
+    rc, out, _ = run(["efibootmgr", "-v"])
+    if rc != 0:
+        return
+    rc2, uu, _ = run(["lsblk", "-rno", "PARTUUID,PKNAME"])
+    present = {}
+    for line in uu.splitlines():
+        f = line.split()
+        if len(f) == 2:
+            present[f[0].lower()] = f[1]
+    own = boot_disk()
+    found = []
+    for num, name, puuid in re.findall(r"^Boot([0-9A-F]{4})\*?\s+([^\t\n]+?)\s+HD\(\d+,GPT,([0-9a-fA-F-]{36})", out, re.M):
+        disk = present.get(puuid.lower())
+        if disk and disk == own:
+            found.append((num, name, "points to this SysMedic drive"))
+        elif not disk and name.strip().lower() == "ubuntu" and not linux_installed:
+            found.append((num, name, "points to a disk that isn't connected (likely a SysMedic caddy)"))
+    if found:
+        find("info", "boot", f"{len(found)} boot entr{'y' if len(found) == 1 else 'ies'} left in this machine's firmware by a SysMedic drive",
+             [f"Boot{n} \"{nm.strip()}\": {why}" for n, nm, why in found]
+             + ["Older SysMedic versions added these at boot. Harmless (the firmware skips a missing disk), but untidy."],
+             "Remove them (engineer, Alt+F2): " + "; ".join(f"efibootmgr -b {n} -B" for n, _, _ in found))
 
 
 def assess_guard(disks):

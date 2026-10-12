@@ -2,6 +2,8 @@
 
 ## 2026.10.12 (late): customer data encrypted, battery on the menu
 
+- **Secure Boot advice names the exact setting** for the machine's maker (Dell, Lenovo, HP, Surface; generic otherwise), from the firmware's own identification.
+- **Boot entries left by older SysMedic drives** ("Ubuntu", pointing at a SysMedic drive or at a disk that isn't connected) are listed by the scan with the commands to remove them (engineer only; SysMedic never writes to the firmware itself).
 - **Battery on the rescue menu:** charge, charging state and health (with cycle count) under the live strip, yellow when worn (under 80%) or low, red when it needs replacing (under 60%) or at 15% on battery. Same reading as the phone dashboard (`power.py`).
 
 - **Encrypted vault** (`sysmedic-vault`): sessions, backups, serial numbers, console transcripts and review bundles live in a LUKS2 container on SysMedic's drive (caddy and stick). SysMedic, the offline AI and the virus signatures stay outside it, so booting and the offline AI need no passphrase.
