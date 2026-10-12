@@ -27,10 +27,6 @@ sudo mksquashfs root newiso-ubuntu-server-minimal.squashfs -comp zstd -b 1M -noa
 mkdir -p empty-layer && rm -f empty-layer.squashfs
 mksquashfs empty-layer empty-layer.squashfs -noappend -quiet >/dev/null
 
-# The GRUB theme lives at the repo root (grub-theme/); the kit reaches the repo through its staging symlink
-THEME="$(cd "$(realpath "$PWD/staging")/../.." && pwd)/grub-theme"
-[ -f "$THEME/theme.txt" ] || { echo "ERROR: GRUB theme not found at $THEME" >&2; exit 1; }
-
 build() {
     xorriso -as mkisofs -r -V SYSMEDIC_2404 -o sysmedic-v2.iso \
       --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img -partition_offset 16 --mbr-force-bootable \
@@ -44,8 +40,6 @@ build() {
       /casper/ubuntu-server-minimal.ubuntu-server.squashfs="$PWD/empty-layer.squashfs" \
       /casper/vmlinuz="$PWD/kernel/vmlinuz" /casper/initrd="$PWD/kernel/initrd" \
       /boot/grub/grub.cfg="$PWD/staging/iso/boot/grub/grub.cfg" \
-      /boot/grub/themes/sysmedic/theme.txt="$THEME/theme.txt" \
-      /boot/grub/themes/sysmedic/background.png="$THEME/background.png" \
       /boot/memtest86+x64.bin="$PWD/root/boot/memtest86+x64.bin" /boot/memtest86+x64.efi="$PWD/root/boot/memtest86+x64.efi" > xorriso.log 2>&1 || true
     # Fail loudly: a failed xorriso used to leave the previous ISO in place, unnoticed
     grep -q 'produced' xorriso.log || { grep -E 'FAILURE|SORRY|aborting' xorriso.log >&2; echo "ERROR: ISO build failed (xorriso.log)" >&2; exit 1; }
