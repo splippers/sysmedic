@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 import session  # noqa: E402
+import power  # noqa: E402
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
@@ -123,16 +124,8 @@ def hud():
 
 
 def battery():
-    """Charge, state and health of each battery, from the kernel (no tools needed)."""
-    out = []
-    for b in sorted(Path("/sys/class/power_supply").glob("BAT*")):
-        rd = lambda n: (b / n).read_text().strip() if (b / n).exists() else ""  # noqa: E731
-        full = rd("energy_full") or rd("charge_full")
-        design = rd("energy_full_design") or rd("charge_full_design")
-        health = round(int(full) * 100 / int(design)) if full.isdigit() and design.isdigit() and int(design) else None
-        out.append({"name": b.name, "percent": int(rd("capacity")) if rd("capacity").isdigit() else None,
-                    "state": rd("status").lower(), "health": health, "cycles": int(rd("cycle_count")) if rd("cycle_count").isdigit() else None})
-    return out
+    """Charge, state and health of each battery (power.py, shared with the rescue menu)."""
+    return power.battery()
 
 
 BLWEB = Path("/run/sysmedic/blweb.json")

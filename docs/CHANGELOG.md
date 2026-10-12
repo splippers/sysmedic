@@ -1,6 +1,8 @@
 # Changelog
 
-## 2026.10.12 (late): customer data encrypted
+## 2026.10.12 (late): customer data encrypted, battery on the menu
+
+- **Battery on the rescue menu:** charge, charging state and health (with cycle count) under the live strip, yellow when worn (under 80%) or low, red when it needs replacing (under 60%) or at 15% on battery. Same reading as the phone dashboard (`power.py`).
 
 - **Encrypted vault** (`sysmedic-vault`): sessions, backups, serial numbers, console transcripts and review bundles live in a LUKS2 container on SysMedic's drive (caddy and stick). SysMedic, the offline AI and the virus signatures stay outside it, so booting and the offline AI need no passphrase.
 - **First screen:** the drive's passphrase. Skip it and SysMedic still works, with this visit kept in memory only (said in the scan, menu and console 2) until `sysmedic-vault unlock`. Nothing is written unencrypted any more.

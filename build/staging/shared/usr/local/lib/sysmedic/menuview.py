@@ -134,8 +134,19 @@ def main():
     ui = UI()
     width = ui.width
     print()
-    for line in logo([ui.c("bold", "RESCUE MENU"), ui.c("dim", f"{EDITION} edition · v{VERSION}"), ui.c("accent", hud())]):
+    tag = [ui.c("bold", "RESCUE MENU"), ui.c("dim", f"{EDITION} edition · v{VERSION}"), ui.c("accent", hud())]
+    lines = logo(tag)
+    for line in lines:
         print(line)
+    # Battery: charge, charging state, health; under the live strip, in its column (laptops only)
+    try:
+        import power
+        indent = " " * (visible_len(lines[0]) - visible_len(tag[0]))
+        for b in power.battery()[:2]:
+            text, sev = power.summary(b)
+            print(indent + ui.c({"ok": "accent", "warning": "warning", "critical": "critical"}[sev], text))
+    except Exception:  # noqa: BLE001  (the menu must always draw)
+        pass
     print(ui.rule())
     for line in summary(ui):
         print(line)
