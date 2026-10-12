@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.10.12: what fills a disk
+
+From the field: a "disk full" job meant the AI hand-writing `du` loops for half an hour, and Docker's images couldn't be cleaned from the rescue boot.
+
+- **`sysmedic-du`** (menu **D**, the desktop menu, and both assistants): every customer filesystem with how full it is, then a read-only analysis of the one you pick. It shows a folder tree, each user's share, the biggest folders and files, and **space you could get back** in four groups: safe to delete (caches, temp files, Windows Update downloads), the owner decides (rubbish bin and Recycle Bin, games, AI models, downloads), clean from the machine's own system (Docker/containerd images, snaps, the hibernation file, Windows.old, restore points), and keep (swap and page files, WinSxS, Docker volumes). Each item says how to clean it. About a minute for 5 million files.
+- **Drill down** folder by folder with `ncdu` in read-only mode (it can't delete): offered after the analysis, or `sysmedic-du browse /dev/X`. ncdu is now on the stick too.
+- The analysis is saved to the session (`disk-usage-<partition>.txt` and `.json`). The scan's "almost full" finding points to it.
+- **Containers:** Docker and containerd images can only be pruned by their own daemon, so the analysis lists them under "clean from the machine's own system" with the commands for the booted machine, and keeps Docker volumes (real data) apart.
+- The menu table in the field guide matches the current menu again.
+
 ## 2026.10.11 (night): test either GPU on hybrid laptops
 
 From the field: on an Intel + NVIDIA laptop the graphics tests only ever used the Intel chip, and a vkmark warning was taken for a failed Vulkan test.

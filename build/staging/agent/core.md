@@ -112,6 +112,7 @@ Rules:
 - **efibootmgr**: UEFI boot entries
 - **sysmedic-scan**: Re-run the read-only triage scan
 - **sysmedic-guard status**: Which disks are write-protected
+- **sysmedic-du /dev/X**: What fills a partition, read-only: folder tree, each user, biggest files, and what could be freed (safe caches, the owner's call, clean from the booted system, keep). Saves `disk-usage-X.txt` to the session. Use it for every "disk full" job instead of your own du/find loops; `--json` for the details
 - **sysmedic-clock**: SysMedic's clock, the hardware clock and the real time from the network; `sysmedic-clock fix` corrects SysMedic's clock
 - **sysmedic-note "text"**: Add a note to the customer's job report. Use it to record what you found and what was done, in plain English and briefly.
 - **sysmedic-note --feedback "text"**: Record a limitation of SysMedic itself (a missing tool, a wrong scan finding, a step you couldn't do) so it can be improved later. Do this whenever you hit one.

@@ -43,24 +43,24 @@ Low RAM: the cloud AI needs 4 GB and an AVX-capable CPU, and the offline AI need
 
 ## 5. The rescue menu (`menu`)
 
-| # | |
+| Key | |
 |---|---|
-| 1 | OpenCode AI assistant |
-| 2 | **Wi-Fi connect (nmtui)** |
-| 3 | Save session log to USB |
-| 4 | Triage scan (re-run) |
-| 5 | Fix Linux boot: GRUB, initramfs, fstab, oversized /boot |
-| 6 | **Windows tools**: info, crashes, events, autoruns, malware, BitLocker, update rollback, hibernation, password |
-| 7 | macOS (HFS+/APFS) |
-| 8 | Backup data |
-| 9 | Shell |
-| 11 / 12 | **Unlock a partition / write-protect all again** |
-| 13 | **Job report** |
-| 14 | **Phone dashboard** (QR code) |
+| 1 | Triage scan (re-run, read-only) |
+| 2 | **Tests** (hardware & software; also on the phone and as OpenCode slash commands) |
+| 3 | **Job report** for the customer |
+| 4 | **Phone dashboard** (QR code) |
+| 5 / 6 | OpenCode AI assistant / **repair the AI assistant** |
+| R | Remote AI in the phone dashboard (every change still needs a keypress on the laptop) |
+| 7 | **Windows tools**: info, crashes, events, autoruns, malware, BitLocker, update rollback, hibernation, password |
+| 8 / 9 | **Unlock a partition / write-protect all again** |
+| 10 | Back up data |
+| D | **Disk space**: what fills each disk, and what could safely go (`sysmedic-du`) |
+| 11 / 12 | Fix Linux boot (GRUB, initramfs, fstab, oversized /boot) / macOS (HFS+/APFS) |
+| 13 / 14 | **Wi-Fi** / save extra logs to this session |
+| U | Update SysMedic **(caddy)** |
+| G | Graphical desktop **(caddy)** |
 | 15 | Advanced toolkit **(caddy)**: stress/burn-in, OS imaging, macOS, extra Windows repairs. On the stick it tells you to use the caddy |
-| 16 | **Tests** (hardware & software; also on the phone and as OpenCode slash commands) |
-| 17 | **Repair the AI assistant** (`sysmedic-ai-repair`) |
-| 10 / 0 | Reboot / shut down |
+| 16 / 17 / 0 | Shell / reboot / shut down |
 
 ## 6. A typical repair
 

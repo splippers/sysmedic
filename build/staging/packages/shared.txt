@@ -8,7 +8,7 @@ hping3 ngrep curl wget openssh-client telnet tnftp lftp smbclient samba-common-b
 wireless-tools iw wavemon wpasupplicant hostapd dnsmasq-base bridge-utils vlan ipcalc sipcalc nbtscan snmp lldpd ndisc6
 tftp-hpa minicom picocom ipmitool network-manager
 # --- rescue ---
-gddrescue testdisk hfsprogs smartmontools efibootmgr nvme-cli exfatprogs ntfs-3g chntpw clamav libevtx-utils util-linux-extra
+gddrescue testdisk hfsprogs smartmontools efibootmgr nvme-cli exfatprogs ntfs-3g chntpw clamav libevtx-utils util-linux-extra ncdu
 python3-hivex qrencode cryptsetup zstd rsync cabextract
 # Windows log readers: ESE databases (Windows Update DataStore.edb, search index), Prefetch, classic .evt, registry, shortcuts
 libesedb-utils libscca-utils libevt-utils libregf-utils liblnk-utils

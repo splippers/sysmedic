@@ -1,0 +1,627 @@
+#!/usr/bin/env python3
+"""sysmedic-du — what is filling a customer's disk, read-only.
+
+  sysmedic-du                     the machine's filesystems and how full each is; pick one to analyse
+  sysmedic-du /dev/nvme0n1p2      analyse one partition (mounted read-only for the analysis, or read where it's mounted)
+  sysmedic-du /mnt/patient/home   analyse a folder
+  sysmedic-du browse /dev/X       drill down folder by folder (ncdu, read-only: it can't delete)
+  sysmedic-du TARGET --json       the analysis as JSON (for scripts and the AI)
+  sysmedic-du TARGET --depth N    levels in the folder tree (default 3)
+
+The analysis shows where the space is (a folder tree, each user's share, the biggest files) and what could be
+freed, sorted by how safe it is: caches and temporary files, things the owner decides (rubbish bin, games,
+downloads), things to clean from the machine's own system (Docker, snaps, hibernation file) and things to keep.
+Nothing is deleted. The report is saved to the session folder (disk-usage-<partition>.txt and .json).
+"""
+import heapq
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+import ui as uimod  # noqa: E402
+try:
+    import session
+except ImportError:
+    session = None
+
+RUN_DIR = Path("/run/sysmedic")
+KEEP = 16 << 20             # folders smaller than this aren't remembered (bounds memory on huge disks)
+BIGFILE = 100 << 20
+MOUNT_OPTS = {"ext2": "ro", "ext3": "ro,noload", "ext4": "ro,noload", "xfs": "ro,norecovery",
+              "btrfs": "ro,rescue=nologreplay", "vfat": "ro", "exfat": "ro", "hfsplus": "ro", "f2fs": "ro"}
+U = uimod.UI()
+
+# What a folder or file is, and whether it can go. Patterns are relative to the filesystem's root, lower case.
+#   safe    caches and temporary files: deleting them loses nothing (after unlocking the partition)
+#   ask     the owner's data: ask before deleting
+#   booted  clean it from the machine's own system, not from SysMedic (needs its daemon or its tools)
+#   keep    needed; listed so nobody deletes it
+RULES = [
+    # Linux
+    ("home/*/.local/share/trash", "Rubbish bin (desktop)", "ask", "Files the owner deleted but can still restore. Ask, then empty it."),
+    ("root/.local/share/trash", "Rubbish bin (root)", "ask", "Ask, then empty it."),
+    ("home/*/.cache", "Cache (thumbnails, browsers, pip, …)", "safe", "Programs rebuild it as needed."),
+    ("root/.cache", "Cache (root)", "safe", "Programs rebuild it as needed."),
+    ("home/*/.local/share/opencode/snapshot", "OpenCode undo snapshots", "safe", "OpenCode's own history; it starts a new one."),
+    ("var/cache/apt/archives", "Downloaded package files", "safe", "Booted: sudo apt clean"),
+    ("var/lib/snapd/cache", "Snap download cache", "safe", ""),
+    ("var/crash", "Crash reports", "safe", ""),
+    ("tmp", "Temporary files", "safe", "Cleared at every boot anyway."),
+    ("var/tmp", "Temporary files that survive a reboot", "ask", "Usually safe; check for anything the owner kept there."),
+    ("var/log/journal", "System journal", "booted", "Booted: sudo journalctl --vacuum-size=200M", 1e9),
+    ("var/lib/snapd/snaps", "Snap packages (incl. old versions)", "booted",
+     "Booted: snap list --all, then snap remove NAME --revision=N for 'disabled' ones; snap set system refresh.retain=2"),
+    ("var/lib/flatpak", "Flatpak apps", "booted", "Booted: flatpak uninstall --unused"),
+    ("var/lib/docker/volumes", "Docker volumes (databases and app data)", "keep", "Real data. Only the owner can say a volume is unused."),
+    ("var/lib/docker/overlay2", "Docker images and containers", "booted", "Booted: docker system df, then docker system prune -a"),
+    ("var/lib/docker/containers", "Docker containers and their logs", "booted", "Booted: docker container prune"),
+    ("var/lib/containerd", "Container images (containerd)", "booted",
+     "Booted: docker system df, then docker image prune -a (or nerdctl/crictl rmi --prune). Can't be pruned offline."),
+    ("home/*/.local/share/containers", "Podman images and containers", "booted", "Booted, as that user: podman system prune -a"),
+    ("var/lib/libvirt/images", "Virtual machine disks (libvirt)", "ask", ""),
+    ("home/*/virtualbox vms", "Virtual machines (VirtualBox)", "ask", ""),
+    ("home/*/.local/share/steam", "Steam games", "ask", "Uninstall games from Steam."),
+    ("home/*/.steam/debian-installation", "Steam games", "ask", "Uninstall games from Steam."),
+    ("usr/share/ollama/.ollama/models", "Local AI models (Ollama)", "ask", "Booted: ollama list, then ollama rm NAME"),
+    ("home/*/.ollama/models", "Local AI models (Ollama)", "ask", "Booted: ollama list, then ollama rm NAME"),
+    ("home/*/downloads", "Downloads", "ask", ""),
+    ("swap.img", "Swap file", "keep", "Listed in /etc/fstab: deleting it stops the machine booting cleanly."),
+    ("swapfile", "Swap file", "keep", "Listed in /etc/fstab: deleting it stops the machine booting cleanly."),
+    # Windows
+    ("$recycle.bin", "Recycle Bin", "ask", "Files the owner deleted but can still restore. Ask, then empty it in Windows."),
+    ("windows/temp", "Windows temporary files", "safe", ""),
+    ("users/*/appdata/local/temp", "Temporary files", "safe", ""),
+    ("windows/softwaredistribution/download", "Windows Update downloads", "safe", "Windows downloads again whatever it still needs."),
+    ("programdata/microsoft/windows/wer", "Error reports", "safe", ""),
+    ("users/*/appdata/local/crashdumps", "Program crash dumps", "safe", ""),
+    ("users/*/appdata/local/microsoft/windows/inetcache", "Internet cache", "safe", ""),
+    ("users/*/appdata/local/google/chrome/user data/*/cache", "Chrome cache", "safe", ""),
+    ("users/*/appdata/local/microsoft/edge/user data/*/cache", "Edge cache", "safe", ""),
+    ("users/*/appdata/local/mozilla/firefox/profiles/*/cache2", "Firefox cache", "safe", ""),
+    ("windows/memory.dmp", "Full crash dump", "ask", "Read it first (sysmedic-win crashes); then it can go."),
+    ("windows/livekernelreports", "Kernel problem reports", "ask", "Read them first (sysmedic-win crashes); then they can go."),
+    ("users/*/downloads", "Downloads", "ask", ""),
+    ("users/*/onedrive", "OneDrive files kept on this PC", "ask", "In Windows: OneDrive → Free up space keeps them in the cloud only."),
+    ("hiberfil.sys", "Hibernation file", "booted", "In Windows (admin prompt): powercfg /h off (this also turns off Fast Startup)."),
+    ("windows.old", "Previous Windows installation", "booted",
+     "In Windows: Settings → System → Storage → Temporary files → Previous Windows installation(s), once the upgrade is known good."),
+    ("$windows.~bt", "Windows upgrade leftovers", "booted", "In Windows: Disk Cleanup → Clean up system files."),
+    ("$windows.~ws", "Windows upgrade leftovers", "booted", "In Windows: Disk Cleanup → Clean up system files."),
+    ("system volume information", "Restore points and shadow copies", "booted",
+     "In Windows: System Protection → Configure → lower the limit, or vssadmin delete shadows /oldest."),
+    ("pagefile.sys", "Page file", "keep", "Windows needs it."),
+    ("swapfile.sys", "Swap file", "keep", "Windows needs it."),
+    ("windows/winsxs", "Windows component store", "keep",
+     "Never delete files here. In Windows: DISM /Online /Cleanup-Image /StartComponentCleanup"),
+    ("windows/installer", "Installer cache", "keep", "Deleting from here breaks updates and uninstalls."),
+]
+CLASSES = [("safe", "Safe to delete", "ok"), ("ask", "The owner decides", "info"),
+           ("booted", "Clean from the machine's own system", "warning"), ("keep", "Keep", "skip")]
+
+
+def human(n):
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1000 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit in ("B", "KB") or n >= 100 else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} TB"
+
+
+def run(cmd, timeout=60):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, "", str(e)
+
+
+# ── Which filesystems ──────────────────────────────────────────────────────
+
+def own_disks():
+    """SysMedic's own drives: the boot disk and anything labelled as SysMedic's."""
+    own = set()
+    for mnt in ("/cdrom", "/", "/mnt/persist"):
+        rc, src, _ = run(["findmnt", "-no", "SOURCE", mnt])
+        if rc == 0 and src.strip().startswith("/dev/"):
+            rc, pk, _ = run(["lsblk", "-no", "PKNAME", src.strip()])
+            own.add(pk.strip().splitlines()[0] if pk.strip() else os.path.basename(src.strip()))
+    return own
+
+
+def filesystems():
+    rc, out, _ = run(["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,FSTYPE,LABEL,MOUNTPOINTS,TYPE,PKNAME"])
+    if rc != 0:
+        return []
+    own = own_disks()
+    found = []
+
+    def walk(nodes, disk):
+        for n in nodes:
+            d = disk or n["name"]
+            if d in own or (n.get("label") or "") in ("SYSMEDIC_2404", "FOG_AMB_PERSIST"):
+                continue
+            if n.get("fstype") in MOUNT_OPTS or n.get("fstype") == "ntfs":
+                found.append(n)
+            walk(n.get("children") or [], d)
+    walk(json.loads(out).get("blockdevices", []), None)
+    return found
+
+
+class Target:
+    """A folder to analyse; mounts a partition read-only when it isn't mounted yet, and unmounts it afterwards."""
+
+    def __init__(self, arg):
+        self.arg, self.device, self.fstype, self.mounted_here = arg, None, None, False
+        if arg.startswith("/dev/"):
+            self.device = arg
+            rc, out, _ = run(["lsblk", "-no", "FSTYPE", arg])
+            self.fstype = out.strip().splitlines()[0] if rc == 0 and out.strip() else None
+            rc, existing, _ = run(["findmnt", "-rno", "TARGET", "-S", arg])
+            if rc == 0 and existing.strip():
+                self.root = existing.split()[0]
+            else:
+                self.root = self._mount()
+        else:
+            self.root = os.path.abspath(arg)
+            if not os.path.isdir(self.root):
+                sys.exit(f"Not a folder or a partition: {arg}")
+            rc, out, _ = run(["findmnt", "-rno", "SOURCE,FSTYPE", "-T", self.root])
+            if rc == 0 and out.split():
+                self.device, self.fstype = (out.split() + [None])[:2]
+
+    def _mount(self):
+        fs = self.fstype
+        if fs not in MOUNT_OPTS and fs != "ntfs":
+            sys.exit(f"{self.arg}: can't read a '{fs or 'unknown'}' filesystem"
+                     + (" (unlock it first: sysmedic-win bitlocker)" if fs == "BitLocker" else
+                        " (open it first: cryptsetup open)" if fs == "crypto_LUKS" else ""))
+        (RUN_DIR / "ro").mkdir(parents=True, exist_ok=True)
+        target = tempfile.mkdtemp(prefix="du-" + os.path.basename(self.arg) + "-", dir=RUN_DIR / "ro")
+        cmd = ["ntfs-3g", "-o", "ro", self.arg, target] if fs == "ntfs" else ["mount", "-t", fs, "-o", MOUNT_OPTS[fs], self.arg, target]
+        rc, _, err = run(cmd)
+        if rc != 0:
+            os.rmdir(target)
+            sys.exit(f"{self.arg}: couldn't mount it read-only: {err.strip()[:200]}")
+        self.mounted_here = True
+        return target
+
+    def close(self):
+        if self.mounted_here:
+            run(["umount", self.root])
+            try:
+                os.rmdir(self.root)
+            except OSError:
+                pass
+            self.mounted_here = False
+
+
+def usage(path):
+    st = os.statvfs(path)
+    total = st.f_blocks * st.f_frsize
+    return {"size": total, "used": (st.f_blocks - st.f_bfree) * st.f_frsize, "free": st.f_bavail * st.f_frsize,
+            "reserved": (st.f_bfree - st.f_bavail) * st.f_frsize}
+
+
+def os_name(root):
+    try:
+        for line in Path(root, "etc/os-release").read_text().splitlines():
+            if line.startswith("PRETTY_NAME="):
+                return line.split("=", 1)[1].strip('"')
+    except OSError:
+        pass
+    try:
+        for p in Path(root).iterdir():
+            if p.name.lower() == "windows" and p.is_dir() and any(c.name.lower() == "system32" for c in p.iterdir()):
+                return "Windows"
+    except OSError:
+        pass
+    return ""
+
+
+# ── The walk ───────────────────────────────────────────────────────────────
+
+class Walk:
+    """One pass over the tree: every folder's size on disk (like du -x), the biggest files, file counts."""
+
+    def __init__(self, root, progress=True):
+        self.root, self.dev = root, os.lstat(root).st_dev
+        self.dirs, self.big, self.seen = {}, [], set()
+        self.files = self.ndirs = self.errors = 0
+        self.total = 0
+        self.progress = progress and sys.stderr.isatty()
+        self.t0 = self.last = time.time()
+
+    def _tick(self, path):
+        t = time.time()
+        if self.progress and t - self.last > 0.3:
+            self.last = t
+            w = shutil.get_terminal_size((96, 24)).columns
+            line = f"  Reading… {self.files:,} files · {human(self.total)} · {int(t - self.t0)} s · {os.path.relpath(path, self.root)}"
+            sys.stderr.write("\r" + line[: w - 1].ljust(w - 1))
+            sys.stderr.flush()
+
+    def run(self):
+        sys.setrecursionlimit(20000)
+        self.dirs["."] = self._dir(self.root, ".")
+        if self.progress:
+            sys.stderr.write("\r" + " " * (shutil.get_terminal_size((96, 24)).columns - 1) + "\r")
+        self.seconds = round(time.time() - self.t0, 1)
+        return self
+
+    def _dir(self, path, rel):
+        size = 0
+        self.ndirs += 1
+        try:
+            it = os.scandir(path)
+        except OSError:
+            self.errors += 1
+            return 0
+        with it:
+            for e in it:
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except OSError:
+                    self.errors += 1
+                    continue
+                if st.st_dev != self.dev:          # another filesystem mounted inside: not ours (du -x)
+                    continue
+                n = st.st_blocks * 512
+                child = e.name if rel == "." else rel + "/" + e.name
+                if stat.S_ISDIR(st.st_mode):
+                    self.total += n
+                    n += self._dir(e.path, child)
+                    if n >= KEEP:
+                        self.dirs[child] = n
+                else:
+                    if st.st_nlink > 1:            # a hard link counts once
+                        if (st.st_ino in self.seen):
+                            continue
+                        self.seen.add(st.st_ino)
+                    self.files += 1
+                    self.total += n
+                    if n >= BIGFILE:
+                        heapq.heappush(self.big, (n, child))
+                        if len(self.big) > 40:
+                            heapq.heappop(self.big)
+                size += n
+                if self.files % 2000 == 0:
+                    self._tick(path)
+        return size
+
+
+# ── Making sense of it ─────────────────────────────────────────────────────
+
+def children(dirs, rel):
+    pre = "" if rel == "." else rel + "/"
+    return sorted(((k, v) for k, v in dirs.items() if k.startswith(pre) and k != rel and "/" not in k[len(pre):]),
+                  key=lambda kv: -kv[1])
+
+
+def tree(dirs, total, depth):
+    """[(level, label, bytes, path)] — folders of at least 1% (and 100 MB), single-child chains joined (jon/.local/share)."""
+    floor = max(total * 0.01, 100e6)
+    out = []
+
+    def rec(rel, level):
+        for k, v in children(dirs, rel)[:8]:
+            if v < floor:
+                break
+            label, cur = k.rsplit("/", 1)[-1], k
+            while True:                            # join chains where one child holds nearly everything
+                kids = children(dirs, cur)
+                if kids and kids[0][1] >= 0.9 * dirs[cur] and (len(kids) == 1 or kids[1][1] < floor):
+                    cur = kids[0][0]
+                    label += "/" + cur.rsplit("/", 1)[-1]
+                else:
+                    break
+            out.append((level, label, v if cur == k else dirs[cur], cur))
+            if level + 1 < depth:
+                rec(cur, level + 1)
+    rec(".", 0)
+    return out
+
+
+def hotspots(dirs, total, n=12):
+    """Where the space actually sits: folders whose own content (not counting big subfolders) is large."""
+    t = max(total * 0.01, 512 << 20)
+    big = {k: v for k, v in dirs.items() if v >= t and k != "."}
+    spots = []
+    for k, v in big.items():
+        rest = v - sum(cv for ck, cv in children(dirs, k) if cv >= t)
+        if rest >= t:
+            spots.append((rest, k, rest != v))
+    return sorted(spots, reverse=True)[:n]
+
+
+def reclaim(dirs, bigfiles):
+    """Known folders and files, matched case-insensitively; a match inside another match is skipped."""
+    items = {k.lower(): (k, v) for k, v in dirs.items() if k != "."}
+    for v, k in bigfiles:
+        items.setdefault(k.lower(), (k, v))
+    found = []
+    for pat, label, cls, how, *least in RULES:
+        rx = re.compile("".join("[^/]*" if c == "*" else re.escape(c) for c in pat) + "$")
+        for low, (k, v) in items.items():
+            if rx.match(low) and v >= (least[0] if least else 100e6):
+                found.append({"path": k, "bytes": v, "label": label, "class": cls, "how": how})
+    found.sort(key=lambda f: len(f["path"]))
+    kept = []
+    for f in found:
+        if not any(f["path"].startswith(g["path"] + "/") for g in kept):
+            kept.append(f)
+    return sorted(kept, key=lambda f: -f["bytes"])
+
+
+def users(dirs):
+    out = []
+    for base in ("home", "users", "Users", "root"):
+        if base == "root":
+            if "root" in dirs:
+                out.append(("root", dirs["root"], children(dirs, "root")[:3]))
+            continue
+        for k, v in children(dirs, base):
+            if k.rsplit("/", 1)[-1].lower() not in ("default", "public", "all users", "default user"):
+                out.append((k.split("/", 1)[1], v, children(dirs, k)[:3]))
+    return sorted(out, key=lambda u: -u[1])
+
+
+def analyse(target, depth=3, progress=True):
+    u = usage(target.root)
+    w = Walk(target.root, progress).run()
+    total = w.dirs["."]
+    big = sorted(w.big, reverse=True)
+    return {
+        "target": target.arg, "root": target.root, "device": target.device, "fstype": target.fstype,
+        "os": os_name(target.root), **u, "counted": total, "files": w.files, "folders": w.ndirs,
+        "unreadable": w.errors, "seconds": w.seconds,
+        "tree": [{"level": lv, "name": name, "bytes": b, "path": p} for lv, name, b, p in tree(w.dirs, total, depth)],
+        "hotspots": [{"path": p, "bytes": b, "excluding_big_subfolders": part} for b, p, part in hotspots(w.dirs, total)],
+        "big_files": [{"path": p, "bytes": b} for b, p in big[:15]],
+        "users": [{"name": n, "bytes": b, "top": [{"path": k, "bytes": v} for k, v in top]} for n, b, top in users(w.dirs)],
+        "reclaim": reclaim(w.dirs, big),
+    }
+
+
+# ── Output ─────────────────────────────────────────────────────────────────
+
+def fit(path, room):
+    """Shorten a long path in the middle: home/jon/.local/share/opencode/…/objects."""
+    if len(path) <= room:
+        return path
+    parts = path.split("/")
+    head, tail = parts[0], parts[-1]
+    if len(tail) > room // 2:                     # sha256-4c27e0f5b5ad…
+        tail = tail[: room // 2 - 1] + "…"
+    for i in range(1, len(parts) - 1):
+        if len("/".join(parts[:i + 1]) + "/…/" + tail) > room:
+            break
+        head = "/".join(parts[:i + 1])
+    out = head + "/…/" + tail if len(parts) > 1 else path
+    return out if len(out) <= room else "…" + path[-(room - 1):]
+
+
+def bar(frac, width=16):
+    halves = round(frac * width * 2)                  # SysMedic's console font has █ and ▌, not the eighths
+    return ("█" * (halves // 2) + ("▌" if halves % 2 else "")).ljust(width)
+
+
+def render(r, ui):
+    L = []
+    name = r["device"] or r["target"]
+    head = f"{name}" + (f"  ({r['os']})" if r["os"] else "") + (f"  {r['fstype']}" if r["fstype"] else "")
+    L.append(ui.banner("Disk space", "read-only: nothing on this disk was changed"))
+    L.append("")
+    pct = r["used"] / r["size"] if r["size"] else 0
+    sev = "critical" if pct >= 0.97 else "warning" if pct >= 0.9 else "ok"
+    L.append(ui.item(sev, f"{head}: {human(r['used'])} used of {human(r['size'])}, {ui.c('bold', human(r['free']) + ' free')} "
+                     f"({pct:.0%} full)",
+                     [f"{human(r['reserved'])} more is held back for the system (normal for Linux disks)" if r["reserved"] > 1e9 else "",
+                      f"Read {r['files']:,} files in {r['folders']:,} folders in {r['seconds']:.0f} s"
+                      + (f"; {r['unreadable']} couldn't be read" if r["unreadable"] else "")]))
+    gap = r["used"] - r["counted"]
+    if r["target"].startswith("/dev/") and gap > 0.05 * r["used"] and gap > 2e9:
+        L.append(ui.item("info", f"{human(gap)} in use isn't in any file",
+                         "Filesystem structures, snapshots (btrfs), or files in folders that couldn't be read."))
+    total = r["counted"] or 1
+
+    L.append(ui.section("Where the space is"))
+    for t in r["tree"]:
+        pre = "  " * t["level"]
+        L.append(f"  {human(t['bytes']):>8}  {ui.c('accent', bar(t['bytes'] / total))}  {pre}{fit(t['name'], ui.width - 32 - len(pre))}")
+
+    if r["users"]:
+        L.append(ui.section("Each user"))
+        for u in r["users"][:8]:
+            top = ", ".join(f"{k.rsplit('/', 1)[-1]} {human(v)}" for k, v in ((x["path"], x["bytes"]) for x in u["top"]))
+            L.append(f"  {human(u['bytes']):>8}  {u['name']}" + (ui.c("dim", f"   ({top})") if top else ""))
+
+    if r["hotspots"]:
+        L.append(ui.section("Biggest folders"))
+        for h in r["hotspots"][:10]:
+            note = "  (not counting its big subfolders)" if h["excluding_big_subfolders"] else ""
+            L.append(f"  {human(h['bytes']):>8}  {fit(h['path'], ui.width - 14 - len(note))}" + ui.c("dim", note))
+    if r["big_files"]:
+        L.append(ui.section("Biggest files"))
+        for f in r["big_files"][:10]:
+            L.append(f"  {human(f['bytes']):>8}  {fit(f['path'], ui.width - 14)}")
+
+    L.append(ui.section("Space you could get back"))
+    if not r["reclaim"]:
+        L.append(ui.item("info", "Nothing SysMedic recognises as a cache, a leftover or a rubbish bin is bigger than 100 MB",
+                         "The space is the owner's own files." + (" See the biggest folders above." if r["hotspots"] else "")))
+    for cls, title, sev in CLASSES:
+        items = [f for f in r["reclaim"] if f["class"] == cls]
+        if not items:
+            continue
+        sub = sum(f["bytes"] for f in items)
+        L.append("")
+        L.append(f"  {ui.c(sev, uimod.MARK[sev])}  {ui.c('bold', title)}" + ("" if cls == "keep" else ui.c("dim", f"  ({human(sub)})")))
+        for f in items:
+            L.append(f"     {human(f['bytes']):>8}  {f['label']}" + ui.c("dim", f"  {fit(f['path'], max(20, ui.width - 21 - len(f['label'])))}"))
+            if f["how"]:
+                L.append(" " * 16 + ui.c("dim", f["how"]))
+    L.append("")
+    if r["target"].startswith("/dev/"):
+        L.append(ui.item("info", "To delete anything, the engineer unlocks the partition on Alt+F2 first",
+                         f"sysmedic-unlock {r['target']}; afterwards sysmedic-lock",
+                         f"Drill down folder by folder: sysmedic-du browse {r['target']}"))
+    return "\n".join(L)
+
+
+def save(r, text):
+    if not session:
+        return None
+    try:
+        d = session.session_dir()
+        name = "disk-usage-" + os.path.basename(r["target"].rstrip("/") or "root").replace("/", "_")
+        (d / (name + ".txt")).write_text(text + "\n")
+        (d / (name + ".json")).write_text(json.dumps(r, indent=1))
+        tty = os.ttyname(0).replace("/dev/", "") if os.isatty(0) else ("ai" if os.environ.get("SYSMEDIC_AI") else "script")
+        safe = sum(f["bytes"] for f in r["reclaim"] if f["class"] == "safe")
+        session.audit(tty, f"sysmedic-du: {r['target']} {human(r['used'])} used of {human(r['size'])}, "
+                           f"{human(r['free'])} free; {human(safe)} safe to delete")
+        return d / (name + ".txt")
+    except OSError:
+        return None
+
+
+def overview(ui):
+    """The customer's filesystems with how full each is. Returns [(n, device, used fraction)]."""
+    rows, idx = [], []
+    for fs in filesystems():
+        dev = fs["path"]
+        try:
+            t = Target(dev)
+        except SystemExit:
+            rows.append((dev, fs.get("fstype"), None, "", fs.get("label")))
+            continue
+        try:
+            rows.append((dev, fs.get("fstype"), usage(t.root), os_name(t.root), fs.get("label")))
+        finally:
+            t.close()
+    print(ui.banner("Disk space", "the machine's filesystems (read-only)"))
+    if not rows:
+        print(ui.item("info", "No readable filesystem on the machine's disks", "Encrypted (BitLocker, LUKS) or blank disks don't show here."))
+        return []
+    for dev, fs, u, osn, label in rows:
+        if not u:
+            print(f"   {'':>2}  {dev:<16} {fs or '':<7} " + ui.c("dim", "couldn't be read"))
+            continue
+        frac = u["used"] / u["size"] if u["size"] else 0
+        idx.append((len(idx) + 1, dev, frac, u["size"]))
+        sev = "critical" if frac >= 0.97 else "warning" if frac >= 0.9 else "accent"
+        what = osn or label or ""
+        print(f"  {ui.c('accent', str(len(idx)).rjust(2))}  {dev:<16} {fs:<7} {ui.c(sev, bar(frac, 12))} {frac:>4.0%}  "
+              f"{human(u['free']):>8} free of {human(u['size']):<8} {ui.c('dim', what)}")
+    return idx
+
+
+# -rr: read-only (no delete, no shell); -x: stay on this filesystem; --si: MB like the report, not MiB
+NCDU = ["ncdu", "-rr", "-x", "--si"]
+
+
+def page(text):
+    """The console has no scroll-back: a report taller than the screen goes through less (arrows to scroll, q to go on)."""
+    rows = shutil.get_terminal_size((96, 40)).lines
+    if sys.stdout.isatty() and shutil.which("less") and text.count("\n") + 2 > rows:
+        subprocess.run(["less", "-R", "-X", "-P", "Disk space  ·  arrows / PgUp / PgDn to scroll  ·  q to go on"], input=text, text=True)
+    else:
+        print(text)
+
+
+def browse(arg):
+    if not shutil.which("ncdu"):
+        sys.exit("ncdu isn't on this drive. Use: sysmedic-du " + arg)
+    t = Target(arg)
+    try:
+        return subprocess.call(NCDU + [t.root])
+    finally:
+        t.close()
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] in (["-h"], ["--help"], ["help"]):
+        print(__doc__)
+        return 0
+    if args[:1] == ["browse"]:
+        if len(args) < 2:
+            sys.exit("Usage: sysmedic-du browse /dev/X (or a folder)")
+        return browse(args[1])
+    as_json = "--json" in args
+    depth = 3
+    if "--depth" in args:
+        try:
+            depth = max(1, int(args[args.index("--depth") + 1]))
+        except (IndexError, ValueError):
+            sys.exit("--depth needs a number")
+        del args[args.index("--depth"):args.index("--depth") + 2]
+    args = [a for a in args if a != "--json"]
+    if args and args[0].startswith("-"):
+        sys.exit(f"Unknown option '{args[0]}'. Try: sysmedic-du help")
+    if os.geteuid() != 0:
+        sys.exit("sysmedic-du must run as root (it reads every folder)")
+    interactive = not args and not as_json and sys.stdin.isatty()
+    if not args:
+        if as_json:
+            out = []
+            for fs in filesystems():
+                try:
+                    t = Target(fs["path"])
+                except SystemExit:
+                    continue
+                try:
+                    out.append({"device": fs["path"], "fstype": fs.get("fstype"), "os": os_name(t.root), **usage(t.root)})
+                finally:
+                    t.close()
+            print(json.dumps(out, indent=1))
+            return 0
+        idx = overview(U)
+        if not idx:
+            return 0
+        if not interactive:
+            print("\n  Analyse one with: sysmedic-du /dev/X")
+            return 0
+        fullest = max(idx, key=lambda i: (i[2] >= 0.9, i[3] if i[2] < 0.9 else i[2]))
+        a = input(f"\n  {U.c('accent', '❯')} Analyse which? (number, Enter = {fullest[0]}, q = quit) ").strip().lower()
+        if a in ("q", "0"):
+            return 0
+        pick = next((i for i in idx if str(i[0]) == a), fullest if not a else None)
+        if not pick:
+            sys.exit("No such number.")
+        args = [pick[1]]
+        print()
+    t = Target(args[0])
+    try:
+        r = analyse(t, depth, progress=not as_json)
+        text = render(r, uimod.UI(color=False, width=100))
+        path = save(r, text)
+        if as_json:
+            print(json.dumps(r, indent=1))
+            return 0
+        out = render(r, U) + (U.c("dim", f"\n\n  Saved to the session: {path.name}") if path else "")
+        page(out)
+        if (interactive or sys.stdin.isatty()) and shutil.which("ncdu") and not as_json:
+            a = input(f"\n  {U.c('accent', '❯')} Drill down folder by folder now (read-only)? [y/N] ").strip().lower()
+            if a in ("y", "yes"):
+                subprocess.call(NCDU + [t.root])
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return 130
+    finally:
+        t.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

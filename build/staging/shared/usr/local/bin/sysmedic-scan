@@ -345,7 +345,8 @@ def free_space(target, label):
     total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
     if total and free / total < 0.05:
         find("warning", "filesystem", f"{label}: almost full ({human(free)} free of {human(total)})",
-             "A full disk breaks updates, logins and sometimes boot.", "Free space by moving data off, or clean caches/logs.")
+             "A full disk breaks updates, logins and sometimes boot.",
+             f"See what fills it and what can safely go: sysmedic-du {label.split()[0]} (menu D)")
     return {"total_bytes": total, "free_bytes": free}
 
 

@@ -15,7 +15,7 @@ while true; do
     python3 /usr/local/lib/sysmedic/menuview.py 2>/dev/null || {
         echo "  SysMedic rescue menu (v${VERSION}): 1 AI · 2 Wi-Fi · 3 save logs · 4 scan · 5 Linux boot · 6 Windows · 7 macOS"
         echo "  8 backup · 9 shell · 10 reboot · 11 unlock · 12 protect · 13 report · 14 phone · 15 toolkit · 16 tests · 17 repair AI · 0 off"; }
-    keys="R"; command -v labwc >/dev/null && keys="$keys, G"; [ "$EDITION" = caddy ] && keys="$keys, U"
+    keys="D, R"; command -v labwc >/dev/null && keys="$keys, G"; [ "$EDITION" = caddy ] && keys="$keys, U"
     echo -ne "  ${CYAN}❯${NC} Choose a number${keys:+ or $keys}: "
     read choice
     echo ""
@@ -216,6 +216,11 @@ while true; do
                 ask "Turn remote AI on? [y/N]" yn
                 [ "$yn" = y ] || [ "$yn" = Y ] && /usr/local/sbin/sysmedic-remote-ai on
             fi
+            pause
+            ;;
+        d|D)
+            clear
+            /usr/local/bin/sysmedic-du
             pause
             ;;
         u|U)

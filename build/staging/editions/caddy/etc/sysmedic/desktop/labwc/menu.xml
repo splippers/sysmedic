@@ -7,6 +7,7 @@
     <item label="Rescue menu (all console tools)"><action name="Execute" command="foot --title 'SysMedic rescue menu' -e /opt/sysmedic/rescue-menu.sh" /></item>
     <item label="Tests"><action name="Execute" command="foot --title 'SysMedic tests' sysmedic-tests menu" /></item>
     <item label="Windows check-up"><action name="Execute" command="foot --hold --title 'Windows check-up' sh -c 'sysmedic-win checkup'" /></item>
+    <item label="Disk space (what fills each disk)"><action name="Execute" command="foot --title 'Disk space' sysmedic-du" /></item>
     <item label="Graphics benchmark (on screen)"><action name="Execute" command="foot --hold --title 'Graphics benchmark' sysmedic-tests start gpu-bench" /></item>
     <separator />
     <item label="Files"><action name="Execute" command="thunar /" /></item>

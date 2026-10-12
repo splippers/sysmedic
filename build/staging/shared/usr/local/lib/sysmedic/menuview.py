@@ -23,7 +23,8 @@ CARDS = [
     ("AI", [("5", "AI rescue assistant (OpenCode)"), ("6", "Repair the AI assistant"),
             ("R", "Remote AI in the phone dashboard: " + ("ON (changes confirmed here)" if os.path.exists("/run/sysmedic/remote-ai.on") else "off"))]),
     ("Windows & disks", [("7", "Windows tools: BitLocker, crashes…"), ("8", "Unlock a partition for repair"),
-                         ("9", "Write-protect all disks again"), ("10", "Back up data")]),
+                         ("9", "Write-protect all disks again"), ("10", "Back up data"),
+                         ("D", "Disk space: what fills each disk")]),
     ("Other systems", [("11", "Fix Linux boot (GRUB/initramfs)"), ("12", "Fix macOS (HFS+/APFS)")]),
     ("Connect & save", [("13", "Wi-Fi"), ("14", "Save extra logs to this session")]
      + ([("U", "Update SysMedic (from GitHub)")] if EDITION == "caddy" else [])),
