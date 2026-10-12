@@ -1,0 +1,39 @@
+#!/bin/bash
+# sysmedic-consent — record the customer's explicit agreement before the AI may look in their user folders.
+#
+#   sysmedic-consent users           the customer agrees: the AI may read C:\Users and /home (still cleaned for the cloud)
+#   sysmedic-consent revoke users    withdraw it
+#   sysmedic-consent                 what has been agreed this visit
+#
+# Only the engineer, at this laptop's keyboard: the AI can't run this or create the record.
+D=/run/sysmedic/consent
+. /usr/local/lib/sysmedic/ui.sh 2>/dev/null || { ui_ok() { echo "  ✔ $1"; }; ui_warn() { echo "  ▲ $1"; }; ui_info() { echo "  ● $1"; }; }
+audit() { . /etc/sysmedic/audit.sh; printf '%s [%s] %s\n' "$(date -Is)" "$(tty | sed 's|/dev/||')" "$*" >> "$(_sysmedic_audit_file)"; }
+[ -n "${SYSMEDIC_AI:-}" ] && { echo "REFUSED: customer consent is recorded by the engineer, not the AI." >&2; exit 126; }
+[ "$(id -u)" = 0 ] || { echo "Run as root" >&2; exit 1; }
+mkdir -p "$D"; chmod 700 "$D"
+case "${1:-status}" in
+    users)
+        [ -t 0 ] || { echo "REFUSED: needs a person at this laptop's keyboard." >&2; exit 126; }
+        echo
+        ui_warn "The AI assistant would be allowed to look inside the customer's own folders" "C:\\Users (documents, desktop, downloads, mail, browser data) and /home"
+        ui_info "Only with the customer's explicit agreement, for this visit" "for the cloud AI, names and personal details are still cleaned out first; it ends at shutdown"
+        echo
+        read -r -p "  Has the customer explicitly agreed? Type YES to record it: " a
+        if [ "$a" = YES ]; then
+            date -Is > "$D/users"; chmod 600 "$D/users"
+            audit "CONSENT user folders: YES, customer agreed (recorded by the engineer)"
+            /usr/local/bin/sysmedic-note "Customer agreed that the AI may look in their user folders this visit." >/dev/null 2>&1
+            ui_ok "Recorded. The AI may now read the customer's user folders this visit" "withdraw it: sysmedic-consent revoke users"
+        else
+            ui_info "Not recorded: the user folders stay closed to the AI"
+        fi ;;
+    revoke)
+        rm -f "$D/${2:-users}"
+        audit "CONSENT user folders: withdrawn"
+        ui_ok "Withdrawn: the user folders are closed to the AI again" ;;
+    status)
+        if [ -e "$D/users" ]; then ui_ok "User folders: the customer agreed ($(cat "$D/users"))"
+        else ui_info "User folders: closed to the AI (sysmedic-consent users, with the customer's agreement)"; fi ;;
+    *) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

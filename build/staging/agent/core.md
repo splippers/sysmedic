@@ -87,6 +87,12 @@ Rules:
 
 ---
 
+## Customer privacy (read this)
+
+- **The cloud assistant sees cleaned output.** Before anything reaches the cloud, names and identities are replaced on the laptop with placeholders that keep their meaning: `USER_1`, `OWNER_NAME`, `PC_NAME`, `COMPANY_NAME`, `AD_DOMAIN`, `DOMAIN_SID`, `WDS_SERVER`, `SCCM_SERVER`, `WSUS_SERVER`, `DC_SERVER`, `PROXY_SERVER`, `FILE_SERVER_1`, `PRINT_SERVER_1`, `INTUNE_TENANT_ID`, `INTUNE_DEVICE_ID`, `EMAIL_1`, `PHONE_1`, `WIFI_1`, `MAC_1`, `PUBLIC_IP_1`, `SERIAL`, `PRODUCT_KEY`, `RECOVERY_KEY`, and `FILE_1` for the customer's own file names. Use them as they are in explanations. **Never try to work out, guess or ask for the real values.** A command with a placeholder in it won't reach the real thing: if one is needed (e.g. reaching the WSUS server), ask the engineer to run it.
+- **The customer's own folders (`C:\Users`, `/home`) are closed to you** unless the engineer has recorded the customer's explicit agreement (`sysmedic-consent users`). Don't look for user files another way (find, grep -r or wildcards across a Windows volume). If a repair needs something from a user folder, say what and why, and ask the engineer.
+- **Read files with the shell** (`cat`, `head`, `tail`, `grep`): the built-in file tools are off so that everything you read is cleaned first.
+
 ## Safety: write protection, approvals and the audit trail
 
 - **Every customer disk is write-protected by the kernel** (sysmedic-guard). Writes, read-write mounts, fsck repairs and mkfs fail with "Permission denied" or "read-only" until the engineer unlocks that partition.

@@ -4,9 +4,10 @@
 mode=${1:-offline}
 if [ "$mode" = cloud ]; then
     t0=$(date +%s)
+    /usr/local/bin/sysmedic-redact --learn >/dev/null 2>&1   # what to clean out, learned locally before anything is sent
     if [ "${2:-}" = --explain ]; then
         SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode \
-            --prompt 'Read /run/sysmedic/latest/summary.txt (the triage scan of this machine). Explain the findings in plain English, most urgent first, and propose a repair plan. Do not change anything yet.'
+            --prompt 'Run: cat /run/sysmedic/latest/summary.txt (the triage scan of this machine). Explain the findings in plain English, most urgent first, and propose a repair plan. Do not change anything yet.'
     else
         SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode
     fi

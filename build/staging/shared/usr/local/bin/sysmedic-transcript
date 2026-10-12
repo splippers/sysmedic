@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -196,6 +197,13 @@ def bundle(quiet=False):
     if not trs:
         out.append("_none recorded_\n")
     doc = "\n".join(out)
+    # The bundle is for improving SysMedic and leaves the drive (for review): cleaned like the cloud AI's view
+    try:
+        r = subprocess.run(["/usr/local/bin/sysmedic-redact"], input=doc, capture_output=True, text=True, timeout=300)
+        if r.returncode == 0 and r.stdout:
+            doc = "<!-- Cleaned by sysmedic-redact: names, the company, its servers, keys and personal file names are placeholders. -->\n" + r.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     (sd / "claude-review.md").write_text(doc)
     copy_dir = PERSIST / "claude-review" if is_mounted(PERSIST) else session.RUN / "claude-review"
     copy_dir.mkdir(parents=True, exist_ok=True)

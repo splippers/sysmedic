@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""sysmedic-redact — clean command output before it reaches the cloud AI.
+
+Everything the cloud assistant runs passes through this (BASH_ENV hook, /etc/sysmedic/audit.sh). Identities are
+replaced with placeholders that keep the meaning, consistently for the whole visit, so the analysis still works:
+
+  people        user names, owner, email addresses, phone numbers          → USER_1, OWNER_NAME, EMAIL_1, PHONE_1
+  the machine   computer name, serial numbers, product and recovery keys   → PC_NAME, SERIAL, PRODUCT_KEY, RECOVERY_KEY
+  the company   organisation, AD domain and SIDs, Entra/Intune IDs         → COMPANY_NAME, AD_DOMAIN, DOMAIN_SID,
+                                                                             INTUNE_TENANT_ID, INTUNE_DEVICE_ID, …
+  servers       WDS, SCCM, WSUS, proxy, domain controllers, file/print     → WDS_SERVER, SCCM_SERVER, WSUS_SERVER, …
+  networks      Wi-Fi names, MAC addresses, public IP addresses            → WIFI_1, MAC_1, PUBLIC_IP_1
+  files         names of the customer's own files (Documents, Desktop, …)  → C:\\Users\\USER_1\\Documents\\FILE_1
+
+What to look for is learned locally (the offline Windows registry, the scan, /home), kept in memory on this laptop
+(/run/sysmedic/redact.json, root only) and never sent anywhere.
+
+  command | sysmedic-redact       clean a stream (line by line)
+  sysmedic-redact --learn         (re)learn the identities now
+  sysmedic-redact --show          what is replaced, and by what (engineer only; never shown to the AI)
+"""
+import ipaddress
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+
+MAP = Path("/run/sysmedic/redact.json")
+RELEARN = 120                         # seconds: a BitLocker volume unlocked mid-visit is picked up soon after
+PERSONAL = ("documents", "desktop", "downloads", "pictures", "videos", "music", "onedrive", "favorites", "contacts")
+
+
+# ── Learning (local only) ──────────────────────────────────────────────────
+
+def windows_roots():
+    roots = []
+    try:
+        for line in open("/proc/mounts"):
+            f = line.split()
+            if len(f) > 2 and f[2] in ("ntfs", "ntfs3", "fuseblk"):
+                mnt = f[1].replace("\\040", " ")
+                if Path(mnt, "Windows", "System32", "config").is_dir() or Path(mnt, "Windows", "System32", "Config").is_dir():
+                    roots.append(mnt)
+    except OSError:
+        pass
+    return roots
+
+
+def learn():
+    """{"names": {real: placeholder}, "servers": {...}} gathered from the machine itself."""
+    found = {}                         # real value → role (placeholder stem)
+
+    def add(value, role):
+        if isinstance(value, str):
+            v = value.strip().strip("\\").strip()
+            if len(v) >= 3 and v.lower() not in ("administrator", "default", "public", "system", "user", "windows"):
+                found.setdefault(v, role)
+
+    try:
+        import winlib
+    except ImportError:
+        winlib = None
+    for root in windows_roots() if winlib else []:
+        sw = winlib.open_hive(root, "Windows/System32/config/SOFTWARE")
+        sysh = winlib.open_hive(root, "Windows/System32/config/SYSTEM")
+        if sysh:
+            cs = winlib.control_set(sysh)
+            add(sysh.get(cs + r"\Control\ComputerName\ComputerName", "ComputerName"), "PC_NAME")
+            tcp = cs + r"\Services\Tcpip\Parameters"
+            add(sysh.get(tcp, "Hostname"), "PC_NAME")
+            for k in ("Domain", "NV Domain", "DhcpDomain"):
+                add(sysh.get(tcp, k), "AD_DOMAIN")
+            for t in sysh.subkeys(cs + r"\Control\CloudDomainJoin\TenantInfo") or []:
+                add(t, "INTUNE_TENANT_ID")
+                add(sysh.get(cs + r"\Control\CloudDomainJoin\TenantInfo\\" + t, "DisplayName"), "COMPANY_NAME")
+        if sw:
+            cv = r"Microsoft\Windows NT\CurrentVersion"
+            add(sw.get(cv, "RegisteredOwner"), "OWNER_NAME")
+            add(sw.get(cv, "RegisteredOrganization"), "COMPANY_NAME")
+            for sid in sw.subkeys(cv + r"\ProfileList") or []:
+                p = sw.get(cv + r"\ProfileList\\" + sid, "ProfileImagePath")
+                if isinstance(p, str) and "\\users\\" in p.lower():
+                    add(p.rsplit("\\", 1)[-1], "USER")
+            last = sw.get(r"Microsoft\Windows\CurrentVersion\Authentication\LogonUI", "LastLoggedOnUser")
+            if isinstance(last, str) and "\\" in last:
+                dom, user = last.split("\\", 1)
+                add(dom, "AD_DOMAIN") if dom not in (".", "") else None
+                add(user, "USER")
+            wu = r"Policies\Microsoft\Windows\WindowsUpdate"
+            for k in ("WUServer", "WUStatusServer"):
+                v = sw.get(wu, k)
+                if isinstance(v, str):
+                    m = re.match(r"\w+://([^/:]+)", v)
+                    add(m.group(1) if m else v, "WSUS_SERVER")
+            for e in sw.subkeys(r"Microsoft\Enrollments") or []:
+                vals = sw.values(r"Microsoft\Enrollments\\" + e)
+                if vals.get("UPN") or vals.get("ProviderID"):
+                    add(e, "INTUNE_ENROLLMENT_ID")
+                    add(vals.get("UPN"), "EMAIL")
+                    add(vals.get("AADTenantID"), "INTUNE_TENANT_ID")
+            add(sw.get(r"Microsoft\Provisioning\OMADM\MDMDeviceID", "DeviceClientId"), "INTUNE_DEVICE_ID")
+            ap = r"Microsoft\Provisioning\Diagnostics\Autopilot"
+            add(sw.get(ap, "CloudAssignedTenantId"), "INTUNE_TENANT_ID")
+            add(sw.get(ap, "CloudAssignedTenantDomain"), "AD_DOMAIN")
+            add(sw.get(ap, "TenantDomain"), "AD_DOMAIN")
+            ccm = sw.get(r"Microsoft\SMS\DP", "ManagementPoints") or sw.get(r"Microsoft\CCM\CcmEval", "LastSiteServer")
+            add(ccm if isinstance(ccm, str) else None, "SCCM_SERVER")
+            inet = r"Microsoft\Windows\CurrentVersion\Internet Settings"
+            px = sw.get(inet, "ProxyServer")
+            if isinstance(px, str):
+                add(re.sub(r"^\w+://|:\d+$", "", px.split(";")[0].split("=")[-1]), "PROXY_SERVER")
+        try:
+            for d in Path(root, "Users").iterdir():
+                if d.is_dir() and not d.name.startswith(("All Users", "Default", "Public", "desktop.ini")):
+                    add(d.name, "USER")
+        except OSError:
+            pass
+    # Linux on the machine, and the scan's own view
+    for home in ("/home",):
+        try:
+            for d in Path(home).iterdir():
+                if d.is_dir() and d.name not in ("ubuntu", "lost+found"):
+                    add(d.name, "USER")
+        except OSError:
+            pass
+    try:
+        for f in json.load(open("/run/sysmedic/latest/scan.json")).get("filesystems", []):
+            for k in ("computer_name", "hostname"):
+                add(f.get(k), "PC_NAME")
+            add(f.get("domain"), "AD_DOMAIN")
+    except (OSError, ValueError, AttributeError):
+        pass
+    for p in (Path("/mnt/persist/private"), Path("/run/sysmedic/private")):   # serial numbers the scan kept aside
+        try:
+            for f in p.glob("*.json"):
+                for v in json.load(open(f)).values():
+                    if isinstance(v, str) and len(v) >= 5:
+                        found.setdefault(v, "SERIAL")
+        except (OSError, ValueError, AttributeError):
+            pass
+    return found
+
+
+def load():
+    try:
+        st = MAP.stat()
+        if time.time() - st.st_mtime < RELEARN:
+            return json.loads(MAP.read_text())
+    except (OSError, ValueError):
+        pass
+    old = {}
+    try:
+        old = json.loads(MAP.read_text())
+    except (OSError, ValueError):
+        pass
+    m = {"fixed": old.get("fixed", {}), "counters": old.get("counters", {})}
+    for real, role in learn().items():
+        if real not in m["fixed"]:
+            m["fixed"][real] = numbered(m, role)
+    save(m)
+    return m
+
+
+def numbered(m, role):
+    singles = ("PC_NAME", "OWNER_NAME", "COMPANY_NAME", "SERIAL")
+    n = m["counters"].get(role, 0) + 1
+    m["counters"][role] = n
+    if role in singles or role.endswith(("_SERVER", "_ID")) or role == "AD_DOMAIN":
+        return role if n == 1 else f"{role}_{n}"
+    return f"{role}_{n}"
+
+
+def save(m):
+    try:
+        MAP.parent.mkdir(parents=True, exist_ok=True)
+        tmp = MAP.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(m, f)
+        os.replace(tmp, MAP)
+    except OSError:
+        pass
+
+
+# ── Cleaning ───────────────────────────────────────────────────────────────
+
+EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+PHONE = re.compile(r"(?<![\w.:/-])(?:\+44\s?|0)(?:\d\s?){9,10}(?![\w.:/-])")
+MAC = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
+IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+PRODUCT_KEY = re.compile(r"\b(?:[A-Z0-9]{5}-){4}[A-Z0-9]{5}\b")
+RECOVERY_KEY = re.compile(r"\b(?:\d{6}-){7}\d{6}\b")
+DOMAIN_SID = re.compile(r"\bS-1-5-21-\d+-\d+-\d+(?=-\d+\b|\b)")
+UNC = re.compile(r"\\\\([A-Za-z0-9._-]+)\\([^\\\s\"']+)((?:\\[^\n\"';|<>]*)?)")
+SSID = re.compile(r"(?i)(\bSSID\s*[:=]\s*|ssid=|ESSID:\s*\"?|Wi-Fi \")([^\"\n,;]{1,32})")
+# user segment and path parts may contain spaces ("Anna Lee", "Divorce papers final.docx"): run to the next separator,
+# quote, semicolon or line end. Over-cleaning a trailing word is the safe way to be wrong.
+USERS_PATH = re.compile(r"(?i)((?:[A-Z]:)?[\\/](?:Users|home)[\\/])([^\\/\n\"';|<>:]+)((?:[\\/][^\\/\n\"';|<>:]+)*)")
+NETBIOS_USER = re.compile(r"\b(?!NT AUTHORITY|BUILTIN|NT SERVICE|WORKGROUP)([A-Z][A-Z0-9-]{1,14})\\(USER_\d+)\b")
+
+
+def share_role(share, host=""):
+    s, h = share.lower(), host.lower()
+    if h.startswith(("prn", "print")):
+        return "PRINT_SERVER"
+    if s in ("reminst",) or s.startswith("reminst"):
+        return "WDS_SERVER"
+    if s.startswith(("sms_", "smspkg", "ccm")):
+        return "SCCM_SERVER"
+    if s in ("sysvol", "netlogon"):
+        return "DC_SERVER"
+    if s in ("wsuscontent", "updateservicespackages"):
+        return "WSUS_SERVER"
+    if s.startswith(("print", "prn")) or s.endswith("$print"):
+        return "PRINT_SERVER"
+    return "FILE_SERVER"
+
+
+class Cleaner:
+    def __init__(self):
+        self.m = load()
+        self.changed = False
+        fixed = sorted(self.m["fixed"].items(), key=lambda kv: -len(kv[0]))
+        self.fixed_rx = re.compile("|".join(re.escape(k) for k, _ in fixed), re.I) if fixed else None
+        self.lookup = {k.lower(): v for k, v in fixed}
+
+    def token(self, real, role):
+        """The placeholder for a newly seen value, remembered for the rest of the visit."""
+        for k, v in self.m["fixed"].items():
+            if k.lower() == real.lower():
+                return v
+        p = numbered(self.m, role)
+        self.m["fixed"][real] = p
+        self.lookup[real.lower()] = p
+        self.changed = True
+        return p
+
+    def unc(self, mt):
+        host, share, rest = mt.group(1), mt.group(2), mt.group(3) or ""
+        known = self.lookup.get(host.lower())
+        role = share_role(share, host)
+        name = known or self.token(host, role)
+        if rest and role == "FILE_SERVER":                  # the company's own documents: names hidden
+            rest = "\\" + self.token(rest.strip("\\"), "FILE")
+        return f"\\\\{name}\\{share}{rest}"
+
+    def users(self, mt):
+        prefix, user, rest = mt.group(1), mt.group(2), mt.group(3) or ""
+        if user.lower() in ("public", "default", "all users", "default user", "desktop.ini"):
+            return mt.group(0)
+        placeholder = re.fullmatch(r"[A-Z]+(?:_[A-Z]+)*_\d+|[A-Z]+(?:_[A-Z]+)+", user)
+        u = user if placeholder else (self.lookup.get(user.lower()) or self.token(user, "USER"))
+        parts = re.split(r"([\\/])", rest)
+        out, personal = [], False
+        for p in parts:
+            if p in ("\\", "/") or not p:
+                out.append(p)
+                continue
+            if personal:
+                out.append(self.token(p, "FILE"))
+            elif p.lower().startswith("onedrive - "):            # "OneDrive - Contoso": the company's name
+                out.append("OneDrive - " + self.token(p[11:], "COMPANY_NAME"))
+                personal = True
+            else:
+                out.append(p)
+                personal = p.lower() in PERSONAL or p.lower().startswith("onedrive")
+        return prefix + u + "".join(out)
+
+    def ip(self, mt):
+        try:
+            a = ipaddress.ip_address(mt.group(0))
+        except ValueError:
+            return mt.group(0)
+        if a.is_private or a.is_loopback or a.is_link_local or a.is_reserved or a.is_multicast or str(a).startswith(("0.", "255.")):
+            return mt.group(0)          # local addressing is needed for network diagnosis and identifies no one
+        return self.token(mt.group(0), "PUBLIC_IP")
+
+    def line(self, s):
+        s = UNC.sub(self.unc, s)
+        if self.fixed_rx:
+            s = self.fixed_rx.sub(lambda mt: self.lookup.get(mt.group(0).lower(), mt.group(0)), s)
+        s = re.sub(r"\b([A-Za-z0-9-]+)\.(AD_DOMAIN(?:_\d+)?)\b",
+                   lambda mt: (mt.group(1) if mt.group(1).isupper() and "_" in mt.group(1) else self.token(mt.group(1), "SERVER"))
+                   + "." + mt.group(2), s)                     # hosts in the company's domain: names hidden too
+        s = USERS_PATH.sub(self.users, s)
+        s = NETBIOS_USER.sub(lambda mt: self.lookup.get(mt.group(1).lower(), "AD_DOMAIN") + "\\" + mt.group(2), s)
+        s = RECOVERY_KEY.sub("RECOVERY_KEY", s)
+        s = PRODUCT_KEY.sub("PRODUCT_KEY", s)
+        s = DOMAIN_SID.sub("DOMAIN_SID", s)
+        s = EMAIL.sub(lambda mt: self.token(mt.group(0), "EMAIL"), s)
+        s = MAC.sub(lambda mt: self.token(mt.group(0).lower(), "MAC"), s)
+        s = SSID.sub(lambda mt: mt.group(1) + self.token(mt.group(2), "WIFI"), s)
+        s = IPV4.sub(self.ip, s)
+        s = PHONE.sub(lambda mt: self.token(re.sub(r"\s", "", mt.group(0)), "PHONE"), s)
+        return s
+
+    def close(self):
+        if self.changed:
+            save(self.m)
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--learn"]:
+        try:
+            MAP.unlink()
+        except OSError:
+            pass
+        m = load()
+        print(f"  {len(m['fixed'])} identities learned locally (kept in memory on this laptop).")
+        return 0
+    if args[:1] == ["--show"]:
+        if os.environ.get("SYSMEDIC_AI"):
+            sys.exit("REFUSED: the real values are the engineer's.")
+        for real, p in sorted(load()["fixed"].items(), key=lambda kv: kv[1]):
+            print(f"  {p:<24} {real}")
+        return 0
+    if args[:1] in (["-h"], ["--help"]):
+        print(__doc__)
+        return 0
+    c = Cleaner()
+    try:
+        for raw in sys.stdin.buffer:
+            sys.stdout.write(c.line(raw.decode("utf-8", "replace")))
+            sys.stdout.flush()
+    except (BrokenPipeError, KeyboardInterrupt):
+        pass
+    finally:
+        c.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -342,10 +342,15 @@
       "hwclock -w*": "deny",
       "hwclock *--set*": "deny",
       "timedatectl set-time*": "deny",
-      "timedatectl set-local-rtc*": "deny"
+      "timedatectl set-local-rtc*": "deny",
+      "*sysmedic-consent*": "deny",
+      "*/run/sysmedic/consent*": "deny",
+      "*redact.json*": "deny",
+      "*sysmedic-redact --show*": "deny",
+      "*sysmedic-redact --learn*": "deny"
     },
     "edit": "deny",
-    "webfetch": "allow",
+    "webfetch": "ask",
     "external_directory": {
       "*": "ask",
       "/run/sysmedic/latest/*": "allow",
@@ -356,6 +361,13 @@
       "/mnt/persist/backups/**": "allow",
       "/opt/sysmedic/*": "allow",
       "/opt/sysmedic/**": "allow"
-    }
+    },
+    "read": "deny",
+    "glob": "deny",
+    "grep": "deny",
+    "list": "deny",
+    "lsp": "deny",
+    "task": "deny",
+    "websearch": "deny"
   }
 }

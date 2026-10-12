@@ -8,7 +8,11 @@ _sysmedic_audit_file() {
     if [ -n "$d" ] && [ -d "$d" ]; then echo "$d/audit.log"; else mkdir -p /run/sysmedic; echo /run/sysmedic/audit.log; fi
 }
 
-if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ]; then
+# The cloud AI's command re-run below (output cleaned): already logged and checked by its parent
+_sysmedic_rerun=
+[ -n "${SYSMEDIC_REDACTED:-}" ] && [ "${BASH_EXECUTION_STRING:-}" = "$SYSMEDIC_REDACTED" ] && _sysmedic_rerun=1
+
+if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ] && [ -z "$_sysmedic_rerun" ]; then
     printf '%s [ai:%s] %s\n' "$(date -Is)" "$SYSMEDIC_AI" "${BASH_EXECUTION_STRING//$'\n'/ ⏎ }" \
         >> "$(_sysmedic_audit_file)" 2>/dev/null
 fi
@@ -23,6 +27,21 @@ if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ] && [ -e /run
         else
             exit 126
         fi
+    fi
+fi
+
+# The customer's own folders (C:\Users, /home) are closed to the AI until the engineer records the customer's
+# explicit agreement on this keyboard (sysmedic-consent users). Consent records are never the AI's to make.
+if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ] && [ -z "$_sysmedic_rerun" ]; then
+    if [[ "$BASH_EXECUTION_STRING" =~ sysmedic-consent|/run/sysmedic/consent|redact\.json|sysmedic-redact[[:space:]]+--show ]]; then
+        echo "SysMedic: REFUSED: consent and the cleaning map are the engineer's." >&2
+        printf '%s [ai:%s] REFUSED (consent/cleaning map): %s\n' "$(date -Is)" "$SYSMEDIC_AI" "${BASH_EXECUTION_STRING//$'\n'/ ⏎ }" >> "$(_sysmedic_audit_file)" 2>/dev/null
+        exit 126
+    fi
+    if [ ! -e /run/sysmedic/consent/users ] && [[ "$BASH_EXECUTION_STRING" =~ [/\\]([Uu][Ss][Ee][Rr][Ss]|home)([/\\\"\'*[:space:]]|$) ]]; then
+        echo "SysMedic: the customer's own folders (C:\\Users, /home) are closed to the AI without the customer's explicit agreement. Ask the engineer: with the customer's OK they record it on the laptop (sysmedic-consent users)." >&2
+        printf '%s [ai:%s] REFUSED (user folders, no consent): %s\n' "$(date -Is)" "$SYSMEDIC_AI" "${BASH_EXECUTION_STRING//$'\n'/ ⏎ }" >> "$(_sysmedic_audit_file)" 2>/dev/null
+        exit 126
     fi
 fi
 
@@ -45,4 +64,12 @@ if [[ $- == *i* ]] && [ -z "${SYSMEDIC_AI:-}" ]; then
         _sysmedic_last=$c
     }
     case "${PROMPT_COMMAND:-}" in *_sysmedic_log_cmd*) ;; *) PROMPT_COMMAND="_sysmedic_log_cmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;; esac
+fi
+
+# Cloud AI: everything the command prints goes through sysmedic-redact before the cloud sees it (names, the company,
+# its servers, keys, personal file names: replaced with placeholders, consistently for the visit).
+if [ "${SYSMEDIC_AI:-}" = opencode ] && [ -n "${BASH_EXECUTION_STRING:-}" ] && [ -z "${SYSMEDIC_REDACTED:-}" ]; then
+    export SYSMEDIC_REDACTED="$BASH_EXECUTION_STRING"
+    bash -c "$BASH_EXECUTION_STRING" 2>&1 | /usr/local/bin/sysmedic-redact
+    exit "${PIPESTATUS[0]}"
 fi

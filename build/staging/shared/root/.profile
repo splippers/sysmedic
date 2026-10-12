@@ -91,7 +91,8 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     online=$(python3 -c 'import json; print(int(json.load(open("/run/sysmedic/latest/scan.json"))["network"]["online"]))' 2>/dev/null)
     mode=offline
     if [ "$online" = 1 ] && [ "$mem_gb" -ge 4 ] && grep -qw avx /proc/cpuinfo; then
-        ui_info "Cloud AI available (OpenCode Zen, free)" "it sees this scan and command output; serial numbers are kept out; files are read only with your approval"
+        ui_info "Cloud AI available (OpenCode Zen, free)" "it sees this scan and command output, cleaned on this laptop first: names, the company, its servers, keys and personal files are replaced"
+        ui_warn "The free model's provider may use what it sees to improve its model" "the customer's own folders stay closed unless they agree (sysmedic-consent users); n = offline assistant, nothing leaves this laptop"
         read -r -t 60 -p "  ${_U_ACC:-}❯${_U_N:-} Does the customer consent to cloud AI? [y/N] " consent || true
         if [ "$consent" = y ] || [ "$consent" = Y ]; then
             mode=cloud; audit "CONSENT cloud AI: yes"
