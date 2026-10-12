@@ -6,7 +6,7 @@ From the field: OpenCode Zen's free models (Big Pickle included) may use data fr
 
 - **`sysmedic-redact`:** every cloud-AI command's output is cleaned on the laptop before the cloud sees it. Role placeholders that keep the meaning (`USER_1`, `PC_NAME`, `COMPANY_NAME`, `AD_DOMAIN`, `WDS_SERVER`, `SCCM_SERVER`, `WSUS_SERVER`, `INTUNE_TENANT_ID`, `EMAIL_1`, `FILE_1`, …), learned locally from the offline registry; the map never leaves the laptop. Review bundles are cleaned too.
 - **The customer's own folders are closed to the AI** until the engineer records the customer's agreement: `sysmedic-consent users`.
-- **OpenCode reads only through the cleaned shell:** its file/search tools and web search are off; web fetches need approval.
+- **Every OpenCode tool's output is cleaned** by a SysMedic plugin (its read tool must stay: Zen's free tier refuses requests without it, found in testing); search tools and web search off; web fetches need approval. The plugin's library ships from the build kit, so it works offline.
 - **The consent screen says it plainly:** the free model's provider may use what it sees; answering n keeps everything on the laptop (offline assistant).
 - `sysmedic-note --help` shows help instead of saving "--help" as a job note.
 

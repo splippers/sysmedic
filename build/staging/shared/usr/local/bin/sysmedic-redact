@@ -298,6 +298,9 @@ class Cleaner:
         if self.dirty:
             self.compile()
         s = UNC.sub(self.unc, s)
+        s = EMAIL.sub(lambda mt: self.token(mt.group(0), "EMAIL"), s)     # before names: "bob" in bob.smith@…
+        if self.dirty:
+            self.compile()
         if self.fixed_rx:
             s = self.fixed_rx.sub(lambda mt: self.lookup.get(mt.group(0).lower(), mt.group(0)), s)
         s = re.sub(r"\b([A-Za-z0-9-]+)\.(AD_DOMAIN(?:_\d+)?)\b",
@@ -308,7 +311,6 @@ class Cleaner:
         s = RECOVERY_KEY.sub("RECOVERY_KEY", s)
         s = PRODUCT_KEY.sub("PRODUCT_KEY", s)
         s = DOMAIN_SID.sub("DOMAIN_SID", s)
-        s = EMAIL.sub(lambda mt: self.token(mt.group(0), "EMAIL"), s)
         s = MAC.sub(lambda mt: self.token(mt.group(0).lower(), "MAC"), s)
         s = SSID.sub(lambda mt: mt.group(1) + self.token(mt.group(2), "WIFI"), s)
         s = IPV4.sub(self.ip, s)

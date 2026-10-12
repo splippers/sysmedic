@@ -61,6 +61,19 @@ install_tree() {
     done
     sudo rsync -rlpt --chown=root:root --exclude=__pycache__ "$ST/shared/" "$root/"
     [ -d "$ST/editions/$ed" ] && sudo rsync -rlpt --chown=root:root --exclude=__pycache__ "$ST/editions/$ed/" "$root/"
+    # OpenCode plugin library (62 MB, kept in the kit, not the repo): the SysMedic plugin that cleans every tool's
+    # output needs it, and without it OpenCode tries to download it at start, which fails offline
+    local plug="$KIT/downloads/opencode-plugin"
+    if [ -d "$plug/node_modules/@opencode-ai/plugin" ]; then
+        sudo rsync -a --delete --chown=root:root "$plug/node_modules" "$root/root/.config/opencode/"
+        sudo install -o root -g root -m 644 "$plug/package.json" "$plug/package-lock.json" "$root/root/.config/opencode/"
+        local want have
+        want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$plug/node_modules/@opencode-ai/plugin/package.json" 2>/dev/null)
+        have=$(sudo strings "$root/usr/local/bin/opencode" 2>/dev/null | grep -m1 -oE '"version":"1\.[0-9]+\.[0-9]+"' | grep -oE '[0-9.]+' || true)
+        [ -n "$have" ] && [ "$want" != "$have" ] && say "WARNING: OpenCode is $have but the kit's plugin library is $want: rebuild downloads/opencode-plugin"
+    else
+        say "WARNING: no OpenCode plugin library in the kit (downloads/opencode-plugin): cloud AI output won't be cleaned by the plugin"
+    fi
     # AI instructions: shared core with this edition's toolkit section
     python3 - "$ST/agent/core.md" "$ST/agent/$ed.md" > "$WORK/agent.md" <<'EOF'
 import sys

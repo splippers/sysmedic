@@ -362,7 +362,6 @@
       "/opt/sysmedic/*": "allow",
       "/opt/sysmedic/**": "allow"
     },
-    "read": "deny",
     "glob": "deny",
     "grep": "deny",
     "list": "deny",
