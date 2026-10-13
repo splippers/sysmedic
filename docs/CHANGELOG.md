@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026.10.13 (night): the cloud AI's privacy filter works again; AI conversations in the vault
+
+From the caddy's afternoon visit (an XPS 15 left joined to a test domain).
+
+- **The privacy filter inside OpenCode hadn't been running since OpenCode 2.** OpenCode 2 needs a new plugin format and only logs a warning when it can't load one, so OpenCode's own file tools (read and the others) sent file contents uncleaned, and the user-folder rule didn't apply to them. The shell route (`audit.sh`) was cleaned and refused as designed throughout. The plugin is rewritten for OpenCode 2 and tested against it (a file read reaches the model cleaned; a read under a user folder is refused, relative paths included). **The cloud AI no longer starts without it** (`sysmedic-ai-repair --check` shows it).
+- **The AI's conversations are in the vault.** OpenCode kept its database, the output of every command the AI ran, and the engineer's prompts in plain folders on SysMedic's drive. They now live in the vault (`ai-data/`, `ai-state/`); what older versions left in plain folders moves in, and is deleted, when the vault next opens. Locked, they stay in memory like the visit. Its settings stay outside.
+- **The cleaner learns again when a BitLocker volume is unlocked.** It only learned when its map was two minutes old, and every new placeholder refreshed the map, so in a busy visit it never learned the domain it had just made readable. It now also catches a domain's short name (`CORP\anna`), its domain controller (Group Policy, and `dc1` in the hosts file → `DC_SERVER`), names written with escaped dots (`grep 'corp\.example\.com'`), hosts inside the domain (`setup.<domain>` → `SERVER_1.AD_DOMAIN`, without hiding the word "setup" everywhere), and gives one placeholder to a computer name written in two cases.
+- **`sysmedic-win reg-set` and `reg-delete`:** change or delete one offline registry value, once the partition is unlocked. The hive is copied to the session's backups first, the change is logged and read back, and the engineer approves each. `reged -I` couldn't delete (it writes the text `-`).
+- **`ntfsfix -n` (read-only check) is allowed for the AI**, as its instructions always said; repairs stay blocked.
+- **Unlock messages say what happens:** a whole-disk unlock no longer claims both "every partition becomes writable" and "its sibling partitions stay protected". Unlocking a BitLocker partition saves the open volume's NTFS metadata first, instead of "no metadata backup available for 'ntfs⏎BitLocker'". `sysmedic-guard status` shows an open BitLocker volume as read-only or WRITABLE, not "locked … unlocked".
+
 ## 2026.10.13 (evening): Wi-Fi remembered in the vault
 
 - **The vault's passphrase is now the first screen**, before the network: unlocking it brings back the Wi-Fi networks saved in it, which join by themselves (the network check waits up to 20 s for them).

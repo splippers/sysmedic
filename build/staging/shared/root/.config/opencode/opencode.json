@@ -253,6 +253,8 @@
       "fsck.fat -a*": "deny",
       "dosfsck -a*": "deny",
       "ntfsfix*": "deny",
+      "ntfsfix -n *": "allow",
+      "ntfsfix --no-action *": "allow",
       "xfs_repair*": "deny",
       "*--repair*": "deny",
       "mke2fs*": "deny",

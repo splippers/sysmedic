@@ -36,6 +36,9 @@ assert c.get("default_agent") == "SysMedic" and "SysMedic" in c.get("agent", {})
 assert len(c["permission"]["bash"]) > 50 and c.get("command")
 PY
     then ok "Config: SysMedic agent, permission rules and test commands present"; else bad "Config is missing or damaged ($CFG/opencode.json)"; fi
+    if grep -q '^export default' "$CFG/plugins/sysmedic-clean.js" 2>/dev/null && grep -q 'id: "sysmedic-clean"' "$CFG/plugins/sysmedic-clean.js"; then
+        ok "Privacy filter present (cleans what the file tools send)"
+    else bad "Privacy filter missing or in an old format ($CFG/plugins/sysmedic-clean.js): the cloud AI won't start"; fi
     [ -s /opt/sysmedic/SYSMEDIC-AGENT.md ] && ok "SysMedic instructions present" || bad "SysMedic instructions missing (/opt/sysmedic/SYSMEDIC-AGENT.md)"
     if curl -sf --max-time 3 http://127.0.0.1:11434/api/version >/dev/null; then
         local models; models=$(curl -sf --max-time 5 http://127.0.0.1:11434/api/tags | python3 -c "import json,sys; print(' '.join(m['name'] for m in json.load(sys.stdin)['models']))" 2>/dev/null)

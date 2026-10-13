@@ -31,6 +31,11 @@ Deep troubleshooting (read-only; PART can also be files or a folder handed over,
                                     all of the above plus info/crashes/autoruns, saved as a report in the
                                     session folder (windows-checkup-*.md)
 
+Repairs (the engineer unlocks the partition first; the hive is copied to the session's backups, the change is
+logged and read back; SAM/SECURITY refused):
+  sysmedic-win reg-set    PART KEY NAME TYPE DATA   set one value (TYPE: dword, qword, sz, expand_sz, multi_sz, binary)
+  sysmedic-win reg-delete PART KEY NAME             delete one value
+
 Engineer only (run on a console):
   sysmedic-win bitlocker DEV        unlock a BitLocker volume with its recovery key (read-only)
   sysmedic-win bitlocker-web        let someone enter the key from a phone/laptop on the same network
@@ -271,6 +276,109 @@ def cmd_reg(args):
                 for sk in subs[:60]:
                     show(kp + "\\" + sk, level + 1)
         show(p, 0)
+
+
+REG_TYPES = {"sz": 1, "expand_sz": 2, "binary": 3, "dword": 4, "multi_sz": 7, "qword": 11}
+
+
+def reg_target(part):
+    """The writable, mounted Windows volume for a registry change: (device, mountpoint, Mounted or None)."""
+    if part in bitlocker_volumes():
+        part = f"/dev/mapper/bitlocker-{os.path.basename(part)}"
+    if not os.path.exists(part):
+        sys.exit(f"  No such volume: {part}")
+    if is_locked(part):
+        sys.exit(f"  {part} is write-protected. The engineer unlocks it first on Alt+F2: sysmedic-unlock {part}")
+    for line in run(["findmnt", "-rno", "TARGET,OPTIONS", "-S", part]).stdout.splitlines():
+        target, opts = line.split(" ", 1)
+        if "rw" in opts.split(","):
+            return part, target, None
+    if run(["findmnt", "-rno", "TARGET", "-S", part]).stdout.strip():
+        sys.exit(f"  {part} is mounted read-only. Unmount it first (umount {part}), then run this again.")
+    m = Mounted(part, rw=True)
+    try:
+        return part, m.__enter__(), m
+    except RuntimeError as e:
+        sys.exit(f"  Not changed: {e}")
+
+
+def reg_value_bytes(typ, data):
+    if typ in (4, 11):
+        n = int(data, 0)
+        return n.to_bytes(4 if typ == 4 else 8, "little")
+    if typ in (1, 2):
+        return (data + "\0").encode("utf-16-le")
+    if typ == 7:
+        return "".join(s + "\0" for s in data.split("|")).encode("utf-16-le") + b"\0\0"
+    return bytes.fromhex(data.replace(" ", ""))
+
+
+def cmd_reg_write(args, delete):
+    """reg-set PART KEY NAME TYPE DATA / reg-delete PART KEY NAME: change one value in the offline registry.
+    reged's .reg import can't delete (it writes the text '-'), and its interactive mode is no tool for the AI:
+    this backs the hive up, changes one value, and reads it back."""
+    what = "reg-delete" if delete else "reg-set"
+    need = 3 if delete else 5
+    if len(args) != need or not args[0].startswith("/dev/"):
+        sys.exit(f"usage: sysmedic-win {what} /dev/PART KEY NAME" + ("" if delete else " TYPE DATA") +
+                 "\n  e.g. sysmedic-win reg-delete /dev/nvme0n1p3 HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate WUServer"
+                 "\n       sysmedic-win reg-set /dev/nvme0n1p3 HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU NoAutoUpdate dword 0"
+                 f"\n  TYPE: {', '.join(REG_TYPES)} (multi_sz: items separated by |; binary: hex)")
+    part, key, name = args[0], args[1], args[2]
+    hive_name, path = reg_split(key)
+    if hive_name in ("SAM", "SECURITY"):
+        sys.exit("Refused: the SAM and SECURITY hives hold password hashes and secrets; SysMedic never touches them.")
+    if hive_name not in REG_HIVES:
+        sys.exit(f"Unknown hive '{hive_name}': use SYSTEM, SOFTWARE or DEFAULT (HKLM\\SYSTEM\\…, HKLM\\SOFTWARE\\…)")
+    if not delete:
+        typ = REG_TYPES.get(args[3].lower()) or sys.exit(f"Unknown TYPE '{args[3]}': use {', '.join(REG_TYPES)}")
+        try:
+            new = reg_value_bytes(typ, args[4])
+        except ValueError as e:
+            sys.exit(f"  Bad DATA for {args[3]}: {e}")
+    import hivex
+    dev, mp, m = reg_target(part)
+    try:
+        hive = winlib.ci_path(mp, REG_HIVES[hive_name])
+        if not hive:
+            sys.exit(f"  No {hive_name} hive on {dev}")
+        h = hivex.Hivex(str(hive), write=True)
+        node = h.root()
+        if hive_name == "SYSTEM" and re.match(r"currentcontrolset(\\|$)", path, re.I):
+            path = winlib.control_set(winlib.Hive(hive)) + path[len("CurrentControlSet"):]
+        for part_name in [p for p in path.split("\\") if p]:
+            node = h.node_get_child(node, part_name)
+            if node is None:
+                sys.exit(f"  No such key: {hive_name}\\{path}")
+        vals = [{"key": h.value_key(v), "t": h.value_type(v)[0], "value": h.value_value(v)[1]} for v in h.node_values(node)]
+        old = [v for v in vals if v["key"].lower() == name.lower()]
+        if delete and not old:
+            print(f"  {hive_name}\\{path}: no value '{name}' (nothing to delete)")
+            return
+        stamp = datetime.datetime.now().strftime("%H%M%S")
+        bak = backup_dir() / "registry" / f"{hive_name}-before-{what}-{stamp}"
+        bak.parent.mkdir(parents=True, exist_ok=True)
+        n = 1
+        while bak.exists():                                   # two changes in one second: never overwrite a copy
+            n += 1
+            bak = bak.with_name(f"{hive_name}-before-{what}-{stamp}-{n}")
+        shutil.copy2(hive, bak)
+        keep = [v for v in vals if v["key"].lower() != name.lower()]
+        if not delete:
+            keep.append({"key": old[0]["key"] if old else name, "t": typ, "value": new})
+        h.node_set_values(node, keep)
+        h.commit(None)
+        after = winlib.Hive(hive).get(path, name, None)
+        if delete and after is not None or not delete and after is None:
+            sys.exit(f"  {C['red']}The change didn't take (read back: {fmt_val(after)}). The hive copy is in {bak}{C['end']}")
+        was = fmt_val(winlib.Hive(bak).get(path, name, None)) if old else "(not set)"
+        now = "(deleted)" if delete else fmt_val(after)
+        audit(f"{what} {dev} {hive_name}\\{path}\\{name}: {was} -> {now} (hive copy: {bak.name})")
+        print(f"  {C['grn']}Done.{C['end']} {hive_name}\\{path}\\{name}: {was} → {now}")
+        print(f"  {C['dim']}Hive copy before the change: {bak}{C['end']}")
+    finally:
+        if m:
+            m.__exit__()
 
 
 BCD_TYPES = {0x10100002: "Windows Boot Manager", 0x10200003: "Windows Boot Loader", 0x10200004: "Resume from Hibernate",
@@ -934,7 +1042,8 @@ def cmd_checkup(args):
 COMMANDS = {"info": cmd_info, "crashes": cmd_crashes, "events": cmd_events, "autoruns": cmd_autoruns,
             "malware": cmd_malware, "evtx": cmd_evtx, "registry": cmd_registry, "reg": cmd_reg, "bcd": cmd_bcd, "cbs": cmd_cbs, "etl": cmd_etl,
             "checkup": cmd_checkup, "bitlocker": cmd_bitlocker, "bitlocker-web": cmd_bitlocker_web, "fix-update": cmd_fix_update,
-            "fix-hibernation": cmd_fix_hibernation, "reset-password": cmd_reset_password}
+            "fix-hibernation": cmd_fix_hibernation, "reset-password": cmd_reset_password,
+            "reg-set": lambda a: cmd_reg_write(a, False), "reg-delete": lambda a: cmd_reg_write(a, True)}
 
 
 @timed_main("sysmedic-win")

@@ -135,7 +135,8 @@ PY
     local good=$root/usr/local/share/sysmedic/opencode
     sudo rm -rf "$good"; sudo mkdir -p "$good/config"
     sudo cp -a "$root/root/.config/opencode/opencode.json" "$root/root/.config/opencode/tui.json" \
-               "$root/root/.config/opencode/cli.json" "$root/root/.config/opencode/themes" "$good/config/"
+               "$root/root/.config/opencode/cli.json" "$root/root/.config/opencode/themes" \
+               "$root/root/.config/opencode/plugins" "$good/config/"
     sudo cp "$ST/shared/root/.local/state/opencode/kv.json" "$good/kv.json"
     if [ -f "$root/usr/local/bin/opencode" ] && [ ! -L "$root/usr/local/bin/opencode" ]; then
         sudo cp "$root/usr/local/bin/opencode" "$good/opencode"

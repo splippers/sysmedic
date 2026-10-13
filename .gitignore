@@ -10,3 +10,5 @@ build/release/
 # field-session write-ups and copies hold customer data, and the repo is published as releases: keep them local
 /sessions/
 docs/sessions/
+# a local training-data experiment from field transcripts: customer data, never in the repo
+/training/

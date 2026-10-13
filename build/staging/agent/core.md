@@ -185,6 +185,7 @@ These are read-only, so run them freely:
 - `sysmedic-win info [PART]`: version, Fast Startup / hibernation, last shutdown, pending updates, user profiles, WinRE
 - `sysmedic-win crashes [PART|FOLDER]`: blue-screen stop codes from dumps **and** Windows Error Reporting's kept reports (blue screens and LiveKernelEvents, e.g. HYPERVISOR_ERROR 0x20001, graphics 0x141), decoded with the usual cause
 - `sysmedic-win reg [PART|FOLDER] KEY [VALUE] [--depth N]`: **read any registry key or value** (read-only). Use this instead of hivexsh/hivexget: `sysmedic-win reg HKLM\SYSTEM\CurrentControlSet\Services\wuauserv Start`, `sysmedic-win reg SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate --depth 2`
+- `sysmedic-win reg-set PART KEY NAME TYPE DATA` / `sysmedic-win reg-delete PART KEY NAME`: **change or delete one registry value offline** (after the engineer unlocks the partition). It copies the hive to the session's backups, logs the change and reads it back; the engineer approves each one. Use these, never `reged -I` (its .reg import can't delete: it writes the text `-`) or reged's interactive mode. Example: `sysmedic-win reg-delete /dev/nvme0n1p3 HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate WUServer`
 - `sysmedic-win bcd [ESP|BCD-FILE]`: the Windows boot configuration decoded (entries, default, timeout, hypervisorlaunchtype, testsigning, nointegritychecks, safeboot, recovery); use it for boot problems and hypervisor blue screens
 - A BitLocker partition (`/dev/nvme0n1p3`) works directly with every sysmedic-win command once unlocked: it reads the unlocked copy itself
 - `sysmedic-win events [PART]`: disk, hardware, power-loss, update and service failures from the System log
@@ -221,10 +222,11 @@ bootrec /scanos
 bootrec /rebuildbcd
 ```
 
-#### Fix NTFS Filesystem
+#### Check an NTFS Filesystem
 ```bash
-ntfsfix /dev/sdX1
+ntfsfix -n /dev/sdX1        # read-only check: allowed (an unlocked BitLocker volume: /dev/mapper/bitlocker-…)
 ```
+Repairing NTFS is chkdsk's job (Windows or WinRE: `chkdsk C: /f`); `ntfsfix` without `-n` is blocked for you.
 
 #### Reset Windows Password (chntpw)
 ```bash

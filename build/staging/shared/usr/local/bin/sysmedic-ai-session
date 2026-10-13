@@ -4,6 +4,15 @@
 mode=${1:-offline}
 if [ "$mode" = cloud ]; then
     t0=$(date +%s)
+    # The file tools' cleaning lives in this plugin. OpenCode only logs a warning when it can't load one (seen: the
+    # 1.x format under OpenCode 2), so check it here and don't start without it.
+    plug=/root/.config/opencode/plugins/sysmedic-clean.js
+    if ! grep -q '^export default' "$plug" 2>/dev/null || ! grep -q 'id: "sysmedic-clean"' "$plug"; then
+        echo ""; echo "  The cloud AI is off: its privacy filter ($plug) is missing or in an old format."
+        echo "  Nothing was sent. Repair it: sysmedic-ai-repair (menu 6), or use the offline assistant."; sleep 8
+        exit 1
+    fi
+    /usr/local/sbin/sysmedic-vault ai 2>/dev/null           # its conversations are kept in the vault, not in plain files
     /usr/local/bin/sysmedic-redact --learn >/dev/null 2>&1   # what to clean out, learned locally before anything is sent
     if [ "${2:-}" = --explain ]; then
         SYSMEDIC_AI=opencode BASH_ENV=/etc/sysmedic/audit.sh opencode \

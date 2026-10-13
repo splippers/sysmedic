@@ -93,19 +93,22 @@ bitlocker_mode() {   # bitlocker_mode KNAME rw|ro
 
 cmd_status() {
     local any=0
-    printf '  %-16s %-9s %-10s %-8s %s\n' DEVICE STATE SIZE FS LABEL
+    printf '  %-22s %-9s %-10s %-10s %s\n' DEVICE STATE SIZE FS LABEL
     while read -r name type size fs label; do
         guarded_kind "$name" || continue
         disk=$(parent_disk "$name")
         is_sysmedic_disk "$disk" && continue
         any=1
-        printf '  %-16s %-9s %-10s %-8s %s\n' "/dev/$name" "$(ro_state "$name")" "$size" "${fs:--}" "${label:-}"
+        printf '  %-22s %-9s %-10s %-10s %s\n' "/dev/$name" "$(ro_state "$name")" "$size" "${fs:--}" "${label:-}"
     done < <(lsblk -nrpo KNAME,TYPE,SIZE,FSTYPE,LABEL | sed 's|^/dev/||')
     [ $any = 0 ] && echo "  (no disks besides the SysMedic stick)"
     local m
     for m in /dev/mapper/bitlocker-*; do
         [ -e "$m" ] || continue
-        printf '  %-16s %-9s %s\n' "${m#/dev/mapper/}" "$(ro_state "$(basename "$(readlink -f "$m")")")" "BitLocker volume, unlocked (follows /dev/${m#/dev/mapper/bitlocker-})"
+        # "locked" here would read as "still encrypted": it's open, and either read-only or writable
+        printf '  %-22s %-9s %-10s %-10s %s\n' "${m#/dev/mapper/}" \
+            "$( [ "$(ro_state "$(basename "$(readlink -f "$m")")")" = locked ] && echo read-only || echo WRITABLE)" \
+            "$(lsblk -dno SIZE "$m" | tr -d ' ')" "$(lsblk -dno FSTYPE "$m")" "open BitLocker volume of /dev/${m#/dev/mapper/bitlocker-}"
     done
 }
 
@@ -165,7 +168,7 @@ backup_before_unlock() {   # backup_before_unlock KNAME DEST
     sfdisk -d "/dev/$disk" > "$dest/partition-table-$disk.sfdisk" 2>/dev/null \
         && echo "    partition table of /dev/$disk → $(basename "$dest")/partition-table-$disk.sfdisk"
     [ "$k" = "$disk" ] && return 0          # whole-disk unlock: the table is the metadata
-    fs=$(lsblk -no FSTYPE "/dev/$k")
+    fs=$(lsblk -dno FSTYPE "/dev/$k")       # -d: this partition only, not an unlocked BitLocker volume on top of it
     size=$(blockdev --getsize64 "/dev/$k")
     free=$(df --output=avail -B1 "$dest" | tail -1)
     case "$fs" in
@@ -181,6 +184,14 @@ backup_before_unlock() {   # backup_before_unlock KNAME DEST
                 echo "    small partition: saving a full copy…"
                 dd if="/dev/$k" bs=4M status=none | zstd -q -T0 -o "$dest/$k.img.zst" \
                     && echo "    → $(basename "$dest")/$k.img.zst  (restore: zstd -dc … | dd of=/dev/$k)"
+            fi ;;
+        BitLocker)
+            if [ -e "/dev/mapper/bitlocker-$k" ]; then     # the unlocked volume inside is plain NTFS
+                echo "    saving NTFS metadata of the unlocked BitLocker volume (MFT, directories)…"
+                ntfsclone --metadata --save-image --force -o "$dest/bitlocker-$k.ntfs-metadata.img" "/dev/mapper/bitlocker-$k" >/dev/null 2>&1 \
+                    && echo "    → $(basename "$dest")/bitlocker-$k.ntfs-metadata.img  (inspect/restore: ntfsclone --restore-image)"
+            else
+                echo "    BitLocker volume still locked: no metadata backup (unlock it first with sysmedic-win bitlocker /dev/$k)"
             fi ;;
         *)  echo "    no metadata backup available for '$fs' — consider imaging with ddrescue first" ;;
     esac
@@ -237,7 +248,7 @@ cmd_unlock() {
     echo ""
     echo "  Unlock for WRITING:"
     lsblk -o NAME,SIZE,FSTYPE,LABEL,MODEL "/dev/$k" | sed 's/^/    /'
-    [ "$k" = "$disk" ] && echo "    !! This is a WHOLE DISK — every partition on it becomes writable."
+    [ "$k" = "$disk" ] && echo "    !! This is a WHOLE DISK: writes through /dev/$k can reach every partition on it."
     echo ""
     read -r -p "  Why? (one line, goes in the audit log): " reason
     [ -n "$reason" ] || { echo "  Cancelled."; exit 1; }
@@ -257,7 +268,11 @@ cmd_unlock() {
     fi
     audit "$(whoami)@${tty#/dev/}" "UNLOCK /dev/$k — reason: $reason — backups: $dest"
     echo ""
-    echo "  /dev/$k is now WRITABLE. Its sibling partitions stay protected."
+    if [ "$k" = "$disk" ]; then
+        echo "  /dev/$k (the whole disk) is now WRITABLE. Its partitions' own devices stay protected."
+    else
+        echo "  /dev/$k is now WRITABLE. The other partitions on /dev/$disk stay protected."
+    fi
     bitlocker_mode "$k" rw
     [ "$k" != "$disk" ] && echo "  Note: the kernel also allows writes to the whole-disk node /dev/$disk while this is unlocked."
     echo "  When the repair is done: sysmedic-lock"

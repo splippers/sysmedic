@@ -55,6 +55,47 @@ def windows_roots():
     return roots
 
 
+SERVER_HINTS = (("dc", "DC_SERVER"), ("ad", "DC_SERVER"), ("wsus", "WSUS_SERVER"), ("wds", "WDS_SERVER"),
+                ("sccm", "SCCM_SERVER"), ("prn", "PRINT_SERVER"), ("print", "PRINT_SERVER"), ("proxy", "PROXY_SERVER"),
+                ("fs", "FILE_SERVER"), ("file", "FILE_SERVER"), ("nas", "FILE_SERVER"))
+
+
+def server_role(name):
+    n = name.lower().split(".")[0]
+    for hint, role in SERVER_HINTS:
+        if re.fullmatch(hint + r"[-_]?\w{0,6}", n):
+            return role
+    return "SERVER"
+
+
+def hosts_servers(root, add):
+    """The company's own machines named in Windows' hosts file (private addresses only: public names are the
+    internet's, and "host.docker.internal"-style names are software's)."""
+    try:
+        text = Path(root, "Windows/System32/drivers/etc/hosts").read_text(errors="replace")
+    except OSError:
+        return
+    for line in text.splitlines():
+        f = line.split("#", 1)[0].split()
+        if len(f) < 2:
+            continue
+        try:
+            a = ipaddress.ip_address(f[0])
+        except ValueError:
+            continue
+        if not a.is_private or a.is_loopback:
+            continue
+        for name in f[1:]:
+            if name.lower() in ("localhost", "broadcasthost") or name.lower().endswith((".internal", ".localhost", ".local")):
+                continue
+            if "." in name:                               # "dc1.corp.example.com": the domain hides its hosts' names
+                add(name.split(".", 1)[1], "AD_DOMAIN") if name.count(".") >= 2 else None
+                continue
+            # a bare alias ("dc1"): only when it looks like a server, so "setup" or "store" stay ordinary words
+            if server_role(name) != "SERVER" or re.search(r"\d", name):
+                add(name, server_role(name))
+
+
 def learn():
     """{"names": {real: placeholder}, "servers": {...}} gathered from the machine itself."""
     found = {}                         # real value → role (placeholder stem)
@@ -64,14 +105,16 @@ def learn():
             v = value.strip().strip("\\").strip()
             if JUNK.match(v):
                 return
-            if len(v) >= 3 and v.lower() not in ("administrator", "default", "public", "system", "user", "windows"):
-                found.setdefault(v, role)
+            if len(v) >= 3 and v.lower() not in ("administrator", "default", "public", "system", "user", "windows") \
+                    and v.lower() not in {k.lower() for k in found}:
+                found[v] = role
 
     try:
         import winlib
     except ImportError:
         winlib = None
     for root in windows_roots() if winlib else []:
+        netbios = []
         sw = winlib.open_hive(root, "Windows/System32/config/SOFTWARE")
         sysh = winlib.open_hive(root, "Windows/System32/config/SYSTEM")
         if sysh:
@@ -91,12 +134,20 @@ def learn():
             for sid in sw.subkeys(cv + r"\ProfileList") or []:
                 p = sw.get(cv + r"\ProfileList\\" + sid, "ProfileImagePath")
                 if isinstance(p, str) and "\\users\\" in p.lower():
-                    add(p.rsplit("\\", 1)[-1], "USER")
+                    name = p.rsplit("\\", 1)[-1]
+                    add(name, "USER")
+                    # "anna.CONTOSO": a domain account's folder carries the domain's short (NetBIOS) name
+                    mt = re.fullmatch(r"[^.]+\.([A-Za-z][A-Za-z0-9-]{1,14})", name)
+                    if mt:
+                        netbios.append(mt.group(1))
             last = sw.get(r"Microsoft\Windows\CurrentVersion\Authentication\LogonUI", "LastLoggedOnUser")
             if isinstance(last, str) and "\\" in last:
                 dom, user = last.split("\\", 1)
                 add(dom, "AD_DOMAIN") if dom not in (".", "") else None
                 add(user, "USER")
+            gp = r"Microsoft\Windows\CurrentVersion\Group Policy\History"
+            add((sw.get(gp, "DCName") or "").lstrip("\\") or None, "DC_SERVER")
+            add(sw.get(gp, "MachineDomain"), "AD_DOMAIN")
             wu = r"Policies\Microsoft\Windows\WindowsUpdate"
             for k in ("WUServer", "WUStatusServer"):
                 v = sw.get(wu, k)
@@ -120,6 +171,11 @@ def learn():
             px = sw.get(inet, "ProxyServer")
             if isinstance(px, str):
                 add(re.sub(r"^\w+://|:\d+$", "", px.split(";")[0].split("=")[-1]), "PROXY_SERVER")
+        pcs = {v.lower() for v, r in found.items() if r == "PC_NAME"}
+        for nb in netbios:                                # not "anna.OFFICE-PC" (a local account's second folder)
+            if nb.lower() not in pcs and not nb.isdigit():
+                add(nb.upper(), "AD_DOMAIN")
+        hosts_servers(root, add)
         try:
             for d in Path(root, "Users").iterdir():
                 if d.is_dir() and not d.name.startswith(("All Users", "Default", "Public", "desktop.ini")):
@@ -155,25 +211,38 @@ def learn():
     return found
 
 
-def load():
+def disks():
+    """What learning reads from: a disk mounted or unmounted mid-visit means learning again at once."""
+    roots = list(windows_roots())
     try:
-        st = MAP.stat()
-        if time.time() - st.st_mtime < RELEARN:
-            return json.loads(MAP.read_text())
-    except (OSError, ValueError):
+        roots += [f[1] for f in (line.split() for line in open("/proc/mounts"))
+                  if len(f) > 2 and f[2] in ("ext4", "ext3", "xfs", "btrfs") and f[1] not in ("/", "/cdrom", "/mnt/persist")]
+    except OSError:
         pass
+    return sorted(roots)
+
+
+def load():
     old = {}
     try:
         old = json.loads(MAP.read_text())
     except (OSError, ValueError):
         pass
-    m = {"fixed": old.get("fixed", {}), "files": old.get("files", {}), "counters": old.get("counters", {})}
+    # By when it last learned, not by the file's age: every new placeholder rewrites the file, and a busy visit
+    # (seen: BitLocker unlocked mid-visit) then never learned the domain it had just made readable
+    now_disks = disks()
+    if old and time.time() - old.get("learned", 0) < RELEARN and old.get("disks") == now_disks:
+        return old
+    m = {"fixed": old.get("fixed", {}), "files": old.get("files", {}), "hosts": old.get("hosts", {}), "counters": old.get("counters", {}),
+         "learned": time.time(), "disks": now_disks}
     for real, p in list(m["fixed"].items()):          # file names are cleaned inside paths only, never as loose words
         if p.startswith("FILE_") and not p.startswith("FILE_SERVER"):
             m["files"][real] = m["fixed"].pop(real)
+    known = {k.lower() for k in m["fixed"]}
     for real, role in learn().items():
-        if real not in m["fixed"]:
+        if real.lower() not in known:                   # "OFFICE-PC" and "Office-PC": one PC_NAME
             m["fixed"][real] = numbered(m, role)
+            known.add(real.lower())
     save(m)
     return m
 
@@ -214,7 +283,7 @@ SSID = re.compile(r"(?i)(\bSSID\s*[:=]\s*|ssid=|ESSID:\s*\"?|Wi-Fi \")([^\"\n,;]
 # user segment and path parts may contain spaces ("Anna Lee", "Divorce papers final.docx"): run to the next separator,
 # quote, semicolon or line end. Over-cleaning a trailing word is the safe way to be wrong.
 USERS_PATH = re.compile(r"(?i)((?:[A-Z]:)?[\\/](?:Users|home)[\\/])([^\\/\n\"';|<>:]+)((?:[\\/][^\\/\n\"';|<>:]+)*)")
-NETBIOS_USER = re.compile(r"\b(?!NT AUTHORITY|BUILTIN|NT SERVICE|WORKGROUP)([A-Z][A-Z0-9-]{1,14})\\(USER_\d+)\b")
+NETBIOS_USER = re.compile(r"\b(?!NT AUTHORITY|BUILTIN|NT SERVICE|WORKGROUP)([A-Z][A-Z0-9-]{1,14})\\+(USER_\d+|OWNER_NAME)\b")
 
 
 def share_role(share, host=""):
@@ -243,14 +312,18 @@ class Cleaner:
     def compile(self):
         fixed = sorted(self.m["fixed"].items(), key=lambda kv: -len(kv[0]))
         # whole words only: a user "Bob" mustn't eat "Bobcat"
-        self.fixed_rx = re.compile("|".join(r"(?<![\w.-])" + re.escape(k) + r"(?![\w-])" for k, _ in fixed), re.I) if fixed else None
+        # dots may come escaped too: "corp\.example\.com" in a grep or regex the AI writes
+        # a domain also inside a longer name ("setup.corp.example.com": the host is cleaned by the rule below)
+        self.fixed_rx = re.compile("|".join((r"(?<![\w-])" if "." in k else r"(?<![\w.-])")
+                                            + re.escape(k).replace(r"\.", r"\\?\.") + r"(?![\w-])"
+                                            for k, _ in fixed), re.I) if fixed else None
         self.lookup = {k.lower(): v for k, v in fixed}
         self.dirty = False
 
     def token(self, real, role):
         """The placeholder for a newly seen value, remembered for the rest of the visit."""
-        if role == "FILE":                                    # kept apart: "Windows" in a path mustn't hide every "Windows"
-            files = self.m.setdefault("files", {})
+        if role in ("FILE", "SERVER"):                        # kept apart: "Windows" in a path mustn't hide every "Windows",
+            files = self.m.setdefault("files" if role == "FILE" else "hosts", {})   # nor "setup.corp…" every "setup"
             for k, v in files.items():
                 if k.lower() == real.lower():
                     return v
@@ -320,7 +393,7 @@ class Cleaner:
         if self.dirty:
             self.compile()
         if self.fixed_rx:
-            s = self.fixed_rx.sub(lambda mt: self.lookup.get(mt.group(0).lower(), mt.group(0)), s)
+            s = self.fixed_rx.sub(lambda mt: self.lookup.get(mt.group(0).replace("\\.", ".").lower(), mt.group(0)), s)
         s = re.sub(r"\b([A-Za-z0-9-]+)\.(AD_DOMAIN(?:_\d+)?)\b",
                    lambda mt: (mt.group(1) if mt.group(1).isupper() and "_" in mt.group(1) else self.token(mt.group(1), "SERVER"))
                    + "." + mt.group(2), s)                     # hosts in the company's domain: names hidden too
@@ -355,7 +428,7 @@ def main():
         if os.environ.get("SYSMEDIC_AI"):
             sys.exit("REFUSED: the real values are the engineer's.")
         m = load()
-        for real, p in sorted({**m["fixed"], **m.get("files", {})}.items(), key=lambda kv: kv[1]):
+        for real, p in sorted({**m["fixed"], **m.get("files", {}), **m.get("hosts", {})}.items(), key=lambda kv: kv[1]):
             print(f"  {p:<24} {real}")
         return 0
     if args[:1] in (["-h"], ["--help"]):
