@@ -62,6 +62,7 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     # Quick network attempt — don't block
     command -v netplan &>/dev/null && { netplan apply 2>/dev/null || true; }
     # First screen: the vault's passphrase (customer data, and the Wi-Fi networks remembered in it)
+    clear; echo ""; echo "  ${_U_B:-}SysMedic${_U_N:-} · starting up"; echo ""
     /usr/local/sbin/mount-persist || true
     /usr/local/sbin/sysmedic-vault unlock --boot || true      # customer data: encrypted vault, or memory only
     # Then get online (wired is automatic; saved Wi-Fi joins by itself; offers Wi-Fi), so the scan and cloud AI see the internet
