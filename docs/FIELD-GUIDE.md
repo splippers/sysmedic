@@ -24,9 +24,9 @@ From boot to sign-off. On the drive: `sysmedic-help field`.
 ## 3. What happens at boot (console 1)
 
 1. Console 1 (tty1) and console 2 (tty2) log in automatically. **Both are recorded** for later review (output only, never keystrokes).
-2. **Network first.** If Ethernet or tethering is already online, this passes by itself. Otherwise it lists the Wi-Fi networks nearby: press **Enter** to pick one (password asked there; kept in memory only, forgotten at shutdown) or **s** to carry on offline. It continues offline by itself after 60 s.
-3. The banner shows the **edition and version** and how SysMedic is connected, e.g. `caddy edition · v2026.10.04-…` · `Network: online via wlp0s20f3 (Wi-Fi "Office")`.
-4. **Encrypted vault:** type the drive's passphrase (hidden). Enter skips it: SysMedic works, but this visit stays in memory and is lost at shutdown, unless you unlock later (Alt+F2: `sysmedic-vault unlock`, or menu **V**). The first time, it offers to set the vault up: a passphrase, and a recovery key to write down (see [Safety and privacy](SAFETY-AND-PRIVACY.md#the-encrypted-vault-sysmedic-vault)).
+2. **Encrypted vault first:** type the drive's passphrase (hidden). Enter skips it: SysMedic works, but this visit stays in memory and is lost at shutdown, unless you unlock later (Alt+F2: `sysmedic-vault unlock`, or menu **V**). The first time, it offers to set the vault up: a passphrase, and a recovery key to write down (see [Safety and privacy](SAFETY-AND-PRIVACY.md#the-encrypted-vault-sysmedic-vault)).
+3. **Network.** Wi-Fi networks remembered in the vault join by themselves; Ethernet or tethering passes by itself too. Otherwise it lists the Wi-Fi networks nearby: press **Enter** to pick one (password asked there) or **s** to carry on offline (by itself after 60 s). Once online it asks whether to remember the network on this drive (encrypted, in the vault; answer n for a customer's network you won't be back on).
+4. The banner shows the **edition and version** and how SysMedic is connected, e.g. `caddy edition · v2026.10.04-…` · `Network: online via wlp0s20f3 (Wi-Fi "Office")`.
 5. The **triage scan** runs (read-only, under a minute). Findings are ordered critical → warning → note → OK, each with a next step.
 6. The **phone dashboard** address appears (QR code on console 2).
 7. **Cloud AI consent:** if there's internet, you're asked whether the customer consents. Only **y** enables the cloud AI; anything else, or no answer within 60 s, means offline.
@@ -97,7 +97,7 @@ Type that line, then the **48-digit recovery key** (8 groups of 6 digits; dashes
 
 ## 8. Wi-Fi
 
-The first screen at boot offers Wi-Fi. Later, `wifi` (menu 13) opens NetworkManager's picker: choose the network, type the password, press Esc to leave. Networks and passwords are kept in memory only and forgotten at shutdown; nothing is saved on the drive. WPS isn't supported. If no Wi-Fi adapter appears, the scan says why (usually a missing driver or firmware); use Ethernet or phone tethering.
+The first screen at boot offers Wi-Fi. Later, `wifi` (menu 13) opens NetworkManager's picker: choose the network, type the password, press Esc to leave. Networks and passwords are kept in memory and forgotten at shutdown, unless you answer y to "Remember Wi-Fi … on this drive?": then it's saved in the encrypted vault and joins by itself after the next unlock (`sysmedic-vault networks forget NAME` to drop it). WPS isn't supported. If no Wi-Fi adapter appears, the scan says why (usually a missing driver or firmware); use Ethernet or phone tethering.
 
 ## 9. Phone dashboard
 

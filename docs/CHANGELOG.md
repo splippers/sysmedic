@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.10.13 (evening): Wi-Fi remembered in the vault
+
+- **The vault's passphrase is now the first screen**, before the network: unlocking it brings back the Wi-Fi networks saved in it, which join by themselves (the network check waits up to 20 s for them).
+- **"Remember Wi-Fi … on this drive?"** after joining a network (first screen, `wifi`, menu 13): **y** saves it, password included, in the encrypted vault only; n (the default) keeps it in memory, forgotten at shutdown as before. With the vault locked nothing is saved. `sysmedic-vault networks` lists them; `sysmedic-vault networks forget NAME` drops one.
+- **The AI can't reach Wi-Fi passwords:** NetworkManager's files, `nmcli --show-secrets` and the vault are refused in its shell and its file tools, and any Wi-Fi password in command output is cleaned to `WIFI_PASSWORD`.
+
 ## 2026.10.13 (afternoon): fixes from the caddy's morning visits
 
 - **BitLocker repairs:** unlocking a partition for writing now makes its open BitLocker volume writable too (no key needed again), and `sysmedic-lock` makes it read-only again. Before, a volume first opened read-only (phone page, scan) stayed read-only whatever was unlocked, so repairs failed with "Read-only file system" and the engineer ended up unlocking the whole disk. `sysmedic-unlock` of the volume's `dm-` device unlocks its partition instead; `sysmedic-guard status` lists open BitLocker volumes.

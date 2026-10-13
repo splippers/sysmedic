@@ -61,7 +61,10 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
 
     # Quick network attempt — don't block
     command -v netplan &>/dev/null && { netplan apply 2>/dev/null || true; }
-    # First screen: get online (wired is automatic; offers Wi-Fi), so the scan and cloud AI see the internet
+    # First screen: the vault's passphrase (customer data, and the Wi-Fi networks remembered in it)
+    /usr/local/sbin/mount-persist || true
+    /usr/local/sbin/sysmedic-vault unlock --boot || true      # customer data: encrypted vault, or memory only
+    # Then get online (wired is automatic; saved Wi-Fi joins by itself; offers Wi-Fi), so the scan and cloud AI see the internet
     /usr/local/bin/sysmedic-connect
     clear
     setvtrgb /etc/sysmedic/vtrgb 2>/dev/null; clear   # SysMedic Night palette (also set at boot by setvtrgb.service)
@@ -71,8 +74,6 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
         || ui_banner "Rescue system" "$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition"
     ui_rule
 
-    /usr/local/sbin/mount-persist || true
-    /usr/local/sbin/sysmedic-vault unlock --boot || true      # customer data: encrypted vault, or memory only
     /usr/local/sbin/start-ollama && ui_ok "Offline AI ready" "$(/usr/local/sbin/sysmedic-ai-device status 2>/dev/null | sed 's/^ *//')"
     echo ''
 

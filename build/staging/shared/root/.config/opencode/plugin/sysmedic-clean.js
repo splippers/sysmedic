@@ -21,6 +21,9 @@ export const SysmedicClean = async () => ({
   "tool.execute.before": async (input, output) => {
     if (!["read", "grep", "glob", "list"].includes(input?.tool)) return
     const args = JSON.stringify(output?.args ?? {})
+    if (/system-connections|vault-fs|show-password|redact\.json|\/run\/sysmedic\/consent/.test(args)) {
+      throw new Error("SysMedic: refused: Wi-Fi passwords, the vault, the cleaning map and consent records are the engineer's.")
+    }
     if (USER_DIRS.test(args) && !existsSync(CONSENT)) {
       throw new Error("SysMedic: the customer's own folders (C:\\Users, /home) are closed to the AI without the customer's " +
         "explicit agreement. Ask the engineer: with the customer's OK they record it on the laptop (sysmedic-consent users).")

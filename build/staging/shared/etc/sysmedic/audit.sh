@@ -33,8 +33,8 @@ fi
 # The customer's own folders (C:\Users, /home) are closed to the AI until the engineer records the customer's
 # explicit agreement on this keyboard (sysmedic-consent users). Consent records are never the AI's to make.
 if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ] && [ -z "$_sysmedic_rerun" ]; then
-    if [[ "$BASH_EXECUTION_STRING" =~ sysmedic-consent|/run/sysmedic/consent|redact\.json|sysmedic-redact[[:space:]]+--show ]]; then
-        echo "SysMedic: REFUSED: consent and the cleaning map are the engineer's." >&2
+    if [[ "$BASH_EXECUTION_STRING" =~ sysmedic-consent|/run/sysmedic/consent|redact\.json|sysmedic-redact[[:space:]]+--show|system-connections|vault-fs|show-secrets|show-password|[[:space:]]-s[[:space:]].*(wifi|connection)|802-11-wireless-security ]]; then
+        echo "SysMedic: REFUSED: consent, the cleaning map, the vault and Wi-Fi passwords are the engineer's." >&2
         printf '%s [ai:%s] REFUSED (consent/cleaning map): %s\n' "$(date -Is)" "$SYSMEDIC_AI" "${BASH_EXECUTION_STRING//$'\n'/ ⏎ }" >> "$(_sysmedic_audit_file)" 2>/dev/null
         exit 126
     fi

@@ -12,6 +12,9 @@ stay outside it, so the drive boots and the AI works without the passphrase.
   sysmedic-vault lock           save and close (shutdown does this)
   sysmedic-vault reset          passphrase AND recovery key forgotten: erase the vault (its data is lost) and set up anew
   sysmedic-vault status --json
+  sysmedic-vault networks       Wi-Fi networks saved in the vault (they connect by themselves once it's unlocked)
+  sysmedic-vault networks offer after joining Wi-Fi: ask whether to remember it (passwords only ever saved in the vault)
+  sysmedic-vault networks forget NAME
 
 Not unlocked, SysMedic works as usual but this visit stays in memory: unlock before shutting down to keep it.
 On the build PC: sysmedic-vault mount FILE DIR (read-only) and sysmedic-vault umount DIR, to read a drive's vault.
@@ -41,6 +44,8 @@ FS = RUN / "vault-fs"                 # the opened vault's filesystem
 RAM = RUN / "ram"                     # stand-ins while it's locked
 TRANSCRIPTS = RUN / "transcripts"     # consoles are recorded here, then saved into the vault
 STATE = RUN / "vault.state"
+NETS = FS / "networks"                # Wi-Fi networks the engineer chose to remember (passwords inside)
+NM_RUN = Path("/run/NetworkManager/system-connections")   # NetworkManager's networks: memory only
 DATA = ["sessions", "backups", "private", "transcripts", "claude-review"]
 MIN_PASS = 10
 B, D, G, Y, R, CY, N = "\033[1m", "\033[2m", "\033[0;32m", "\033[1;33m", "\033[1;31m", "\033[0;36m", "\033[0m"
@@ -148,6 +153,7 @@ def adopt():
         bind(FS / d, PERSIST / d)
         shutil.rmtree(RAM / d, ignore_errors=True)
     os.chmod(FS / "private", 0o700)
+    restore_networks()
     save_transcripts()
     write_state()
     # Keep saving while it's open: a laptop that dies mid-job, or a shutdown that unmounts the vault before
@@ -545,6 +551,91 @@ def external_umount(target):
     return 0
 
 
+# ── Wi-Fi networks: remembered only in the vault ───────────────────────────
+
+def restore_networks():
+    """Hand the vault's saved networks to NetworkManager (in memory), which joins one in range by itself."""
+    if not NETS.is_dir():
+        return 0
+    NM_RUN.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for f in NETS.glob("*.nmconnection"):
+        dst = NM_RUN / f.name
+        shutil.copyfile(f, dst)
+        os.chmod(dst, 0o600)
+        n += 1
+    if n:
+        run(["nmcli", "connection", "reload"])
+        log(f"networks: {n} saved Wi-Fi network(s) handed to NetworkManager")
+    return n
+
+
+def active_wifi():
+    """(name, file) of the Wi-Fi connection in use, or (None, None)."""
+    for line in run(["nmcli", "-t", "-f", "NAME,UUID,TYPE", "connection", "show", "--active"]).stdout.splitlines():
+        name, uuid, kind = (line.rsplit(":", 2) + ["", ""])[:3]
+        if kind != "802-11-wireless":
+            continue
+        for f in NM_RUN.glob("*.nmconnection"):
+            try:
+                if f"uuid={uuid}" in f.read_text():
+                    return name.replace("\\:", ":"), f
+            except OSError:
+                pass
+    return None, None
+
+
+def networks(args):
+    sub = args[0] if args else "list"
+    saved = sorted(NETS.glob("*.nmconnection")) if state() == "open" and NETS.is_dir() else []
+    if sub == "list":
+        if state() != "open":
+            print(f"  The vault is locked: unlock it to use saved Wi-Fi networks (menu V).")
+            return 0
+        print(f"  {len(saved)} Wi-Fi network(s) saved in the vault" + (":" if saved else "."))
+        for f in saved:
+            print(f"    {f.stem}")
+        return 0
+    if sub == "forget" and len(args) == 2:
+        hit = [f for f in saved if f.stem.lower() == args[1].lower()]
+        if not hit:
+            sys.exit(f"  Not saved: {args[1]}")
+        for f in hit:
+            f.unlink()                       # the vault's copy; the one in memory goes at shutdown
+        log("networks: one forgotten")
+        print(f"  Forgotten: {args[1]} (it stays connected until shutdown).")
+        return 0
+    if sub == "offer":
+        name, f = active_wifi()
+        if not f:
+            return 0
+        if state() != "open":
+            print(f"  {D}Unlock the vault (menu V) and SysMedic can remember this Wi-Fi network, encrypted.{N}")
+            return 0
+        dst = NETS / f.name
+        if dst.exists():
+            shutil.copyfile(f, dst)          # already remembered: keep its password current
+            os.chmod(dst, 0o600)
+            return 0
+        if not sys.stdin.isatty():
+            return 0
+        try:
+            a = input(f"  {CY}❯{N} Remember Wi-Fi {B}{name}{N} on this drive (encrypted; joins by itself next time)? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            return 0
+        if a.strip().lower() != "y":
+            print(f"  {D}Not saved: forgotten at shutdown.{N}")
+            return 0
+        NETS.mkdir(mode=0o700, exist_ok=True)
+        shutil.copyfile(f, dst)
+        os.chmod(dst, 0o600)
+        os.sync()
+        log("networks: one remembered")
+        print(f"  {G}Saved in the vault.{N} Forget it later with: sysmedic-vault networks forget \"{name}\"")
+        return 0
+    sys.exit("Usage: sysmedic-vault networks [list | offer | forget NAME]")
+
+
 def main():
     args = sys.argv[1:]
     if os.environ.get("SYSMEDIC_AI"):
@@ -571,6 +662,8 @@ def main():
         return reset()
     if cmd == "lock":
         return lock(quiet="--quiet" in args)
+    if cmd == "networks":
+        return networks(args[1:])
     if cmd == "mount" and len(args) == 3:
         return external_mount(args[1], args[2])
     if cmd == "umount" and len(args) == 2:

@@ -7,3 +7,5 @@ nmcli -f DEVICE,TYPE,STATE,CONNECTION device | grep -E 'DEVICE|wifi|ethernet'
 ip -4 -br addr | grep -v '^lo'
 # Once online, correct SysMedic's clock if it's wrong (secure connections fail otherwise); a no-op offline
 /usr/local/bin/sysmedic-clock --auto 2>/dev/null || true
+# Joined a Wi-Fi network: offer to remember it in the encrypted vault (asks; never saved otherwise)
+[ -z "${SYSMEDIC_AI:-}" ] && /usr/local/sbin/sysmedic-vault networks offer

@@ -73,7 +73,7 @@ Tools: stress-ng, s-tui, stress, sysbench, memtester, MemTest86+, rasdaemon, eda
 
 Details: [NETWORK](NETWORK.md)
 
-- **Wi-Fi:** offered on the first screen at boot (`sysmedic-connect`); later `wifi` / menu 13 runs NetworkManager's `nmtui` picker. Networks and passwords are kept in RAM only (forgotten at shutdown, caddy included).
+- **Wi-Fi:** offered on the first screen at boot (`sysmedic-connect`); later `wifi` / menu 13 runs NetworkManager's `nmtui` picker. Networks and passwords are kept in RAM; after joining one, SysMedic asks whether to remember it in the encrypted vault, and remembered networks join by themselves once the vault is unlocked (`sysmedic-vault networks` lists them, `… forget NAME`).
 - **Diagnosis:** ping, arping, tracepath, traceroute, mtr, dig, nslookup, whois, ip, ss, ethtool, iw, nmcli, wavemon, iperf3/iperf, speedtest-cli, curl, fping, hping3.
 - **Capture:** tcpdump, tshark, termshark, ngrep, iftop, nload, bmon, nethogs, iptraf-ng.
 - **LAN and services:** nmap, ncat, arp-scan, nbtscan, avahi-utils, smbclient, cifs-utils, nfs-common, snmp, lldpd, ndisc6, ipcalc, sipcalc, lftp, tnftp, telnet, tftp-hpa, socat, netcat, bridge-utils, vlan, hostapd, dnsmasq-base.

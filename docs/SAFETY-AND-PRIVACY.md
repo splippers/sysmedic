@@ -77,7 +77,8 @@ Each visit's `audit.log` records, with timestamps:
 | Console transcripts (output only) | recorded in memory, saved to `/mnt/persist/transcripts/` | Yes: **in the vault** |
 | Review bundles | `claude-review.md` in the session + `/mnt/persist/claude-review/` | Yes: **in the vault** |
 | SysMedic, offline AI models, virus signatures, `logs/` | SysMedic's drive, outside the vault | No |
-| Wi-Fi passwords, BitLocker keys | **Never stored** | — |
+| Wi-Fi networks you chose to remember (with passwords) | `networks/` in the vault | Yes: **in the vault**, only when you answer y |
+| Other Wi-Fi passwords, BitLocker keys | **Never stored** | — |
 | Cloud AI history | Wiped at each boot; a copy of the visit's conversation is kept in the session | Yes |
 
 ## The encrypted vault (`sysmedic-vault`)
@@ -100,5 +101,5 @@ Everything above marked "in the vault" lives in an encrypted LUKS2 container on 
 - Services that would announce on a customer network (lldpd, hostapd, avahi, rpcbind) are masked.
 - No telemetry and no "call home". Hardware-probe uploaders are deliberately not installed.
 - The BitLocker web unlock (`sysmedic-win bitlocker-web`) runs only when the engineer starts it on a console: HTTPS, a secret link, read-only, and it stops by itself (unlock, 5 wrong keys, 15 minutes). The key is never stored or logged.
-- Wi-Fi networks joined during a visit (and their passwords) live in RAM only and are forgotten at shutdown.
+- Wi-Fi networks joined during a visit (and their passwords) live in RAM and are forgotten at shutdown, unless the engineer answers **y** to "Remember Wi-Fi … on this drive?": then they're saved in the encrypted vault only (never outside it, never with the vault locked). The AI is refused NetworkManager's files and the vault, and Wi-Fi passwords in command output are cleaned to `WIFI_PASSWORD`.
 - The phone dashboard is view + notes only, token-protected, and plain HTTP on the local network (don't use it on untrusted networks).

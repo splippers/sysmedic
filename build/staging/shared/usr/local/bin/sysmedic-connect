@@ -29,7 +29,9 @@ echo ""
 echo "  ${BOLD}SysMedic · network${NC}"
 echo ""
 echo "  ${DIM}Checking for an internet connection…${NC}"
-if wait_online 8; then
+# Wi-Fi networks remembered in the vault (unlocked just before this screen) take a little longer to join
+wait=8; ls /run/NetworkManager/system-connections/*.nmconnection >/dev/null 2>&1 && wait=20
+if wait_online "$wait"; then
     echo "  ${GRN}Online via $(via)${NC}"
     fix_clock
     sleep 2
@@ -57,7 +59,7 @@ else
     echo "    ${DIM}(none found yet — the Wi-Fi screen rescans)${NC}"
 fi
 echo ""
-echo "  ${DIM}Passwords are kept in memory only and forgotten at shutdown.${NC}"
+echo "  ${DIM}Passwords stay in memory; SysMedic asks before remembering one (encrypted, in the vault).${NC}"
 read -r -t 60 -p "  Press ${BOLD}Enter${NC} to choose a Wi-Fi network, or ${BOLD}s${NC} to skip (continues offline in 60 s): " a || a=s
 [ "$a" = s ] || [ "$a" = S ] && { echo ""; echo "  Continuing offline. Connect later with: wifi (or menu 13)"; sleep 2; exit 0; }
 
@@ -68,6 +70,7 @@ echo "  ${DIM}Checking the connection…${NC}"
 if wait_online 20; then
     echo "  ${GRN}Online via $(via)${NC}"
     fix_clock
+    /usr/local/sbin/sysmedic-vault networks offer
 else
     echo "  ${YEL}Still no internet.${NC} If the network has a sign-in page (hotel, guest Wi-Fi), it can't be"
     echo "  completed from here: use a phone hotspot instead. Try again later with: wifi (or menu 13)"
