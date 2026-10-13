@@ -167,7 +167,10 @@ def load():
         old = json.loads(MAP.read_text())
     except (OSError, ValueError):
         pass
-    m = {"fixed": old.get("fixed", {}), "counters": old.get("counters", {})}
+    m = {"fixed": old.get("fixed", {}), "files": old.get("files", {}), "counters": old.get("counters", {})}
+    for real, p in list(m["fixed"].items()):          # file names are cleaned inside paths only, never as loose words
+        if p.startswith("FILE_") and not p.startswith("FILE_SERVER"):
+            m["files"][real] = m["fixed"].pop(real)
     for real, role in learn().items():
         if real not in m["fixed"]:
             m["fixed"][real] = numbered(m, role)
@@ -245,6 +248,14 @@ class Cleaner:
 
     def token(self, real, role):
         """The placeholder for a newly seen value, remembered for the rest of the visit."""
+        if role == "FILE":                                    # kept apart: "Windows" in a path mustn't hide every "Windows"
+            files = self.m.setdefault("files", {})
+            for k, v in files.items():
+                if k.lower() == real.lower():
+                    return v
+            files[real] = numbered(self.m, role)
+            self.changed = True
+            return files[real]
         for k, v in self.m["fixed"].items():
             if k.lower() == real.lower():
                 return v
@@ -269,21 +280,27 @@ class Cleaner:
             return mt.group(0)
         placeholder = re.fullmatch(r"[A-Z]+(?:_[A-Z]+)*_\d+|[A-Z]+(?:_[A-Z]+)+", user)
         u = user if placeholder else (self.lookup.get(user.lower()) or self.token(user, "USER"))
+        # Windows names never end in a space, so "thing.lnk  /background" ends the path at "thing.lnk":
+        # the rest of the line is ordinary text and goes back through the path rule on its own.
+        end = re.search(r"\s+[\\/]", rest)
+        rest, tail = (rest[:end.start()], rest[end.start():]) if end else (rest, "")
         parts = re.split(r"([\\/])", rest)
-        out, personal = [], False
+        out, personal, depth = [], False, 0
         for p in parts:
             if p in ("\\", "/") or not p:
                 out.append(p)
                 continue
+            depth += 1
             if personal:
                 out.append(self.token(p, "FILE"))
-            elif p.lower().startswith("onedrive - "):            # "OneDrive - Contoso": the company's name
+            elif depth == 1 and p.lower().startswith("onedrive - "):   # "OneDrive - Contoso": the company's name
                 out.append("OneDrive - " + self.token(p[11:], "COMPANY_NAME"))
                 personal = True
             else:
                 out.append(p)
-                personal = p.lower() in PERSONAL or p.lower().startswith("onedrive")
-        return prefix + u + "".join(out)
+                # only the user's own folders (…\Users\anna\Documents), not AppData\…\Microsoft\OneDrive (the program)
+                personal = depth == 1 and (p.lower() in PERSONAL or p.lower().startswith("onedrive"))
+        return prefix + u + "".join(out) + USERS_PATH.sub(self.users, tail)
 
     def ip(self, mt):
         try:
@@ -335,7 +352,8 @@ def main():
     if args[:1] == ["--show"]:
         if os.environ.get("SYSMEDIC_AI"):
             sys.exit("REFUSED: the real values are the engineer's.")
-        for real, p in sorted(load()["fixed"].items(), key=lambda kv: kv[1]):
+        m = load()
+        for real, p in sorted({**m["fixed"], **m.get("files", {})}.items(), key=lambda kv: kv[1]):
             print(f"  {p:<24} {real}")
         return 0
     if args[:1] in (["-h"], ["--help"]):

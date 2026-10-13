@@ -252,6 +252,9 @@ install_packages() {
     for p in $(sed 's/#.*//' "$ST/packages/mask.txt" | tr -s ' \t' '\n' | grep -v '^$'); do
         sudo ln -sf /dev/null "$root/etc/systemd/system/$( [[ $p == *.* ]] && echo "$p" || echo "$p.service")"
     done
+    # 24.04's login still names pam_lastlog, which no longer ships: one error line on every console login
+    [ -e "$root/usr/lib/security/pam_lastlog.so" ] || [ -e "$root/usr/lib/x86_64-linux-gnu/security/pam_lastlog.so" ] \
+        || sudo sed -i 's/^\(session[[:space:]]\+optional[[:space:]]\+pam_lastlog\.so\)/# \1/' "$root/etc/pam.d/login"
 }
 
 # ── Caddy ──────────────────────────────────────────────────────────────────

@@ -593,10 +593,16 @@ def cmd_bitlocker(args):
     if run(["blkid", "-o", "value", "-s", "TYPE", dev]).stdout.strip() != "BitLocker":
         sys.exit(f"{dev} is not a BitLocker volume.")
     name = f"bitlocker-{os.path.basename(dev)}"
-    if Path(f"/dev/mapper/{name}").exists():
-        print(f"  Already unlocked: /dev/mapper/{name}")
-        return
     rw = "--rw" in args
+    if Path(f"/dev/mapper/{name}").exists():
+        state = "read-only" if is_locked(f"/dev/mapper/{name}") else "WRITABLE"
+        print(f"  Already unlocked: /dev/mapper/{name} ({state})")
+        if rw and state == "read-only":
+            if is_locked(dev):      # the volume follows its partition: the guard's unlock switches both, no key needed again
+                print(f"  To write to it: sysmedic-unlock {dev}  (makes the partition and this volume writable)")
+            else:
+                subprocess.run(["/usr/local/sbin/sysmedic-guard", "bitlocker-sync", dev])
+        return
     if rw and is_locked(dev):
         sys.exit(f"For read-write access unlock the partition first: sysmedic-unlock {dev}")
     print("  Enter the 48-digit BitLocker recovery key (or the user's BitLocker password).")

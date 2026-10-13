@@ -87,7 +87,7 @@ For when the recovery key is with someone else (the customer, their IT admin) or
 2. Type it. At the hidden **Key:** prompt, type the **48-digit recovery key**: 8 groups of 6 digits, e.g. `123456-234567-345678-456789-567890-678901-789012-890123`. Dashes and spaces are optional. A BitLocker user password also works.
 3. The key comes from the owner: **aka.ms/myrecoverykey** (Microsoft account), Entra ID / Active Directory, or a printout. It's used once and **never shown, stored, logged or recorded** (the console transcript records output only).
 4. Result: `/dev/mapper/bitlocker-<partition>`, **read-only**, with files at `/run/sysmedic/win/bitlocker-<partition>`. Then run `sysmedic-win info /dev/mapper/bitlocker-…`, or copy data to `/mnt/persist/backups` or an external disk.
-5. For repairs: `sysmedic-unlock` the partition, close the read-only mapping (`cryptsetup close bitlocker-<partition>`), then `sysmedic-win bitlocker DEV --rw`.
+5. For repairs: `sysmedic-unlock` the partition. An unlocked BitLocker volume follows its partition, so it becomes writable too, without the key again; `sysmedic-lock` makes both read-only again (unmount a read-write mount first). `sysmedic-guard status` lists open BitLocker volumes and their state.
 6. Close when done: `cryptsetup close bitlocker-<partition>`.
 
 Unlocking uses `cryptsetup`'s BitLocker support (dislocker is also installed). Tested against cryptsetup's real BitLocker test volumes: decryption matches their checksums.

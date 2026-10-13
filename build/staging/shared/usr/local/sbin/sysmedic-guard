@@ -70,6 +70,27 @@ cmd_udev() {
     blockdev --setro "/dev/$k" && logger -t sysmedic-guard "write-protected /dev/$k"
 }
 
+# An unlocked BitLocker volume is a device-mapper device on top of the partition, with its own
+# read-only flag: it follows the partition, so unlocking/locking the partition switches it too.
+bitlocker_mode() {   # bitlocker_mode KNAME rw|ro
+    local k=$1 mode=$2 name="bitlocker-$1" flag=()
+    [ -e "/dev/mapper/$name" ] || return 0
+    if [ "$mode" = ro ]; then
+        flag=(--readonly)
+        if findmnt -rno OPTIONS -S "/dev/mapper/$name" 2>/dev/null | grep -qE '(^|,)rw(,|$)'; then
+            echo "  /dev/mapper/$name is still mounted read-write: unmount it, then run sysmedic-lock again."
+            return 1
+        fi
+    fi
+    # The table holds the volume key: it goes straight back into the kernel through a pipe,
+    # never onto a command line or into a log.
+    dmsetup table --showkeys "$name" | dmsetup reload "${flag[@]}" "$name" && dmsetup resume "$name" || {
+        echo "  Couldn't switch /dev/mapper/$name to $mode."; return 1; }
+    [ "$mode" = rw ] && blockdev --setrw "/dev/mapper/$name"
+    audit "$(whoami)" "BitLocker volume /dev/mapper/$name switched $( [ "$mode" = rw ] && echo read-write || echo read-only)"
+    echo "  BitLocker volume /dev/mapper/$name is now $( [ "$mode" = rw ] && echo WRITABLE || echo read-only) too."
+}
+
 cmd_status() {
     local any=0
     printf '  %-16s %-9s %-10s %-8s %s\n' DEVICE STATE SIZE FS LABEL
@@ -81,6 +102,11 @@ cmd_status() {
         printf '  %-16s %-9s %-10s %-8s %s\n' "/dev/$name" "$(ro_state "$name")" "$size" "${fs:--}" "${label:-}"
     done < <(lsblk -nrpo KNAME,TYPE,SIZE,FSTYPE,LABEL | sed 's|^/dev/||')
     [ $any = 0 ] && echo "  (no disks besides the SysMedic stick)"
+    local m
+    for m in /dev/mapper/bitlocker-*; do
+        [ -e "$m" ] || continue
+        printf '  %-16s %-9s %s\n' "${m#/dev/mapper/}" "$(ro_state "$(basename "$(readlink -f "$m")")")" "BitLocker volume, unlocked (follows /dev/${m#/dev/mapper/bitlocker-})"
+    done
 }
 
 cmd_lock() {
@@ -100,6 +126,7 @@ cmd_lock() {
             fi
         done
         for k in "${parts[@]}"; do
+            bitlocker_mode "$k" ro
             blockdev --setro "/dev/$k" && n=$((n + 1))
         done
         for k in "${disks[@]}"; do
@@ -109,6 +136,7 @@ cmd_lock() {
         echo "  All customer disks are write-protected again ($n devices)."
     else
         local k=${target#/dev/}
+        bitlocker_mode "$k" ro
         blockdev --setro "/dev/$k" || exit 1
         audit "$(whoami)" "LOCK /dev/$k"
         echo "  /dev/$k is write-protected."
@@ -163,8 +191,18 @@ cmd_unlock() {
     if [ -z "$target" ]; then
         echo "Usage: sysmedic-unlock /dev/PARTITION   (see: sysmedic-guard status)"; exit 2
     fi
-    k=${target#/dev/}
+    k=$(basename "$(readlink -f "$target" 2>/dev/null || echo "$target")")
     [ -b "/dev/$k" ] || { echo "No such device: $target"; exit 2; }
+    if [[ $k =~ ^dm- ]]; then
+        local dmname
+        dmname=$(cat "/sys/class/block/$k/dm/name" 2>/dev/null)
+        if [[ $dmname == bitlocker-* ]] && [ -b "/dev/${dmname#bitlocker-}" ]; then
+            echo "  $target is the unlocked BitLocker volume of /dev/${dmname#bitlocker-}: unlocking that partition, which makes both writable."
+            k=${dmname#bitlocker-}
+        else
+            echo "  $target is a device-mapper device: unlock the disk partition underneath it instead."; exit 2
+        fi
+    fi
     disk=$(parent_disk "$k")
     if is_sysmedic_disk "$disk"; then echo "/dev/$k is the SysMedic stick — it is never locked."; exit 0; fi
 
@@ -220,6 +258,7 @@ cmd_unlock() {
     audit "$(whoami)@${tty#/dev/}" "UNLOCK /dev/$k — reason: $reason — backups: $dest"
     echo ""
     echo "  /dev/$k is now WRITABLE. Its sibling partitions stay protected."
+    bitlocker_mode "$k" rw
     [ "$k" != "$disk" ] && echo "  Note: the kernel also allows writes to the whole-disk node /dev/$disk while this is unlocked."
     echo "  When the repair is done: sysmedic-lock"
 }
@@ -230,6 +269,9 @@ case "$(basename "$0")" in
 esac
 case "${1:-status}" in
     udev)   cmd_udev "$2" ;;
+    bitlocker-sync)                     # make an open BitLocker volume match its partition's state
+        k=${2#/dev/}
+        if [ "$(ro_state "$k")" = WRITABLE ]; then bitlocker_mode "$k" rw; else bitlocker_mode "$k" ro; fi ;;
     status) cmd_status ;;
     lock)   cmd_lock "${2:-all}" ;;
     unlock) cmd_unlock "${2:-}" ;;

@@ -56,7 +56,7 @@ Details: [WINDOWS-AND-BITLOCKER](WINDOWS-AND-BITLOCKER.md)
 
 - Read-only: `info`, `crashes`, `events`, `autoruns`, `malware` (ClamAV; signatures on the drive, updated when online).
 - Deep troubleshooting (read-only): `evtx` (**every** event log: curated rules plus an error sweep, boot times, Security summary), `registry` (missing service/driver files, broken device filters, hijacks, protection/update policies, recent installs), `cbs` (CBS/CbsPersist, DISM, Windows Update and upgrade logs: failing updates, decoded HRESULTs, corruption, SFC, a verdict). `checkup` runs everything and saves `windows-checkup-*.md` in the session. `evtx`/`cbs` also take exported files.
-- Engineer only: `bitlocker` (48-digit recovery key or password; read-only unless `--rw`), `bitlocker-web` (the key typed on a phone/laptop on the same network: HTTPS, secret QR link, read-only, self-stopping), `fix-update`, `fix-hibernation`, `reset-password` (local accounts, `chntpw`).
+- Engineer only: `bitlocker` (48-digit recovery key or password; read-only until its partition is unlocked with `sysmedic-unlock`, which makes the volume writable with it), `bitlocker-web` (the key typed on a phone/laptop on the same network: HTTPS, secret QR link, read-only, self-stopping), `fix-update`, `fix-hibernation`, `reset-password` (local accounts, `chntpw`).
 - Also: chntpw, hivex tools, evtxexport, cabextract, ntfs-3g/ntfsfix, wimlib **(caddy)**, dislocker.
 
 ## 6. Hardware testing (`sysmedic-hwtest`, menu 2)

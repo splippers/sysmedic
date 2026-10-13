@@ -9,7 +9,7 @@ wireless-tools iw wavemon wpasupplicant hostapd dnsmasq-base bridge-utils vlan i
 tftp-hpa minicom picocom ipmitool network-manager
 # --- rescue ---
 gddrescue testdisk hfsprogs smartmontools efibootmgr nvme-cli exfatprogs ntfs-3g chntpw clamav libevtx-utils util-linux-extra ncdu mokutil
-python3-hivex qrencode cryptsetup zstd rsync cabextract
+python3-hivex qrencode cryptsetup zstd rsync cabextract psmisc
 # Windows log readers: ESE databases (Windows Update DataStore.edb, search index), Prefetch, classic .evt, registry, shortcuts
 libesedb-utils libscca-utils libevt-utils libregf-utils liblnk-utils
 # Memory testing; memtester, memtest86+, stress-ng, sysbench, edac-utils, rasdaemon, i2c-tools are in the hardware list below

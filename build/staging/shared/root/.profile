@@ -47,7 +47,7 @@ if [ -t 0 ] && [ "$console" = /dev/tty2 ]; then
         ui_info "No BitLocker volumes on this machine" "syntax: sysmedic-win bitlocker /dev/<partition>"
     fi
     ui_info "Recovery key: 48 digits (8 groups of 6), typed into a hidden prompt: never shown, stored or logged" \
-            "From aka.ms/myrecoverykey or the owner's IT admin. Repairs: sysmedic-unlock the partition, then add --rw."
+            "From aka.ms/myrecoverykey or the owner's IT admin. Repairs: sysmedic-unlock the partition: an unlocked volume becomes writable with it."
     ui_info "Key with someone else? The phone dashboard's BitLocker card (or sysmedic-win bitlocker-web)" \
             "they type it on their own phone or laptop on the same network: secure link, read-only, stops by itself"
     echo ''

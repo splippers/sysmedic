@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.10.13 (afternoon): fixes from the caddy's morning visits
+
+- **BitLocker repairs:** unlocking a partition for writing now makes its open BitLocker volume writable too (no key needed again), and `sysmedic-lock` makes it read-only again. Before, a volume first opened read-only (phone page, scan) stayed read-only whatever was unlocked, so repairs failed with "Read-only file system" and the engineer ended up unlocking the whole disk. `sysmedic-unlock` of the volume's `dm-` device unlocks its partition instead; `sysmedic-guard status` lists open BitLocker volumes.
+- **Cleaning for the cloud AI no longer eats ordinary words:** a user path ran on past its end to the rest of the line (`…\thing.lnk  /run/sysmedic/…`), and each file name it hid was then hidden everywhere, so "Windows", "run" and "sysmedic" became `FILE_n` in reviews. Paths now end where Windows names must (no trailing space), file names are cleaned inside paths only, and the OneDrive *program* folder under AppData isn't treated as the customer's files.
+- **Scan:** an unlocked BitLocker volume is reported as unlocked, not "get the key from the owner".
+- **CPU stress test:** counts only the throttling during the test (the counter runs from power-on: 10169 on a Latitude 3410 that peaked at 83°C) and says whether it points at cooling (90°C and over) or at the firmware holding the CPU back (charger, battery, BIOS thermal setting).
+- chkrootkit's daily self-check of SysMedic is off (false alarms, then a failed mail); `fuser` is installed; the "pam_lastlog" error on every console login is gone.
+
 ## 2026.10.13: what the cloud AI sees
 
 From the field: OpenCode Zen's free models (Big Pickle included) may use data from the free period to improve the model, and customer data must never become training data.

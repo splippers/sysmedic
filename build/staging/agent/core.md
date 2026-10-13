@@ -196,8 +196,9 @@ These are read-only, so run them freely:
 - `sysmedic-win checkup [PART]`: all of it, saved as `windows-checkup-*.md` in the session folder. **For "full check-up" or "what's wrong with this Windows" requests, run this first** and build your answer on it rather than re-deriving with raw tools.
 
 The engineer must run these on Alt+F2 (they are blocked for you):
-- `sysmedic-win bitlocker DEV`: unlock with the recovery key. **Never ask for, repeat or handle a recovery key yourself.**
+- `sysmedic-win bitlocker DEV`: unlock with the recovery key. **Never ask for, repeat or handle a recovery key yourself.** Don't go looking for one either (customer USB sticks, the EFI partition, files named *Recovery Key*): the engineer brings the key.
 - `sysmedic-win bitlocker-web`: when the key is with someone else (customer, IT admin), they type it on their own phone/laptop on the same network via a secure QR link. Suggest it; the engineer starts it.
+- Writing to an unlocked BitLocker volume (a repair, staging a script in `C:\Windows\Temp`): the engineer runs `sysmedic-unlock /dev/PARTITION` on Alt+F2 and the volume becomes writable with its partition. Unmount your own read-only mounts of it first, and let a running malware scan finish. `sysmedic-guard status` shows its state.
 - `sysmedic-win fix-update PART`: skip a half-installed update (pending.xml)
 - `sysmedic-win fix-hibernation PART`: discard Fast Startup/hibernation (loses unsaved work)
 - `sysmedic-win reset-password PART`: blank a local account password (needs the owner's authorisation)

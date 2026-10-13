@@ -556,6 +556,11 @@ def collect_filesystems(disks):
             if not fs:
                 continue
             if fs == "BitLocker":
+                mapped = Path(f"/dev/mapper/bitlocker-{os.path.basename(p['path'])}")
+                if mapped.exists():         # unlocked this visit: its Windows is scanned through the mapper
+                    find("ok", "encryption", f"{label}: BitLocker volume unlocked as {mapped}",
+                         "Read-only unless its partition is unlocked for repair (sysmedic-unlock " + p["path"] + ").")
+                    continue
                 find("warning", "encryption", f"{label}: BitLocker-encrypted ({human(p['size'])})",
                      "The data can't be read or repaired without the 48-digit recovery key.",
                      "Get the key from the owner (often at aka.ms/myrecoverykey), then on Alt+F2: sysmedic-win bitlocker " + p["path"])

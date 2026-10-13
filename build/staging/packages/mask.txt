@@ -7,3 +7,6 @@ smbd nmbd snmpd dropbear
 systemd-timesyncd
 # ttyd's own service would run a local login terminal; SysMedic's remote AI starts its own ttyd (TLS, token) when asked
 ttyd
+# chkrootkit's daily self-check of SysMedic itself: false alarms (.build-id files, the DHCP client's raw socket),
+# then fails trying to mail root. It's for customer disks, run on request: chkrootkit -r /mnt/…
+chkrootkit.timer chkrootkit.service

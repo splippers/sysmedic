@@ -74,13 +74,24 @@ cpu() {
     hdr "CPU & cooling stress: ${min} min (Ctrl-C to stop early)"
     echo "  Watch for: temperature climbing past ~95°C, fans not spinning up, or the machine switching off."
     echo "  Before: $(temps)"
-    ( while sleep 15; do echo "  … $(temps)"; done ) & mon=$!
+    local tc=/sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count thr0 peak
+    thr0=$(cat "$tc" 2>/dev/null)                 # the counter runs since power-on: only the test's own share counts
+    peak=$(mktemp)
+    ( while sleep 15; do t=$(temps); echo "  … $t"; echo "$t" | grep -oE '[0-9.]+°C' | head -1 | tr -d '°C' >> "$peak"; done ) & mon=$!
     stress-ng --cpu 0 --cpu-method all --timeout "${min}m" --metrics-brief --tz 2>&1 | grep -vE '^stress-ng: info: +\[[0-9]+\] (dispatching|setting|cache|defaulting|note:)' | sed 's/^/  /'
     rc=${PIPESTATUS[0]}
     kill $mon 2>/dev/null; wait $mon 2>/dev/null
     echo "  After:  $(temps)"
-    thr=$(cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count 2>/dev/null)
-    [ -n "$thr" ] && [ "$thr" != 0 ] && ui_warn "The CPU throttled ${thr} times: cooling can't keep up (dust, dried thermal paste, fan)."
+    thr=$(cat "$tc" 2>/dev/null)
+    [ -n "$thr" ] && [ -n "$thr0" ] && thr=$((thr - thr0))
+    local hot; hot=$(sort -n "$peak" | tail -1 | cut -d. -f1); rm -f "$peak"
+    if [ -n "$thr" ] && [ "$thr" != 0 ]; then
+        if [ "${hot:-0}" -ge 90 ]; then
+            ui_warn "The CPU throttled ${thr} times during the test at up to ${hot}°C: cooling can't keep up (dust, dried thermal paste, fan)."
+        else
+            ui_warn "The CPU throttled ${thr} times during the test but peaked at only ${hot:-?}°C: the firmware is holding it back (underpowered charger, worn battery or the BIOS thermal setting) rather than cooling."
+        fi
+    fi
     [ "$rc" = 0 ] && ui_ok "CPU stress completed without errors." || ui_fail "stress-ng reported a failure (exit $rc): suspect CPU, RAM or power."
     record "cpu stress ${min}m: exit $rc, end $(temps), throttles ${thr:-n/a}"
 }
