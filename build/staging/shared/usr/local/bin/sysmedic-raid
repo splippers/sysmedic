@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""sysmedic-raid — Linux software RAID (mdadm) and LVM on the machine being repaired, read-only.
+
+  sysmedic-raid                 which RAID arrays the machine's disks hold, which are running, which can't start
+  sysmedic-raid assemble        start every array read-only (a degraded one too) and the LVM volumes on top,
+                                then look inside with: sysmedic-scan   (menu 1)
+  sysmedic-raid stop            unmount first; then stops the arrays and LVM groups so the disks can be unplugged
+  sysmedic-raid status --json
+
+Nothing here writes to the customer's disks: arrays and logical volumes are started read-only, so a dirty array
+doesn't resync and nothing is "repaired" behind your back. A disk that dropped out earlier (older data) is left out.
+Changing an array (re-adding a disk, a forced start with stale members, a resync) is the engineer's decision:
+unlock the disks (sysmedic-unlock), then use mdadm yourself.
+"""
+import json
+import os
+import sys
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+import raidlib  # noqa: E402
+from ui import UI  # noqa: E402
+
+LEVELS = {"raid0": "striped (no redundancy)", "raid1": "mirrored", "raid5": "one parity disk", "raid6": "two parity disks",
+          "raid10": "mirrored stripes", "linear": "joined end to end"}
+
+
+def show(st, ui):
+    print(ui.section("RAID arrays") + "\n  " + ui.c("dim", "Linux software RAID and Intel (IMSM) firmware RAID on this machine's disks"))
+    if not st["members"] and not st["running"]:
+        print(ui.item("ok", "No RAID disks found", "no member disk carries RAID metadata"))
+        return
+    for a in st["running"]:
+        if a["container"]:
+            continue
+        health = "healthy" if not a["degraded"] else f"DEGRADED ({a['degraded']} disk(s) missing)"
+        kind = "ok" if not a["degraded"] else "warn"
+        print(ui.item(kind, f"{a['md']}  {a['level']}  {a['disks']} disks  {a['state']}",
+                      f"{health} · {LEVELS.get(a['level'], '')} · disks: {' '.join(a['members'])}"
+                      + (f" · left out (dropped out earlier, older data): {' '.join(os.path.basename(d) for d in a['left_out'])}"
+                         if a.get("left_out") else "")))
+    for g in st["unstarted"]:
+        need = raidlib.need_disks(g["level"], g["expected"], g["present"])
+        stale = [m for m in g["members"] if m["stale"]]
+        why = (f"{g['fresh']} current of {g['expected']} disks" + (f" ({len(stale)} stale: {' '.join(os.path.basename(m['dev']) for m in stale)})" if stale else "")
+               + (f"; needs at least {need}" if g["fresh"] < need else "; should start: run sysmedic-raid assemble"))
+        print(ui.item("warn" if g["fresh"] < need else "info", f"not running: {g['level']} {g['name'] or g['uuid'][:8]}", why))
+    for d in st["unreadable"]:
+        print(ui.item("warn", f"{d}: RAID metadata unreadable"))
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a and not a[0].startswith("-") else "status"
+    if cmd in ("-h", "--help", "help"):
+        print(__doc__); return 0
+    if os.geteuid() != 0:
+        sys.exit("Run as root.")
+    ui = UI()
+    if cmd == "status":
+        st = raidlib.status()
+        if "--json" in a:
+            print(json.dumps(st))
+        else:
+            show(st, ui)
+        return 0
+    if cmd == "assemble":
+        before = raidlib.status()
+        res = raidlib.assemble()
+        quiet = "--quiet" in a
+        st = raidlib.status()
+        if quiet:
+            return 0
+        if not before["members"] and not before["running"]:
+            show(st, ui)
+            return 0
+        show(st, ui)
+        if res["vgs"]:
+            print(ui.item("ok", "LVM volumes started read-only", ", ".join(res["vgs"])))
+        if res["readonly_forced"]:
+            print(ui.item("info", "Already running: set read-only", " ".join(res["readonly_forced"])))
+        for m in res["messages"]:
+            print("  " + ui.c("dim", m))
+        if res["started"] or res["vgs"] or res["readonly_forced"]:
+            print("\n  Look inside with " + ui.c("accent", "sysmedic-scan") + " (menu 1); mount read-only: mount -o ro,noload /dev/mdX /mnt/x")
+        return 0
+    if cmd == "stop":
+        ok, msgs = raidlib.stop()
+        for m in msgs:
+            print("  " + m)
+        print("  " + ("Arrays and LVM groups stopped: the disks can be unplugged." if ok else "Not everything stopped."))
+        return 0 if ok else 1
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

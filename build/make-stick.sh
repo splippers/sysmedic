@@ -11,7 +11,13 @@ ISO=sysmedic-v2.iso
 OLLAMA_SRC_MODELS=$( [ -d ollama-models/manifests ] && echo "$PWD/ollama-models" || echo /usr/share/ollama/.ollama/models )
 OLLAMA_BIN=$( [ -x downloads/ollama/bin/ollama ] && echo downloads/ollama/bin/ollama || echo /usr/local/bin/ollama )
 OLLAMA_LIB=$( [ -d downloads/ollama/lib/ollama ] && echo downloads/ollama/lib/ollama || echo /usr/local/lib/ollama )
-MODELS="qwen2.5:3b qwen2.5:7b"
+# The stick always runs the 3B model (sysmedic-ask's pick_model), so the 7B (4.7 GB) only goes on drives with room to spare:
+# an 8 GB stick gets the 3B alone and keeps about 3 GB for the vault. Override with SYSMEDIC_MODELS="...".
+tsize=$( [ -b "$TARGET" ] && sudo blockdev --getsize64 "$TARGET" || stat -c %s "$TARGET" )
+if [ -n "${SYSMEDIC_MODELS:-}" ]; then MODELS=$SYSMEDIC_MODELS
+elif [ "$tsize" -lt 14000000000 ]; then MODELS="qwen2.5:3b"
+else MODELS="qwen2.5:3b qwen2.5:7b"; fi
+echo "Models on this drive: $MODELS ($((tsize / 1000000000)) GB drive)"
 
 sudo dd if="$ISO" of="$TARGET" bs=4M conv=fsync,notrunc status=none
 sync
@@ -64,7 +70,7 @@ SysMedic persistence partition (label FOG_AMB_PERSIST)
 logs/      SysMedic and Ollama logs
 backups/   data rescued from machines being repaired
 sessions/  repair session records saved with menu option 3 (sync-back)
-ollama/    offline AI: Ollama runtime (CPU) + qwen2.5:7b / qwen2.5:3b agents
+ollama/    offline AI: Ollama runtime (CPU) + the qwen2.5 model(s) listed in ollama/models
 clamav/    ClamAV virus signatures (updated automatically when online)
 private/   serial numbers from scans — kept away from the AI
 

@@ -6,7 +6,7 @@ SysMedic works as root on other people's computers, with an AI assistant. This i
 
 - A udev rule makes **every disk except SysMedic's own read-only in the kernel** (`BLKROSET`) the moment it appears, including disks plugged in later. SysMedic's own disk is recognised by its labels (`SYSMEDIC_2404`, `FOG_AMB_PERSIST`) or as the disk the running system lives on.
 - While a disk is locked, writes, read-write mounts, `fsck` repairs, `mkfs` and `dd` all fail ("Permission denied" or "read-only"), whoever runs them.
-- The triage scan only reads: ext4 is mounted `ro,noload` (no journal replay), NTFS `ro`, checks run in no-change mode, and RAID/LVM are reported but never assembled. Tested: a writable test disk was byte-for-byte unchanged after a full boot, scan and AI session.
+- The triage scan only reads: ext4 is mounted `ro,noload` (no journal replay), NTFS `ro`, checks run in no-change mode, and RAID/LVM are started read-only only (`sysmedic-raid`: the arrays and logical volumes are read-only devices and the kernel is told not to resync, so nothing is written to the member disks). Tested: a writable test disk was byte-for-byte unchanged after a full boot, scan and AI session.
 
 ### Unlocking
 

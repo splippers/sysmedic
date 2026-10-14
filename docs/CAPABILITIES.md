@@ -16,7 +16,7 @@ Everything SysMedic can do, by area. Commands run as root on SysMedic's console.
 
 ## 2. Triage scan (`sysmedic-scan`, runs at boot)
 
-Read-only by design: filesystems are mounted `ro` (ext4 with `noload`, so even the journal isn't replayed), checks run in no-change mode, and RAID/LVM members are reported but never assembled. Results go to the session as `summary.txt` and `scan.json`, with a history of every re-scan.
+Read-only by design: filesystems are mounted `ro` (ext4 with `noload`, so even the journal isn't replayed), checks run in no-change mode, and Linux software RAID (mdadm), Intel IMSM firmware RAID and the LVM on top are started **read-only** (a degraded array too; stale disks are left out) so what is inside is scanned like any disk (`sysmedic-raid`). Results go to the session as `summary.txt` and `scan.json`, with a history of every re-scan.
 
 | Area | What it checks |
 |---|---|

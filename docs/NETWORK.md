@@ -41,6 +41,8 @@ A machine whose hardware clock is wrong (a flat CMOS battery, a BIOS never set) 
 
 Probe other machines (nmap, arp-scan, nbtscan, hping3) only on networks you're allowed to test.
 
+The **private hotspot** (menu H) is a deliberate exception: a network of its own (10.42.0.0/24) for the engineer's phone or laptop, serving only the dashboard and AI terminal, forwarding nothing, off by default and after 30 idle minutes.
+
 Services that would announce or serve on a customer network are **masked** and start only when you ask: lldpd (`systemctl unmask --now lldpd`), avahi-daemon, hostapd, rpcbind (needed for NFSv3: `systemctl unmask --now rpcbind`).
 
 No SSH server runs at boot.

@@ -39,6 +39,16 @@ MAX_TRANSCRIPT = 150_000          # characters kept per console transcript (the 
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>78DEHMZc]")
 
 
+def service_tag(sd):
+    """The machine's service tag / serial, which the scan keeps apart from everything the AI reads."""
+    for base in (PERSIST / "private", session.RUN / "private"):
+        try:
+            return json.loads((base / f"{sd.name}.json").read_text()).get("system_serial", "").strip()
+        except (OSError, ValueError):
+            continue
+    return ""
+
+
 def clean_terminal(raw):
     text = ANSI.sub("", raw.replace("\r\n", "\n"))
     lines = []
@@ -204,6 +214,9 @@ def bundle(quiet=False):
             doc = "<!-- Cleaned by sysmedic-redact: names, the company, its servers, keys and personal file names are placeholders. -->\n" + r.stdout
     except (OSError, subprocess.TimeoutExpired):
         pass
+    tag = service_tag(sd)
+    if tag:        # added after the cleaning on purpose: it tells one physical laptop from another of the same model
+        doc = doc.replace("\n## Visit\n", f"\n## Visit\n\n- Device: Service Tag {tag} (the engineer allows this one identifier in review bundles)", 1)
     (sd / "claude-review.md").write_text(doc)
     copy_dir = PERSIST / "claude-review" if is_mounted(PERSIST) else session.RUN / "claude-review"
     copy_dir.mkdir(parents=True, exist_ok=True)

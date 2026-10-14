@@ -15,6 +15,7 @@ stay outside it, so the drive boots and the AI works without the passphrase.
   sysmedic-vault networks       Wi-Fi networks saved in the vault (they connect by themselves once it's unlocked)
   sysmedic-vault networks offer after joining Wi-Fi: ask whether to remember it (passwords only ever saved in the vault)
   sysmedic-vault networks forget NAME
+  sysmedic-vault code           your own remote access code (for a laptop that can't scan the QR code): set / new / show / clear
   sysmedic-vault ai             move the AI assistant's records into the vault (run before it starts)
 
 Not unlocked, SysMedic works as usual but this visit stays in memory: unlock before shutting down to keep it.
@@ -36,6 +37,10 @@ try:
     import session
 except ImportError:
     session = None
+try:
+    import accesscode
+except ImportError:
+    accesscode = None
 
 PERSIST = Path("/mnt/persist")
 CONTAINER = PERSIST / "vault.luks"
@@ -392,7 +397,7 @@ def on_private_console(args):
     """Re-run on a spare console that isn't recorded, then come back."""
     before = run(["fgconsole"]).stdout.strip()
     env = {k: v for k, v in os.environ.items() if k not in ("SYSMEDIC_TRANSCRIPT", "SYSMEDIC_TTY")}
-    print(f"  {D}Switching to a private console (not recorded) for the recovery key…{N}")
+    print(f"  {D}Switching to a private console (not recorded) for a secret…{N}")
     subprocess.run(["openvt", "-s", "-w", "--", sys.executable, os.path.abspath(__file__), *args, "--here"], env=env)
     if before.isdigit():
         subprocess.run(["chvt", before])
@@ -718,6 +723,80 @@ def networks(args):
     sys.exit("Usage: sysmedic-vault networks [list | offer | forget NAME]")
 
 
+# ── Remote access code: the engineer's own, kept in the vault ──────────────
+
+def access_code(args, here=False):
+    """Set, generate, show or clear the code that opens the dashboard and the AI terminal over HTTPS. Anything that
+    shows or takes the code runs on a private console: consoles are recorded, and the visit's records are not
+    the place for a secret the AI could one day read."""
+    sub = args[0] if args else "status"
+    if accesscode is None:
+        sys.exit("  The access code module is missing from this drive.")
+    if state() != "open":
+        print(f"  {Y}The vault is locked{N}: the code is kept inside it, so unlock it first (menu V).")
+        return 1
+    have = accesscode.get()
+    if sub == "status":
+        if have:
+            print(f"  {G}An access code is set{N} ({len(have)} characters, kept in the vault). It works at https://ADDRESS:8443 (dashboard)")
+            print("  and, when remote AI is turned on, at https://ADDRESS:8444/CODE/. Change it: sysmedic-vault code set · new · clear")
+            print(f"  {D}To see it: sysmedic-vault code show (opens a private console){N}")
+        else:
+            print("  No access code set: the dashboard and AI terminal use a random secret that changes every boot (QR code).")
+            print(f"  Set your own, once: {B}sysmedic-vault code new{N} (random words) or {B}sysmedic-vault code set{N} (your own).")
+        return 0
+    if sub == "clear":
+        if have:
+            Path(accesscode.FILE).unlink(missing_ok=True)
+            log("access code cleared")
+        print("  Access code cleared: back to the random secret (QR code).")
+        return 0
+    if sub not in ("show", "new", "set"):
+        sys.exit("Usage: sysmedic-vault code [status | set | new | show | clear]")
+    if recorded() and not here:
+        return on_private_console(["code", sub])
+    if sub == "show":
+        print(f"  {B}{have}{N}" if have else "  No access code set.")
+        input(f"\n  {D}Enter to close{N} ") if sys.stdin.isatty() else None
+        return 0
+    if sub == "new":
+        while True:
+            code = accesscode.suggest()
+            print(f"\n  Your new access code:  {B}{code}{N}")
+            a = input(f"  {CY}❯{N} Use it? [Y = yes, n = another, q = cancel] ").strip().lower()
+            if a in ("", "y"):
+                break
+            if a == "q":
+                print("  Cancelled: nothing changed.")
+                return 1
+    else:
+        print("\n  Choose a code you can type easily on another laptop, not used for anything else.")
+        print(f"  {D}{accesscode.MIN_LEN}+ characters; letters, digits, dot, dash, underscore. It is the same on every job, so make it hard to guess:")
+        print(f"  four or five words joined with dashes works well. Anyone on the network who learns it can read the visit's findings;")
+        print(f"  it can't change anything on the computer (that needs a keypress at the device).{N}\n")
+        code = getpass.getpass("  New access code (Enter = cancel): ")
+        if not code:
+            print("  Cancelled: nothing changed.")
+            return 1
+        bad = accesscode.check(code)
+        if bad:
+            print(f"  {R}Not accepted:{N} {bad}.")
+            return 1
+        if getpass.getpass("  Again: ") != code:
+            print(f"  {R}They differ:{N} nothing changed.")
+            return 1
+    fd = os.open(accesscode.FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(code + "\n")
+    os.sync()
+    log("access code set")
+    print(f"\n  {G}Saved in the vault.{N} From now on, on any network this drive joins:")
+    print("    dashboard:  https://ADDRESS:8443   (accept the certificate warning; type the code)")
+    print("    AI terminal: https://ADDRESS:8444/CODE/   after turning remote AI on (menu R)")
+    print(f"  ADDRESS is shown by menu 4. {D}If remote AI is on now, turn it off and on to use the new code there.{N}")
+    return 0
+
+
 def main():
     args = sys.argv[1:]
     if os.environ.get("SYSMEDIC_AI"):
@@ -746,6 +825,8 @@ def main():
         return lock(quiet="--quiet" in args)
     if cmd == "networks":
         return networks(args[1:])
+    if cmd == "code":
+        return access_code([a for a in args[1:] if a != "--here"], here="--here" in args)
     if cmd == "ai":                                   # sysmedic-ai-session, before the assistant starts
         if state() == "open" and any(not (FS / n).is_dir() or not mounted(p) or
                                      os.stat(p).st_ino != os.stat(FS / n).st_ino for n, p in AI.items()):

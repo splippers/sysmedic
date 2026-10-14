@@ -15,7 +15,7 @@ while true; do
     python3 /usr/local/lib/sysmedic/menuview.py 2>/dev/null || {
         echo "  SysMedic rescue menu (v${VERSION}): 1 AI · 2 Wi-Fi · 3 save logs · 4 scan · 5 Linux boot · 6 Windows · 7 macOS"
         echo "  8 backup · 9 shell · 10 reboot · 11 unlock · 12 protect · 13 report · 14 phone · 15 toolkit · 16 tests · 17 repair AI · 0 off"; }
-    keys="D, R, V"; command -v labwc >/dev/null && keys="$keys, G"; [ "$EDITION" = caddy ] && keys="$keys, U"
+    keys="D, O, L, H, K, R, V"; command -v labwc >/dev/null && keys="$keys, G"; [ "$EDITION" = caddy ] && keys="$keys, U"
     echo -ne "  ${CYAN}❯${NC} Choose a number${keys:+ or $keys}: "
     read choice
     echo ""
@@ -33,6 +33,66 @@ while true; do
                 echo "OpenCode not found"
                 read -p "Press Enter..."
             fi
+            ;;
+        o|O)
+            clear
+            if curl -sf --max-time 3 http://127.0.0.1:11434/api/version >/dev/null || /usr/local/sbin/start-ollama >/dev/null 2>&1; then
+                tmux -f /etc/sysmedic/tmux.conf new-session -A -s ai-offline "/usr/local/bin/sysmedic-ai-session offline"
+            else
+                ui_warn "The offline AI isn't running and didn't start" "repair it with option 6, or check: sysmedic-ai-repair --check"
+                read -p "  Press Enter..."
+            fi
+            ;;
+        l|L)
+            clear
+            /usr/local/bin/sysmedic-raid assemble
+            echo
+            ui_info "Next" "scan what is inside: option 1 · stop and unplug safely: sysmedic-raid stop (Alt+F2)"
+            pause
+            ;;
+        h|H)
+            clear
+            ui_banner "Private hotspot" "a Wi-Fi network of its own for your phone or laptop: nothing on the customer's network, and a bookmark that always works"
+            /usr/local/sbin/sysmedic-hotspot status
+            ui_section "Choose"
+            opt 1 "Start the hotspot" "uses a radio of its own if there is one"
+            opt 2 "Stop it"
+            opt 3 "What would it use?" "radios, bands, and why"
+            opt 4 "My hotspot name, password, band and country" "kept in the vault: follows you from job to job"
+            opt 5 "Show the password and bookmarks" "on a private console"
+            opt 0 "Back"
+            ask "Choose:" hc
+            case "$hc" in
+                1) /usr/local/sbin/sysmedic-hotspot on ;;
+                2) /usr/local/sbin/sysmedic-hotspot off ;;
+                3) /usr/local/sbin/sysmedic-hotspot plan ;;
+                4) /usr/local/sbin/sysmedic-hotspot setup ;;
+                5) /usr/local/sbin/sysmedic-hotspot show ;;
+            esac
+            pause
+            ;;
+        k|K)
+            clear
+            ui_banner "Remote access code" "your own code for the dashboard and AI terminal, for a laptop that can't scan the QR code"
+            /usr/local/sbin/sysmedic-vault code status
+            case "$(cat /run/sysmedic/vault.state 2>/dev/null)" in
+                open)
+                    ui_section "Choose"
+                    opt n "New code: random words" "easy to read out; saved in the vault"
+                    opt s "Set my own code" "typed twice, hidden"
+                    opt v "Show the code" "on a private console"
+                    opt c "Clear it" "back to a random secret every boot"
+                    opt 0 "Back"
+                    ask "Choose:" kc
+                    case "$kc" in
+                        n|N) /usr/local/sbin/sysmedic-vault code new ;;
+                        s|S) /usr/local/sbin/sysmedic-vault code set ;;
+                        v|V) /usr/local/sbin/sysmedic-vault code show ;;
+                        c|C) /usr/local/sbin/sysmedic-vault code clear ;;
+                    esac ;;
+                *) ui_info "Unlock the vault first (menu V)" "the code is kept inside it, so it survives reboots without being readable" ;;
+            esac
+            pause
             ;;
         13)
             clear

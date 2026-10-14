@@ -51,7 +51,11 @@ Low RAM: the cloud AI needs 4 GB and an AVX-capable CPU, and the offline AI need
 | 3 | **Job report** for the customer |
 | 4 | **Phone dashboard** (QR code) |
 | 5 / 6 | OpenCode AI assistant / **repair the AI assistant** |
+| O | **Offline AI assistant** (Qwen on this machine: no internet needed) |
 | R | Remote AI in the phone dashboard (every change still needs a keypress on the laptop) |
+| H | **Private hotspot**: a Wi-Fi network of its own from this computer (always `10.42.0.1`), so your phone or laptop never joins the customer's network |
+| K | **Remote access code**: your own code for a laptop that can't scan the QR code (kept in the vault) |
+| L | **Linux RAID & LVM**: start the machine's arrays read-only, then scan what is inside |
 | 7 | **Windows tools**: info, crashes, events, autoruns, malware, BitLocker, update rollback, hibernation, password |
 | 8 / 9 | **Unlock a partition / write-protect all again** |
 | 10 | Back up data |

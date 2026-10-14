@@ -16,6 +16,7 @@ import json
 import os
 import secrets
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -26,12 +27,19 @@ from pathlib import Path
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 import session  # noqa: E402
 import power  # noqa: E402
+import accesscode  # noqa: E402
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
 from ui import UI  # noqa: E402
 
 PORT = 8080
+TLS_PORT = 8443
+TLS_DIR = "/run/sysmedic/dash-tls"
+VAULT_TLS = "/run/sysmedic/vault-fs/tls"
+HOTSPOT_ADDR = "10.42.0.1"          # always this computer's address on its private hotspot (sysmedic-hotspot)
+FAIL_LIMIT, FAIL_WINDOW, LOCKOUT = 8, 300, 600       # wrong secrets per client before it is shut out for a while
+failures = {}
 TOKEN_FILE = Path("/run/sysmedic/dash.token")
 seen_clients = set()
 report_lock = threading.Lock()
@@ -45,6 +53,23 @@ def token():
     TOKEN_FILE.write_text(t)
     os.chmod(TOKEN_FILE, 0o600)
     return t
+
+
+def accepted(tls):
+    """Secrets this connection may use: the random one from the QR code (any port), and the engineer's own access
+    code (HTTPS only, so it doesn't cross the customer's network in clear text)."""
+    out = [token()]
+    code = accesscode.get() if tls else ""
+    if code:
+        out.append(code)
+    return out
+
+
+def locked_out(ip):
+    now = time.time()
+    fails = [t for t in failures.get(ip, []) if now - t < LOCKOUT]
+    failures[ip] = fails
+    return len([t for t in fails if now - t < FAIL_WINDOW]) >= FAIL_LIMIT
 
 
 def addresses():
@@ -300,6 +325,19 @@ refresh();setInterval(refresh,5000);tests();setInterval(tests,3000);
 </script></html>"""
 
 
+LOGIN = """<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<meta name=referrer content=no-referrer><title>SysMedic</title><style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#16181d;--muted:#5d6470;--line:#d9dde3;--brand:#c62828}
+@media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1b1e23;--text:#e9ebef;--muted:#a0a7b2;--line:#2c3138;--brand:#ef5350}}
+body{margin:0;font:16px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--text);display:grid;min-height:100vh;place-items:center}
+form{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;width:min(92vw,420px)}h1{margin:0 0 4px;font-size:20px}h1 b{color:var(--brand)}
+p{color:var(--muted);margin:4px 0 14px;font-size:14px}input{width:100%;box-sizing:border-box;font:18px ui-monospace,Menlo,Consolas,monospace;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)}
+button{margin-top:12px;width:100%;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font-size:17px;font-weight:600}
+</style></head><body><form onsubmit="location='/?t='+encodeURIComponent(c.value.trim());return false"><h1><b>Sys</b>Medic</h1>
+<p>Type the access code set on the rescue device (or use the code from its screen).</p>
+<input id=c name=c autocomplete=off autocapitalize=off spellcheck=false autofocus placeholder="access code"><button>Open</button></form></body></html>"""
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "SysMedic"
 
@@ -309,10 +347,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def authed(self):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         sent = self.headers.get("X-Token") or (q.get("t") or [""])[0]
-        ok = secrets.compare_digest(sent, token())
-        if ok and self.client_address[0] not in seen_clients:
-            seen_clients.add(self.client_address[0])
-            session.audit("phone", f"dashboard opened from {self.client_address[0]}")
+        ip = self.client_address[0]
+        if locked_out(ip):
+            return False
+        ok = any(secrets.compare_digest(sent.encode(), t.encode()) for t in accepted(self.server.tls))
+        if ok and ip not in seen_clients:
+            seen_clients.add(ip)
+            session.audit("phone", f"dashboard opened from {ip}" + (" (access code)" if sent != token() else ""))
+        elif not ok and sent:
+            failures.setdefault(ip, []).append(time.time())
+            if locked_out(ip):
+                session.audit("phone", f"{ip}: too many wrong codes: shut out for {LOCKOUT // 60} minutes")
         return ok
 
     def send(self, code, body, ctype="application/json"):
@@ -329,7 +374,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         if not self.authed():
-            return self.send(403, "Scan the QR code shown on the SysMedic console (Alt+F2, or run sysmedic-dash).", "text/plain")
+            if locked_out(self.client_address[0]):
+                return self.send(429, "Too many wrong codes from this address. Try again in a few minutes.", "text/plain")
+            if path == "/" and self.server.tls:
+                return self.send(200, LOGIN, "text/html")
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+            return self.send(403, "Scan the QR code shown on the SysMedic console (Alt+F2, or run sysmedic-dash)."
+                             + (f"\nOr, with your own access code: https://{host}:{TLS_PORT}" if host else ""), "text/plain")
         if path == "/":
             return self.send(200, PAGE, "text/html")
         if path == "/api/status":
@@ -442,13 +493,75 @@ def show_qr():
         # so the engineer console's commands still fit above it
         subprocess.run(["qrencode", "-t", "ANSIUTF8", "-m", "2", url])
     print("  " + UI().c("dim", "Anyone with this link can see this visit's findings."))
+    try:
+        hs = json.loads(subprocess.run(["/usr/local/sbin/sysmedic-hotspot", "status", "--json"], capture_output=True, text=True, timeout=5).stdout or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        hs = {}
+    if hs.get("on"):
+        print("\n  " + ui.c("accent", "Private hotspot:") + f" join {hs['ssid']}, then https://{HOTSPOT_ADDR}:{TLS_PORT} (bookmark it: same at every customer).")
+    if accesscode.get():
+        print("\n  " + ui.c("accent", "Laptop without a camera:") + f" open https://{ips[0]}:{TLS_PORT} (accept the certificate warning) and type your access code.")
+    else:
+        print("\n  " + ui.c("dim", "No QR scanner on the other device? Set a code of your own, once, and type that: menu K (sysmedic-vault code)."))
+
+
+class Server(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    tls = False
+
+
+def serve_tls():
+    """The same dashboard over HTTPS (self-signed, new each boot): where the engineer's access code is accepted."""
+    import blweb
+    os.makedirs(TLS_DIR, mode=0o700, exist_ok=True)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    have = []
+
+    def refresh():
+        ips = addresses() + ["127.0.0.1", HOTSPOT_ADDR]
+        if os.path.ismount(os.path.dirname(VAULT_TLS)):
+            # With the vault open the certificate is made once and kept in it: the engineer's browser (and bookmark)
+            # trusts the same fingerprint at every customer, instead of a new warning each boot
+            d, key = VAULT_TLS, ["vault"]
+            if not os.path.exists(f"{d}/cert.pem"):
+                os.makedirs(d, mode=0o700, exist_ok=True)
+                san = ",".join([f"IP:{ip}" for ip in dict.fromkeys(ips)] + ["DNS:sysmedic", "DNS:sysmedic.lan"])
+                subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                                "-days", "3650", "-subj", "/CN=SysMedic", "-addext", f"subjectAltName={san}",
+                                "-keyout", f"{d}/key.pem", "-out", f"{d}/cert.pem"], check=True, capture_output=True)
+                os.chmod(f"{d}/key.pem", 0o600)
+        else:
+            d, key = TLS_DIR, sorted(ips)
+            if key != have:
+                blweb.make_cert(d, ips)
+        if key != have:
+            ctx.load_cert_chain(f"{d}/cert.pem", f"{d}/key.pem")
+            have[:] = key
+
+    refresh()
+
+    class TLSServer(Server):
+        tls = True
+
+        def get_request(self):
+            sock, addr = self.socket.accept()
+            sock.settimeout(10)          # a stalled handshake only holds its own thread
+            return ctx.wrap_socket(sock, server_side=True, do_handshake_on_connect=False), addr
+
+    httpd = TLSServer(("0.0.0.0", TLS_PORT), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    while True:                          # the certificate follows the network (Wi-Fi joined after boot)
+        time.sleep(15)
+        try:
+            refresh()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def serve():
     token()
-    httpd = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    httpd.daemon_threads = True
-    httpd.serve_forever()
+    threading.Thread(target=serve_tls, daemon=True).start()
+    Server(("0.0.0.0", PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":

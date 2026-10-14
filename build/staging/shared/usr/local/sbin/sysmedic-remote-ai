@@ -19,6 +19,7 @@ import time
 
 sys.path.insert(0, "/usr/local/lib/sysmedic")
 import blweb  # noqa: E402  (its certificate helper)
+import accesscode  # noqa: E402
 
 D = "/run/sysmedic/remote-ai"
 FLAG = "/run/sysmedic/remote-ai.on"
@@ -64,16 +65,19 @@ def on():
         time.sleep(1)
     os.makedirs(D, mode=0o700, exist_ok=True)
     fp = blweb.make_cert(D, blweb.lan_addresses() + ["127.0.0.1"])
-    secret = secrets.token_urlsafe(12)
+    code = accesscode.get()          # the engineer's own code from the vault, else a random one for this visit
+    secret = code or secrets.token_urlsafe(12)
     log = open(f"{D}/ttyd.log", "w")
     p = subprocess.Popen(["ttyd", "--port", str(PORT), "--ssl", "--ssl-cert", f"{D}/cert.pem", "--ssl-key", f"{D}/key.pem",
-                          "--base-path", f"/{secret}", "--writable", "--url-arg", "--max-clients", "4",
+                          "--base-path", f"/{secret}", "-d", "1", "--writable", "--url-arg", "--max-clients", "4",
                           "-t", "fontSize=14", "-t", "fontFamily=DejaVu Sans Mono, Menlo, monospace", "-t", f"theme={THEME}",
                           "-t", "titleFixed=SysMedic AI", "/usr/local/bin/sysmedic-ai-remote"],
                          stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
     time.sleep(1.5)
+    shown = open(f"{D}/ttyd.log").read().replace(secret, "SECRET")      # ttyd prints its own URL path at startup
+    open(f"{D}/ttyd.log", "w").write(shown)
     if p.poll() is not None:
-        print("The web terminal didn't start: " + open(f"{D}/ttyd.log").read()[-300:])
+        print("The web terminal didn't start: " + shown[-300:])
         return 1
     json.dump({"pid": p.pid, "port": PORT, "path": f"/{secret}/", "fingerprint": fp, "since": time.strftime("%H:%M")},
               open(STATE, "w"))
@@ -82,6 +86,10 @@ def on():
     audit("ON (HTTPS web terminal on port 8444; changes need confirming on the device)")
     print("Remote AI is on: open the AI card on the phone dashboard. Anything that changes this machine waits for"
           " a keypress here (console 12).")
+    if code:
+        ips = blweb.lan_addresses()
+        print(f"Your access code opens it: https://{ips[0] if ips else 'ADDRESS'}:{PORT}/ (type the code after the slash), "
+              f"or the dashboard at https://{ips[0] if ips else 'ADDRESS'}:8443")
     return 0
 
 

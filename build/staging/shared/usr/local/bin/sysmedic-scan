@@ -16,6 +16,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,8 +32,13 @@ try:
     import winlib
 except ImportError:
     winlib = None
+try:
+    import raidlib
+except ImportError:
+    raidlib = None
 
 SEVERITIES = ["critical", "warning", "info", "ok"]
+RAID_MEMBER_FS = ("linux_raid_member", "isw_raid_member", "ddf_raid_member")
 RUN_DIR = Path("/run/sysmedic")
 PERSIST_SESSIONS = Path("/mnt/persist/sessions")
 SECURE_BOOT_VAR = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
@@ -198,6 +204,31 @@ def list_disks():
             continue
         disks.append(dev)
     return disks, ""
+
+
+def collect_raid():
+    """Start the machine's RAID arrays (and LVM on them) read-only, so what is inside gets scanned like any disk."""
+    if not raidlib or not shutil.which("mdadm") or not (raidlib.members() or raidlib.running()):
+        return
+    raidlib.assemble()
+    st = raidlib.status()
+    for a in st["running"]:
+        if a["container"]:
+            continue
+        left = [os.path.basename(d) for d in a.get("left_out", [])]
+        if a["degraded"] or left:
+            find("warning", "raid", f"RAID array {a['md']} ({a['level']}) is running degraded: {a['degraded']} of {a['disks']} disk(s) missing",
+                 "It was started read-only with the disks that are present; the data is readable, but there's no redundancy left."
+                 + (f" Left out because they dropped out earlier and hold older data: {', '.join(left)}." if left else ""),
+                 "Back up the data first, then replace the failed disk. Check the disks: smartctl -a /dev/DISK")
+        else:
+            find("ok", "raid", f"RAID array {a['md']} ({a['level']}, {a['disks']} disks) is healthy and running read-only")
+    for g in st["unstarted"]:
+        need = raidlib.need_disks(g["level"], g["expected"], g["present"])
+        find("critical" if g["fresh"] < need else "warning", "raid",
+             f"RAID array {g['name'] or g['uuid'][:8]} ({g['level']}) did not start: {g['fresh']} current of {g['expected']} disks",
+             "Too few current disks to start it safely." if g["fresh"] < need else "It should start; mdadm refused.",
+             "sysmedic-raid shows the members and their event counts; don't force a start with stale disks unless you accept older data.")
 
 
 def collect_block_devices():
@@ -569,8 +600,12 @@ def collect_filesystems(disks):
                     known[k].add(p[k.lower()])
     (RUN_DIR / "ro").mkdir(parents=True, exist_ok=True)
     results = []
+    seen_paths = set()
     for d in disks:
         for p in walk_partitions(d):
+            if p["path"] in seen_paths:      # a RAID array shows up under each of its disks
+                continue
+            seen_paths.add(p["path"])
             fs = p.get("fstype")
             label = p["path"] + (f" \"{p['label']}\"" if p.get("label") else "")
             entry = {"device": p["path"], "fstype": fs, "size_bytes": p["size"], "label": p.get("label"),
@@ -593,7 +628,9 @@ def collect_filesystems(disks):
             if fs == "crypto_LUKS":
                 find("info", "encryption", f"{label}: LUKS-encrypted Linux volume", "", "Unlock with: cryptsetup open " + p["path"] + " rescue")
                 continue
-            if fs in ("LVM2_member", "linux_raid_member", "zfs_member"):
+            if fs in RAID_MEMBER_FS:
+                continue                      # reported once per array by collect_raid
+            if fs in ("LVM2_member", "zfs_member"):
                 find("info", "filesystem", f"{label}: {fs} — part of a volume group/array; not touched by the scan")
                 continue
             if fs == "swap":
@@ -883,6 +920,7 @@ def main():
 
     system = stage("system", collect_system)
     stage("SysMedic's drive", check_self)
+    stage("RAID", collect_raid)
     disks = stage("disks", collect_block_devices)
     stage("health", health, disks)
     fsresults = stage("filesystems", collect_filesystems, disks)

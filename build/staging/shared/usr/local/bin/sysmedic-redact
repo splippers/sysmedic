@@ -99,6 +99,17 @@ def hosts_servers(root, add):
 def learn():
     """{"names": {real: placeholder}, "servers": {...}} gathered from the machine itself."""
     found = {}                         # real value → role (placeholder stem)
+    try:                               # the engineer's remote access code (kept in the vault) is a secret too
+        import accesscode
+        if accesscode.get():
+            found[accesscode.get()] = "ACCESS_CODE"
+        import engineer
+        h, _ = engineer.load()[0].get("hotspot", {}), 0
+        for secret in (h.get("psk"), h.get("generated")):
+            if secret:
+                found[secret] = "HOTSPOT_PASSWORD"
+    except ImportError:
+        pass
 
     def add(value, role):
         if isinstance(value, str):
