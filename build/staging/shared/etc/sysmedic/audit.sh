@@ -38,7 +38,23 @@ if [ -n "${SYSMEDIC_AI:-}" ] && [ -n "${BASH_EXECUTION_STRING:-}" ] && [ -z "$_s
         printf '%s [ai:%s] REFUSED (consent/cleaning map): %s\n' "$(date -Is)" "$SYSMEDIC_AI" "${BASH_EXECUTION_STRING//$'\n'/ ⏎ }" >> "$(_sysmedic_audit_file)" 2>/dev/null
         exit 126
     fi
-    if [ ! -e /run/sysmedic/consent/users ] && [[ "$BASH_EXECUTION_STRING" =~ [/\\]([Uu][Ss][Ee][Rr][Ss]|home)([/\\\"\'*[:space:]]|$) ]]; then
+    # A plain text write (cat > FILE <<'EOF' … EOF, quoted terminator so nothing in it runs or expands, and nothing
+    # after it) only stores words: check its first line, not the text (the AI's report may mention C:\Users).
+    _sysmedic_check=$BASH_EXECUTION_STRING
+    _sysmedic_first=${BASH_EXECUTION_STRING%%$'\n'*}
+    _sysmedic_re=$'^[[:space:]]*cat[[:space:]]+(>>?[[:space:]]*[^][:space:]<>;&|$`()\'"]+[[:space:]]+<<-?[[:space:]]*|<<-?[[:space:]]*)([\'"])([A-Za-z_][A-Za-z0-9_]*)[\'"]([[:space:]]+>>?[[:space:]]*[^][:space:]<>;&|$`()\'"]+)?[[:space:]]*$'
+    if [[ "$_sysmedic_first" =~ $_sysmedic_re ]] && [[ "${BASH_REMATCH[1]}" == *">"* || "${BASH_REMATCH[4]}" == *">"* ]] \
+            && [[ "${BASH_REMATCH[1]}" != *">"* || "${BASH_REMATCH[4]}" != *">"* ]]; then
+        _sysmedic_w=${BASH_REMATCH[3]}
+        _sysmedic_body=${BASH_EXECUTION_STRING#*$'\n'}
+        _sysmedic_body=${_sysmedic_body%$'\n'}
+        _sysmedic_last=${_sysmedic_body##*$'\n'}
+        _sysmedic_last=${_sysmedic_last#"${_sysmedic_last%%[!$'\t']*}"}
+        if [ "$_sysmedic_last" = "$_sysmedic_w" ] && [ "$(grep -cx $'\t*'"$_sysmedic_w" <<< "$_sysmedic_body")" = 1 ]; then
+            _sysmedic_check=$_sysmedic_first
+        fi
+    fi
+    if [ ! -e /run/sysmedic/consent/users ] && [[ "$_sysmedic_check" =~ [/\\]([Uu][Ss][Ee][Rr][Ss]|home)([/\\\"\'*[:space:]]|$) ]]; then
         echo "SysMedic: the customer's own folders (C:\\Users, /home) are closed to the AI without the customer's explicit agreement. Ask the engineer: with the customer's OK they record it on the laptop (sysmedic-consent users)." >&2
         printf '%s [ai:%s] REFUSED (user folders, no consent): %s\n' "$(date -Is)" "$SYSMEDIC_AI" "${BASH_EXECUTION_STRING//$'\n'/ ⏎ }" >> "$(_sysmedic_audit_file)" 2>/dev/null
         exit 126

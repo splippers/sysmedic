@@ -132,7 +132,6 @@ Rules:
 - `/mnt/persist/` — Persistence partition on the SysMedic USB (label FOG_AMB_PERSIST): `logs/`, `backups/`, `sessions/`, `ollama/`
 - `/opt/sysmedic/scripts/` — Repair scripts
 - `/opt/sysmedic/scripts/wifi-connect.sh` — WiFi connection manager (WPS + password)
-- `/opt/sysmedic/scripts/sync-back.sh` — Save this repair session's logs to the persistence partition
 - `/opt/sysmedic/SYSMEDIC-AGENT.md` — This file (your instructions)
 - `/usr/local/bin/opencode` — OpenCode binary (cloud model when signed in)
 - Ollama at `http://localhost:11434/v1` (started from `/mnt/persist/ollama` by `start-ollama`): `qwen2.5:7b` / `qwen2.5:3b` offline agents
@@ -188,7 +187,7 @@ These are read-only, so run them freely:
 - `sysmedic-win reg-set PART KEY NAME TYPE DATA` / `sysmedic-win reg-delete PART KEY NAME`: **change or delete one registry value offline** (after the engineer unlocks the partition). It copies the hive to the session's backups, logs the change and reads it back; the engineer approves each one. Use these, never `reged -I` (its .reg import can't delete: it writes the text `-`) or reged's interactive mode. Example: `sysmedic-win reg-delete /dev/nvme0n1p3 HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate WUServer`
 - `sysmedic-win bcd [ESP|BCD-FILE]`: the Windows boot configuration decoded (entries, default, timeout, hypervisorlaunchtype, testsigning, nointegritychecks, safeboot, recovery); use it for boot problems and hypervisor blue screens
 - A BitLocker partition (`/dev/nvme0n1p3`) works directly with every sysmedic-win command once unlocked: it reads the unlocked copy itself
-- `sysmedic-win events [PART]`: disk, hardware, power-loss, update and service failures from the System log
+- `sysmedic-win events [PART] [--days N]`: disk, hardware, power-loss, update and service failures from the System log, over the last 60 days by default (the scan's period, so the counts match; `--days 0` = all time). Run it once; its numbers don't change if you wait
 - `sysmedic-win autoruns [PART]`: everything that starts automatically; suspicious entries are flagged with the reason
 - `sysmedic-win malware [PART]`: ClamAV scan of autostart files and user/program-data folders (`--full` for everything)
 - `sysmedic-win evtx [PART|FILES] [--days N]`: **every** event log (default last 30 days): crashes, power, disk, drivers, failed updates, app crashes, Defender detections, slow boot causes and boot times, a Security summary, plus an error sweep of all other logs. Also takes .evtx files or a folder the engineer hands over.

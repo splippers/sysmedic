@@ -17,6 +17,52 @@ except ImportError:          # scan still works without it, with less detail
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 
+def bitlocker_key_id(dev):
+    """BitLocker Key ID (identifier of the recovery password), so the owner picks the right key: the Microsoft
+    account page lists each key under its Key ID, and Windows shows its first 8 characters on the recovery screen."""
+    try:
+        out = subprocess.run(["cryptsetup", "bitlkDump", dev], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    cur = None
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("GUID:"):
+            cur = s.split(":", 1)[1].strip()
+        if "recovery passphrase" in s.lower() and cur:
+            return cur.upper()
+    return ""
+
+
+def bitlocker_key_typo(key):
+    """A 48-digit recovery key carries its own check: every 6-digit group is a multiple of 11 below 720896.
+    Returns the 1-based numbers of the groups that fail it (a typo), or [] (well formed, or not a recovery key)."""
+    digits = re.sub(r"[\s-]", "", key)
+    if not re.fullmatch(r"\d{48}", digits):
+        return []
+    return [i // 6 + 1 for i in range(0, 48, 6) if int(digits[i:i + 6]) % 11 or int(digits[i:i + 6]) >= 720896]
+
+
+def bitlocker_failure(stderr, returncode=None):
+    """Why cryptsetup (run with -v) couldn't open a BitLocker volume, in plain words; its own message is kept too.
+    A well-formed recovery key that doesn't fit only gets "wrong or missing parameters" (exit 1)."""
+    msg = " ".join(l.strip() for l in (stderr or "").splitlines() if l.strip())[:200]
+    low = msg.lower()
+    if "partially decrypted" in low or "partially encrypted" in low or "encrypt-on-write" in low or "reencrypt" in low:
+        why = "the volume is part-way through encryption or decryption in Windows: let Windows finish, or read it from Windows"
+    elif "no key available" in low or returncode == 2 or (returncode == 1 and "wrong or missing parameters" in low):
+        why = "wrong key: it doesn't match this volume (compare the Key ID)"
+    elif "not supported" in low or "unsupported" in low or "cannot be activated" in low:
+        why = "this kind of BitLocker volume isn't supported by cryptsetup"
+    elif "busy" in low or "already exists" in low:
+        why = "the volume is in use (already open?)"
+    elif "device-mapper" in low or "dm-crypt" in low:
+        why = "the kernel's decryption module failed"
+    else:
+        why = "unknown reason"
+    return why, msg
+
+
 def ci_path(root, rel):
     """Resolve a relative path case-insensitively (NTFS paths vary in case)."""
     cur = Path(root)

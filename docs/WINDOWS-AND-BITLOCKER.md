@@ -9,7 +9,7 @@ Works on an offline Windows installation from SysMedic. Without a partition argu
 | `sysmedic-win` | Windows installations and BitLocker volumes (locked or unlocked) |
 | `sysmedic-win info [PART]` | Version (Windows 11 shown correctly), edition, computer name, last clean shutdown, **Fast Startup / hibernated now**, pending at next boot (half-installed update, servicing reboot, file replacements), WinRE available/disabled, user profiles with last use, free space |
 | `sysmedic-win crashes [PART]` | Every minidump with its **stop code decoded** into the usual cause, plus the pattern (e.g. "2 of 3 crashes are 0x124: hardware") |
-| `sysmedic-win events [PART]` | The System event log grouped: unexpected restarts, blue screens, disk errors (7/51/153, NTFS 55/98), WHEA hardware errors, failed updates, service failures, **new services installed** (persistence) |
+| `sysmedic-win events [PART] [--days N]` | The System event log over the last 60 days (as the scan; `--days 0` all time), grouped: unexpected restarts, blue screens, disk errors (7/51/153, NTFS 55/98), WHEA hardware errors, failed updates, service failures, **new services installed** (persistence) |
 | `sysmedic-win autoruns [PART]` | Run/RunOnce (machine and per user), auto-start services outside Windows, scheduled tasks, startup folders. **Suspicious** entries are flagged with the reason: a Windows system name outside System32, running from AppData/ProgramData/Temp, encoded PowerShell, remote scripts |
 | `sysmedic-win malware [PART] [--full]` | ClamAV on autostart files and user/program-data folders (`--full`: the whole volume). Signatures are on the drive and updated when online |
 

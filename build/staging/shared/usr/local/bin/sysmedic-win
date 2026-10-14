@@ -5,7 +5,8 @@ Read-only (safe for the AI to run):
   sysmedic-win                      list Windows installations and BitLocker volumes
   sysmedic-win info     [PART]      version, Fast Startup, last shutdown, accounts, WinRE, pending reboots
   sysmedic-win crashes  [PART]      blue-screen stop codes decoded, with what they usually mean
-  sysmedic-win events   [PART]      crashes, power loss, disk/hardware errors, failed services from the System log
+  sysmedic-win events   [PART] [--days N]   crashes, power loss, disk/hardware errors, failed services from the
+                                    System log (default: last 60 days, as the scan; --days 0 = all time)
   sysmedic-win autoruns [PART]      everything that starts automatically, with suspicious entries flagged
   sysmedic-win malware  [PART] [--full]   ClamAV scan of autostart files and user/program-data folders
 
@@ -512,7 +513,8 @@ def cmd_list(_args):
         found = True
         mapped = Path(f"/dev/mapper/bitlocker-{os.path.basename(dev)}")
         state = f"unlocked → {mapped}" if mapped.exists() else "locked — sysmedic-win bitlocker " + dev
-        print(f"  {dev:22} {C['yel']}BitLocker{C['end']} ({state})")
+        kid = winlib.bitlocker_key_id(dev)
+        print(f"  {dev:22} {C['yel']}BitLocker{C['end']} ({state})" + (f"  Key ID {kid[:8]}…" if kid else ""))
     if not found:
         print("  No Windows installations or BitLocker volumes found.")
 
@@ -584,14 +586,18 @@ def cmd_crashes(args):
 
 
 def cmd_events(args):
-    for dev, mp in windows_installs(args[0] if args and not args[0].startswith("-") else None):
+    days = opt(args, "--days", 60)          # the same period as the scan, so their counts agree
+    plain = [a for i, a in enumerate(args) if not a.startswith("--") and not (i and args[i - 1] == "--days")]
+    for dev, mp in windows_installs(plain[0] if plain else None):
         header(dev, mp)
-        evs = winlib.events(mp)
+        evs = winlib.events(mp, since_days=days or None)
+        sec("System event log", f"last {days} days (counted from today's clock; --days N to change, --days 0 for all)"
+            if days else "all time")
         if evs is None:
             print("  System event log not found or unreadable.")
             continue
         if not evs:
-            print("  No notable events.")
+            print("  No notable events in this period.")
         colour = {"disk": "red", "hardware": "red", "crash": "red", "power": "yel", "persistence": "yel",
                   "update": "yel", "service": "cyan", "error": "dim"}
         for e in evs[:25]:
@@ -669,12 +675,27 @@ def bitlocker_open(dev, key, rw=False, via="console"):
         digits = re.sub(r"\D", "", key)
         if len(digits) == 48:
             key = "-".join(digits[i:i + 6] for i in range(0, 48, 6))
-    cmd = ["cryptsetup", "open", "--type", "bitlk", "--key-file=-", dev, name] + ([] if rw else ["--readonly"])
+    typo = winlib.bitlocker_key_typo(key)
+    if typo:
+        key = None
+        groups = ", ".join(map(str, typo))
+        audit(f"BitLocker unlock of {dev} via {via} not tried: recovery key mistyped (group {groups} fails its check)")
+        return False, (f"That recovery key has a typo in group {groups} (of 8): every group of a real key divides by 11. "
+                       "Check those digits and try again."), None
+    cmd = ["cryptsetup", "open", "-v", "--type", "bitlk", "--key-file=-", dev, name] + ([] if rw else ["--readonly"])
     p = subprocess.run(cmd, input=key, capture_output=True, text=True)
     key = None
     if p.returncode != 0:
-        audit(f"BitLocker unlock of {dev} via {via} FAILED (wrong key?)")
-        return False, "Unlock failed — check the key (Microsoft account: aka.ms/myrecoverykey).", None
+        why, said = winlib.bitlocker_failure(p.stderr + "\n" + p.stdout, p.returncode)
+        said = re.sub(r"\d{6}(-\d{6})+", "[key]", said)       # cryptsetup doesn't echo the key; make sure
+        kid = winlib.bitlocker_key_id(dev)
+        audit(f"BitLocker unlock of {dev} via {via} FAILED: {why} (cryptsetup exit {p.returncode}: {said or 'no message'})"
+              + (f"; volume Key ID starts {kid[:8]}" if kid else ""))
+        if why.startswith("wrong key"):
+            return False, ("Unlock failed: that key doesn't match this volume." +
+                           (f" Use the key whose Key ID starts {kid[:8]} (Microsoft account: aka.ms/myrecoverykey)." if kid
+                            else " Check the key (Microsoft account: aka.ms/myrecoverykey).")), None
+        return False, f"Unlock failed: {why}.", None
     audit(f"BitLocker volume {dev} unlocked {'read-write' if rw else 'read-only'} via {via} → /dev/mapper/{name} (key not recorded)")
     return True, f"Unlocked {'read-write' if rw else 'read-only'} as /dev/mapper/{name}", f"/dev/mapper/{name}"
 
@@ -713,6 +734,9 @@ def cmd_bitlocker(args):
         return
     if rw and is_locked(dev):
         sys.exit(f"For read-write access unlock the partition first: sysmedic-unlock {dev}")
+    kid = winlib.bitlocker_key_id(dev)
+    if kid:
+        print(f"  Key ID: {C['bold']}{kid}{C['end']}  {C['dim']}(the recovery key listed under this ID; Windows shows its first 8 characters){C['end']}")
     print("  Enter the 48-digit BitLocker recovery key (or the user's BitLocker password).")
     print(f"  {C['dim']}It is used once and never stored or logged.{C['end']}")
     import getpass

@@ -184,12 +184,11 @@ def check_self():
                      "Move large files off it, e.g. to /srv/sysmedic (look with: du -ah /boot/efi | sort -h | tail)")
 
 
-def collect_block_devices():
+def list_disks():
     cols = "NAME,PATH,SIZE,TYPE,TRAN,MODEL,SERIAL,ROTA,RM,FSTYPE,FSVER,LABEL,UUID,PARTUUID,PARTTYPENAME,PARTLABEL,MOUNTPOINTS"
     rc, out, err = run(["lsblk", "-J", "-b", "-o", cols])
     if rc != 0:
-        find("critical", "disks", "Could not list disks", err.strip())
-        return []
+        return None, err.strip()
     skip = boot_disk()
     disks = []
     for dev in json.loads(out).get("blockdevices", []):
@@ -198,6 +197,30 @@ def collect_block_devices():
         if re.match(r"(loop|sr|zram|ram|fd)\d", dev["name"]):
             continue
         disks.append(dev)
+    return disks, ""
+
+
+def collect_block_devices():
+    disks, err = list_disks()
+    # Straight after boot an NVMe drive can still be coming up: give it a few seconds before reporting none
+    for _ in range(6):
+        if disks is None or disks:
+            break
+        run(["udevadm", "settle", "--timeout=5"])
+        time.sleep(2)
+        disks, err = list_disks()
+    if disks is None:
+        find("critical", "disks", "Could not list disks", err)
+        return []
+    if not disks:
+        _, pci, _ = run(["lspci"])
+        hidden = [l.split(": ", 1)[-1] for l in pci.splitlines() if re.search(r"RAID bus controller|Volume Management Device", l, re.I)]
+        find("critical", "disks", "No internal disks found",
+             "The machine's own drive isn't visible, so nothing on it was checked (this doesn't mean the OS is missing). "
+             + (f"Its storage controller is in RAID/VMD mode ({hidden[0]}), which hides the drive. " if hidden else
+                "The drive may still be starting up, be disabled in the BIOS, hidden by RAID/VMD storage mode, or not connected."),
+             "Rescan in a minute (menu, or: sysmedic-scan). Still none: in the BIOS set SATA/NVMe operation to AHCI "
+             "(note the old setting and put it back before Windows boots), and check the drive is seated.")
     return disks
 
 
@@ -561,8 +584,10 @@ def collect_filesystems(disks):
                     find("ok", "encryption", f"{label}: BitLocker volume unlocked as {mapped}",
                          "Read-only unless its partition is unlocked for repair (sysmedic-unlock " + p["path"] + ").")
                     continue
+                kid = winlib.bitlocker_key_id(p["path"]) if winlib else ""
                 find("warning", "encryption", f"{label}: BitLocker-encrypted ({human(p['size'])})",
-                     "The data can't be read or repaired without the 48-digit recovery key.",
+                     "The data can't be read or repaired without the 48-digit recovery key."
+                     + (f" Key ID starts {kid[:8]}: the owner needs the recovery key listed under that ID." if kid else ""),
                      "Get the key from the owner (often at aka.ms/myrecoverykey), then on Alt+F2: sysmedic-win bitlocker " + p["path"])
                 continue
             if fs == "crypto_LUKS":
@@ -614,7 +639,8 @@ def assess_boot(fsresults, system):
     linux = [f for f in oses if f["kind"] == "linux"]
     for f in oses:
         find("ok", "os", f"Found {f['os']} on {f['device']}")
-    if not oses and not any(x["severity"] == "warning" and x["area"] == "encryption" for x in findings):
+    if not oses and not any(x["severity"] == "warning" and x["area"] == "encryption" for x in findings) \
+            and not any(x["title"] == "No internal disks found" for x in findings):
         find("warning", "os", "No installed operating system found",
              "Either the disk is blank/replaced, encrypted, or the system partition is damaged beyond mounting.",
              "Check 'lsblk -f'; try testdisk to look for lost partitions.")

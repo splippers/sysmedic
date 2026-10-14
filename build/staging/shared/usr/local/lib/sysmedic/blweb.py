@@ -79,15 +79,8 @@ catch(err){m.className='msg bad';m.textContent='Connection lost: the unlock link
 
 def key_id(dev):
     """BitLocker Key ID (identifier of the recovery password), so the owner picks the right key."""
-    out = subprocess.run(["cryptsetup", "bitlkDump", dev], capture_output=True, text=True).stdout
-    cur = None
-    for line in out.splitlines():
-        s = line.strip()
-        if s.startswith("GUID:"):
-            cur = s.split(":", 1)[1].strip()
-        if "recovery passphrase" in s.lower() and cur:
-            return cur.upper()
-    return ""
+    import winlib
+    return winlib.bitlocker_key_id(dev)
 
 
 STATE = "/run/sysmedic/blweb.json"   # for the phone dashboard: where the page is, whether it's running (root only)

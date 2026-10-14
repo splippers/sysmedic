@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026.10.14: fixes from the stick's XPS 15 visit
+
+From the Cruzer's evening visit (a Windows 11 XPS 15 that was mid-way through turning BitLocker off).
+
+- **A failed BitLocker unlock says why.** Every failure was logged as "wrong key?", so six attempts with the owner's key gave no clue. The log, the console and the phone page now give cryptsetup's reason: the key doesn't match, the volume is part-way through encryption or decryption in Windows, or the format isn't supported. A well-formed key that doesn't fit gets only "wrong or missing parameters" from cryptsetup, which is now read as a wrong key. **Typos are caught before trying:** each 6-digit group of a real recovery key divides by 11, so a mistyped group is named ("typo in group 3").
+- **Key ID shown everywhere you unlock:** `sysmedic-win bitlocker` shows the volume's Key ID before asking for the key, and the scan and `sysmedic-win` list show its first 8 characters, so the owner can pick the matching key at aka.ms/myrecoverykey (it was only on the phone page).
+- **`sysmedic-win events --days N`** (default 60, as the scan). It ignored `--days` and counted all time without saying so, and the AI spent ten minutes trying to square its 529 with the scan's 185.
+- **The AI can write its report even when the report mentions C:\Users.** A plain text write (`cat > file <<'EOF'` with a quoted terminator and nothing after it) is checked on its first line only; anything that can run or expand is still checked in full.
+- **No disks found is no longer "No installed operating system".** Straight after boot the scan waits a few seconds (at most about 40) for the drive to appear; if none does, it says so and suggests the BIOS storage mode (RAID/VMD), which it names when it can see it.
+- The stick's prompt says `root@sysmedic`, like the caddy, not `root@ubuntu-server`. The AI's instructions no longer offer the old `sync-back.sh` (sessions save themselves).
+
 ## 2026.10.13 (night): the cloud AI's privacy filter works again; AI conversations in the vault
 
 From the caddy's afternoon visit (an XPS 15 left joined to a test domain).
