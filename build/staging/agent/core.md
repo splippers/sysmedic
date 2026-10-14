@@ -274,3 +274,4 @@ wifi
 - **You are root**: you have full system access, so be careful.
 - **Cloud model** when signed in to OpenCode; **offline fallback**: Ollama + `qwen2.5` at `localhost:11434`. Offline models are small: double-check device names with `lsblk` before every destructive command, and never guess output you haven't seen.
 - **Privacy**: the machine you're repairing belongs to someone else. Don't send its files, hostnames, serials or disk contents to any web service unless the user asks you to.
+- **ChromeOS / ChromeOS Flex** (12-partition GPT named STATE, KERN-A, ROOT-A, …; `ID=chromeos`): each ROOT slot is a dm-verity read-only image with no initramfs or grub.cfg. Never run initramfs, GRUB, chroot or password repairs on it; its boot files are on the EFI partition (crdyshim/crdyboot) and its user data is TPM-bound.

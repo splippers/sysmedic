@@ -105,6 +105,31 @@ def human(nbytes):
 
 # ── System ──────────────────────────────────────────────────────────────────
 
+def collect_sound():
+    """What sound hardware the kernel found, and whether the built-in speakers/jack have a driver (a laptop that
+    lists only HDMI/DisplayPort audio, or no card at all, is silent)."""
+    rc, out, _ = run(["aplay", "-l"], timeout=10)
+    devices = re.findall(r"^card (\d+): [^\[]*\[([^\]]*)\], device (\d+): [^\[]*\[([^\]]*)\]", out if rc == 0 else "", re.M)
+    names = [f"{c} / {d}" for _, c, _, d in devices]
+    builtin = [n for n in names if not re.search(r"hdmi|displayport|\bdp\b|usb", n, re.I)]
+    _, pci, _ = run(["lspci"], timeout=10)
+    pci_audio = [l.split(": ", 1)[-1] for l in pci.splitlines() if re.search(r"Audio device|Multimedia audio", l, re.I)]
+    laptop = bool(list(Path("/sys/class/power_supply").glob("BAT*")))
+    sound = {"devices": names, "builtin": bool(builtin), "pci_audio": pci_audio}
+    if builtin:
+        find("ok", "hardware", f"Sound: {builtin[0]}")
+    elif laptop and names:
+        find("warning", "hardware", "Sound: only HDMI/DisplayPort audio is available, not the built-in speakers",
+             "No driver for the speakers or headphone jack was loaded by this Linux (" + "; ".join(names[:3]) + "). "
+             "Windows may still have sound: check there before calling the speakers faulty.",
+             "Speaker test (menu) shows the kernel's sound messages; note what the owner reports.")
+    elif laptop:
+        find("warning", "hardware", "Sound: no sound card is available to this Linux",
+             ("The hardware is there (" + pci_audio[0] + ") but no driver started." if pci_audio else "No audio controller was listed."),
+             "Check the owner's complaint in Windows first; some audio chips need firmware this Linux lacks.")
+    return sound
+
+
 def collect_system():
     info = {}
     for key, field in [("manufacturer", "system-manufacturer"), ("model", "system-product-name"),
@@ -129,6 +154,7 @@ def collect_system():
     except OSError:
         pass
     info["secure_boot"] = sb
+    info["sound"] = collect_sound()
 
     if not info["cpu_avx"]:
         find("warning", "system", "CPU has no AVX: the OpenCode AI assistant can't run on this machine",
@@ -266,6 +292,9 @@ def smart(dev):
          "temperature_c": data.get("temperature", {}).get("current"),
          "power_on_hours": data.get("power_on_time", {}).get("hours")}
     attrs = {a["id"]: a["raw"]["value"] for a in data.get("ata_smart_attributes", {}).get("table", [])}
+    errs = data.get("ata_smart_error_log", {}).get("summary", {}).get("count")
+    if errs:
+        h["ata_errors"] = errs
     for key, attr_id in [("reallocated", 5), ("reported_uncorrectable", 187),
                          ("pending", 197), ("offline_uncorrectable", 198)]:
         if attr_id in attrs:
@@ -297,7 +326,15 @@ def assess_health(dev, h):
             problems.append(f"{h[key]} {label}")
     if problems:
         sev = "critical" if h.get("pending") or h.get("offline_uncorrectable") else "warning"
-        find(sev, "health", f"{name}: surface damage — " + ", ".join(problems), "", image_first)
+        mild = sev == "warning" and h.get("passed") and not h.get("reallocated") and h.get("reported_uncorrectable")
+        if mild:
+            # Reported_Uncorrect alone: the drive passed SMART and remapped nothing. Say what is known, and what settles it.
+            ctx = [f"SMART passed", "no sectors remapped"] + ([f"{h['ata_errors']} errors in the drive's own log"] if h.get("ata_errors") else [])
+            find(sev, "health", f"{name}: reports {h['reported_uncorrectable']} uncorrectable read errors (" + ", ".join(ctx) + ")",
+                 "This one counter can be old or from a flaky cable/USB bridge. A read-only surface scan (menu: disk tests) shows whether any sector is really unreadable.",
+                 "Run the read-only surface scan; image the disk (ddrescue) before repairs only if it finds bad blocks.")
+        else:
+            find(sev, "health", f"{name}: surface damage — " + ", ".join(problems), "", image_first)
     used = h.get("percentage_used")
     if used is not None and used >= 90:
         find("warning", "health", f"{name}: SSD is {used}% through its rated write endurance", "",
@@ -405,6 +442,26 @@ def free_space(target, label):
              "A full disk breaks updates, logins and sometimes boot.",
              f"See what fills it and what can safely go: sysmedic-du {label.split()[0]} (menu D)")
     return {"total_bytes": total, "free_bytes": free}
+
+
+def is_chromeos(target):
+    osr = read(Path(target, "etc/os-release"))
+    return bool(re.search(r"^ID=\"?chromeos", osr, re.M)) or "CHROMEOS_RELEASE" in read(Path(target, "etc/lsb-release"))
+
+
+def inspect_chromeos(target, label):
+    """ChromeOS / ChromeOS Flex: a read-only, dm-verity-verified A/B image booted by crdyboot from the EFI partition. It has
+    no initramfs, no grub.cfg and no package manager, and nothing in it may be 'repaired' like a Linux install."""
+    lsb = read(Path(target, "etc/lsb-release"))
+    ver = re.search(r"^CHROMEOS_RELEASE_VERSION=(.+)$", lsb, re.M)
+    board = re.search(r"^CHROMEOS_RELEASE_BOARD=(.+)$", lsb, re.M)
+    flex = bool(board and board.group(1).startswith("reven"))
+    name = ("ChromeOS Flex" if flex else "ChromeOS") + (f" {ver.group(1).strip()}" if ver else "")
+    find("info", "os", f"{name} ({label}) is a verified, read-only system image",
+         "Its kernel has no initramfs, there is no grub.cfg, and the EFI partition holds crdyshim/crdyboot, not GRUB. "
+         "Linux boot repairs do not apply and would break its integrity check (dm-verity). Its user data is encrypted per user and tied to the TPM.",
+         "Compare the two A/B slots (each is a full copy). To repair: use the ChromeOS recovery media, or reinstall Flex from the Chromebook Recovery Utility.")
+    return {"os": name, "kind": "chromeos"}
 
 
 def inspect_linux(target, label, known_ids):
@@ -651,10 +708,18 @@ def collect_filesystems(disks):
                     entry["mount"] = "failed"
                 continue
             try:
-                entry.update(free_space(target, label))
-                if Path(target, "etc/os-release").exists():
+                cros = is_chromeos(target)
+                if cros:
+                    entry.update(inspect_chromeos(target, label))      # a verified image: always 'full', never repaired like Linux
+                else:
+                    entry.update(free_space(target, label))
+                if cros:
+                    pass
+                elif Path(target, "etc/os-release").exists():
                     entry.update(inspect_linux(target, label, known))
-                if Path(target, "etc/os-release").exists() and Path(target, "boot").is_dir():
+                if cros:
+                    pass
+                elif Path(target, "etc/os-release").exists() and Path(target, "boot").is_dir():
                     inspect_linux_boot(Path(target, "boot"), label)
                 elif list(Path(target).glob("vmlinuz-*")):          # a separate /boot partition
                     inspect_linux_boot(Path(target), label)

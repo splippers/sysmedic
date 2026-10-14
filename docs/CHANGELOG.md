@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.10.15: ChromeOS Flex, sound hardware, honest speaker test
+
+- **ChromeOS and ChromeOS Flex are recognised.** A ChromeOS root slot (`ID=chromeos` / `CHROMEOS_RELEASE_*`) is a verified, read-only image: the scan no longer reports "no initramfs", "no grub.cfg" or "no Linux bootloader" for it, no longer flags it as full, and no longer offers GRUB or initramfs repairs, which would break its integrity check. It says what it is and how it is repaired instead. Found on a Surface Pro 3 running Flex.
+- **Sound hardware is part of the scan.** It lists what the kernel found. A laptop with only HDMI/DisplayPort audio, or no sound card, gets a warning ("check Windows first"), and the speaker test lists the cards and kernel sound messages.
+- **The speaker test no longer claims success it can't know.** `aplay` errors were thrown away and "Played" was printed regardless; a failed playback is now reported (exit 2).
+- **Disk health wording:** a drive that passed SMART, remapped nothing and shows only the one "uncorrectable errors" counter is described with that context (and its own error-log count) and pointed at the read-only surface scan, instead of "surface damage".
+- AI instructions (core.md) say never to repair a ChromeOS root slot like Linux.
+
 ## 2026.10.14 (night): 8 GB sticks, Service Tag in reviews, tester fixes
 
 - **The stick edition fits on an 8 GB stick.** The stick only ever runs the 3B model, so drives under 14 GB get that model alone (about 3.8 GB used; the vault gets about 2 GB). Bigger drives keep both models. Tested by building and booting a 7.5 GB image, creating the vault, and starting the offline AI.

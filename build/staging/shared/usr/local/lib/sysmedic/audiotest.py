@@ -236,11 +236,36 @@ def keys(fd, timeout):
     return ch.decode(errors="replace")
 
 
+FAILURES = []      # what aplay reported when it could not play (it used to be thrown away)
+
+
+def diagnose():
+    """Say what sound hardware the kernel found: a card that exists but is HDMI-only, or has no driver, is the usual reason for silence."""
+    cards = subprocess.run(["aplay", "-l"], capture_output=True, text=True).stdout
+    print("  Sound hardware the kernel found:")
+    for l in cards.splitlines():
+        if l.startswith("card"):
+            print("    " + l.strip())
+    names = cards.lower()
+    if "hdmi" in names and not any(k in names for k in ("analog", "alc", "realtek", "codec", "speaker")):
+        print("  Only HDMI/DisplayPort audio is listed: no driver for the built-in speakers or headphone jack was loaded.")
+    log = subprocess.run("dmesg 2>/dev/null | grep -i -E 'snd|hda|asoc|sof-audio|audio codec|firmware.*(audio|sof)' | tail -12",
+                         shell=True, capture_output=True, text=True).stdout.strip()
+    if log:
+        print("  Kernel messages about sound:")
+        for l in log.splitlines():
+            print("    " + l[:150])
+    else:
+        print("  The kernel logged nothing about sound at all.")
+
+
 def play(path, vol, interactive):
     """Play one file; returns 'next', 'quit' or 'done'."""
-    p = subprocess.Popen(["aplay", "-q", path], stderr=subprocess.DEVNULL)
+    p = subprocess.Popen(["aplay", "-q", path], stderr=subprocess.PIPE, text=True)
     if not interactive:
-        p.wait()
+        _, err = p.communicate()
+        if p.returncode:
+            FAILURES.append((err or "").strip().splitlines()[-1:] or [f"aplay exit {p.returncode}"])
         return "done"
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
@@ -262,6 +287,8 @@ def play(path, vol, interactive):
             elif k in ("q", "Q", "esc"):
                 p.terminate()
                 return "quit"
+        if p.returncode:
+            FAILURES.append((p.stderr.read() or "").strip().splitlines()[-1:] or [f"aplay exit {p.returncode}"])
         return "done"
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -322,8 +349,10 @@ def main():
         return 1
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     vol = Volume(level)
+    diagnose()
     if not vol.ctl:
-        print("  (This sound card has no volume control SysMedic recognises: playing at its current level.)")
+        print("  (No volume control SysMedic recognises on the sound hardware: playing at its current level."
+              " That usually means no built-in speaker driver.)")
     print("  Speaker test with music: Beethoven (synthesised here, nothing downloaded) and a frequency sweep.")
     if names is None and not interactive:
         names = [t[0] for t in TRACKS]
@@ -350,6 +379,10 @@ def main():
                 continue
             print()
             played += run(picks, vol, interactive)
+    if FAILURES:
+        print(f"\n  aplay could NOT play {len(FAILURES)} piece(s): {FAILURES[0][0]}")
+        print("  Nothing came out of the speakers; the built-in sound hardware is not working in this Linux.")
+        return 2
     if played:
         print(f"\n  Played: {', '.join(played)} (volume {vol.level}%).")
         print("  Note what you heard in the job report, e.g.: sysmedic-note \"speakers: right side weak, rattle on the Moonlight bass\"")
