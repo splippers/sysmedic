@@ -1,0 +1,12 @@
+# Optional: keep the mailbox running across reboots.
+#   mkdir -p ~/.config/systemd/user && cp sysmedic-hospital.service ~/.config/systemd/user/
+#   systemctl --user enable --now sysmedic-hospital
+[Unit]
+Description=SysMedic hospital mailbox (rescue computers post redacted questions here)
+
+[Service]
+ExecStart=/usr/bin/python3 %h/sysmedic-repo/tools/mailbox/server.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""sysmedic-hospital — talk to the hospital: the engineer's Claude on the build PC, over the LAN.
+
+This rescue computer is the ambulance. It sends redacted questions and findings and reads the replies. It is a
+mailbox: the hospital can't run anything here. Advice that comes back is read by you (and the AI assistant); the
+normal safety rules still decide what is allowed to run.
+
+  sysmedic-hospital pair             engineer only: paste the pairing code made by `hospital pair NAME` on the build PC
+  sysmedic-hospital unpair           forget the hospital
+  sysmedic-hospital status           paired? reachable?
+  sysmedic-hospital send [-k question|finding|status] TEXT      send (TEXT or - for stdin); cleaned by sysmedic-redact first
+  sysmedic-hospital read [--wait SECONDS]                       print new replies (optionally wait for one)
+  sysmedic-hospital ask TEXT         send, then wait up to 3 minutes for the answer
+
+The connection is HTTPS pinned to the hospital's certificate fingerprint from the pairing code. The pairing code is kept
+in the vault (private/), or in memory only when the vault is locked.
+"""
+import base64
+import hashlib
+import http.client
+import json
+import os
+import ssl
+import subprocess
+import sys
+import time
+from pathlib import Path
+from urllib.parse import urlparse
+
+PRIV = Path(os.environ["SYSMEDIC_HOSPITAL_DIR"]) if os.environ.get("SYSMEDIC_HOSPITAL_DIR") else \
+    Path("/mnt/persist/private") if Path("/mnt/persist/private").is_dir() else Path("/run/sysmedic")   # env: tests only
+CONF = PRIV / "hospital.json"
+CURSOR = (PRIV if os.environ.get("SYSMEDIC_HOSPITAL_DIR") else Path("/run/sysmedic")) / "hospital.cursor"
+
+
+def load():
+    try:
+        return json.loads(CONF.read_text())
+    except (OSError, ValueError):
+        sys.exit("  Not paired with a hospital. The engineer pairs it: sysmedic-hospital pair (Alt+F2).")
+
+
+def call(method, path, body=None, timeout=20):
+    c = load()
+    u = urlparse(c["u"])
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    conn = http.client.HTTPSConnection(u.hostname, u.port or 443, context=ctx, timeout=timeout)
+    try:
+        conn.connect()
+        got = hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest()
+        if got != c["f"]:
+            sys.exit("  The hospital's certificate is not the one that was paired: refusing to talk to it.")
+        conn.request(method, path, json.dumps(body) if body is not None else None,
+                     {"Authorization": "Bearer " + c["t"], "Content-Type": "application/json"})
+        r = conn.getresponse()
+        data = r.read()
+        return r.status, (json.loads(data) if data else {})
+    except (OSError, ssl.SSLError) as e:
+        sys.exit(f"  Can't reach the hospital ({u.hostname}): {e}. Is this computer on the same network?")
+    finally:
+        conn.close()
+
+
+def redact(text):
+    if not Path("/usr/local/bin/sysmedic-redact").exists():
+        return text
+    r = subprocess.run(["/usr/local/bin/sysmedic-redact"], input=text, capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 and r.stdout.strip() else text
+
+
+def device_line():
+    try:
+        s = json.loads(Path("/run/sysmedic/latest/scan.json").read_text())["system"]
+        tag = s.get("serial") or ""
+        return f"[{s.get('manufacturer', '')} {s.get('model', '')} · Service Tag {tag} · SysMedic {s.get('sysmedic_version', '')}]".replace("  ", " ")
+    except (OSError, ValueError, KeyError):
+        return ""
+
+
+def cmd_pair(_):
+    if os.environ.get("SYSMEDIC_AI"):
+        sys.exit("  Pairing is for the engineer: run it yourself on console 2 (Alt+F2). The AI can't pair.")
+    code = (sys.argv[2] if len(sys.argv) > 2 else input("  Pairing code (H1.…): ")).strip()
+    try:
+        d = json.loads(base64.urlsafe_b64decode(code[3:] + "=" * (-len(code[3:]) % 4)))
+        assert code.startswith("H1.") and d["u"].startswith("https://") and d["f"] and d["t"]
+    except Exception:  # noqa: BLE001
+        sys.exit("  That isn't a pairing code (it starts H1.).")
+    PRIV.mkdir(parents=True, exist_ok=True)
+    CONF.write_text(json.dumps({"u": d["u"], "f": d["f"], "t": d["t"], "n": d.get("n", "")}))
+    os.chmod(CONF, 0o600)
+    CURSOR.unlink(missing_ok=True)
+    code, body = call("GET", "/api/replies?since=0")
+    print(f"  Paired as '{d.get('n', '')}'." if code == 200 else f"  Saved, but the hospital said {code}: {body}")
+    print("  Kept in the vault." if str(PRIV) != "/run/sysmedic" else "  Vault locked: kept in memory only; pair again next boot.")
+
+
+def cmd_unpair(_):
+    CONF.unlink(missing_ok=True)
+    print("  Forgotten.")
+
+
+def cmd_status(_):
+    c = load()
+    code, _ = call("GET", "/api/replies?since=999999999")
+    print(f"  Paired as '{c.get('n', '')}' with {c['u']}: " + ("reachable." if code == 200 else f"answered {code}."))
+
+
+def cmd_send(a):
+    kind = "question"
+    if a[:1] == ["-k"]:
+        kind, a = a[1], a[2:]
+    text = sys.stdin.read() if a == ["-"] else " ".join(a)
+    if not text.strip():
+        sys.exit("usage: sysmedic-hospital send [-k kind] TEXT")
+    body = (device_line() + "\n" if device_line() else "") + redact(text).strip()
+    code, r = call("POST", "/api/post", {"text": body, "kind": kind})
+    if code != 200:
+        sys.exit(f"  The hospital refused it: {r.get('error', code)}")
+    print(f"  Sent (#{r['id']}). Read the answer with: sysmedic-hospital read --wait 120")
+
+
+def cmd_read(a):
+    wait = int(a[a.index("--wait") + 1]) if "--wait" in a else 0
+    end = time.time() + wait
+    while True:
+        try:
+            since = int(CURSOR.read_text())
+        except (OSError, ValueError):
+            since = 0
+        code, r = call("GET", f"/api/replies?since={since}")
+        rep = r.get("replies", []) if code == 200 else []
+        if rep:
+            for m in rep:
+                print(f"── hospital reply #{m['id']} · {m['ts']}\n{m['text']}\n")
+            CURSOR.parent.mkdir(parents=True, exist_ok=True)
+            CURSOR.write_text(str(rep[-1]["id"]))
+            print("(Advice only: your safety rules and the engineer still decide what runs.)")
+            return
+        if time.time() >= end:
+            print("  No new replies.")
+            return
+        time.sleep(3)
+
+
+def cmd_ask(a):
+    cmd_send(a)
+    cmd_read(["--wait", "180"])
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        return
+    fn = globals().get("cmd_" + sys.argv[1])
+    if not fn:
+        sys.exit(__doc__)
+    fn(sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()

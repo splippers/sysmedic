@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.10.15 (later): the hospital mailbox
+
+- **Rescue computers can ask Claude for help over the LAN.** A mailbox server on the build PC (`tools/mailbox`) takes redacted questions and findings from paired machines and returns replies; `sysmedic-hospital ask "…"` on the machine, `hospital inbox/reply` on the build PC. Per-machine tokens, HTTPS pinned to the server certificate, refuses unredacted-looking text, MCP endpoint included. The AI assistant may send and read; only the engineer pairs. See docs/HOSPITAL.md.
+
 ## 2026.10.15: ChromeOS Flex, sound hardware, honest speaker test
 
 - **ChromeOS and ChromeOS Flex are recognised.** A ChromeOS root slot (`ID=chromeos` / `CHROMEOS_RELEASE_*`) is a verified, read-only image: the scan no longer reports "no initramfs", "no grub.cfg" or "no Linux bootloader" for it, no longer flags it as full, and no longer offers GRUB or initramfs repairs, which would break its integrity check. It says what it is and how it is repaired instead. Found on a Surface Pro 3 running Flex.

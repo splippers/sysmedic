@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""hospital — the engineer's/Claude's side of the SysMedic mailbox.
+
+  hospital pair NAME [--host IP]   make a token for a rescue computer; prints the pairing code to type into it
+  hospital machines                who is paired, and when they last wrote
+  hospital inbox [--all]           unread messages from the machines (--all: everything)
+  hospital watch [SECONDS]         wait for a new message and print it (exit 0 on a message, 3 on timeout)
+  hospital reply NAME TEXT...      answer a machine (or read the text from stdin with -)
+  hospital revoke NAME             cancel a machine's token
+  hospital serve                   run the server in the foreground
+"""
+import base64
+import hashlib
+import json
+import os
+import secrets
+import ssl
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import server as S  # noqa: E402
+
+DIR = S.DIR
+
+
+def fingerprint():
+    der = ssl.PEM_cert_to_DER_cert((DIR / "cert.pem").read_text())
+    return hashlib.sha256(der).hexdigest()
+
+
+def save_machines(m):
+    DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    p = DIR / "machines.json"
+    p.write_text(json.dumps(m, indent=1))
+    os.chmod(p, 0o600)
+
+
+def cmd_pair(a):
+    if not a:
+        sys.exit("usage: hospital pair NAME [--host IP]")
+    name = a[0]
+    host = a[a.index("--host") + 1] if "--host" in a else (subprocess.run(["hostname", "-I"], capture_output=True, text=True).stdout.split() or ["127.0.0.1"])[0]
+    if not (DIR / "cert.pem").exists():
+        sys.exit("start the server once first (hospital serve) so it can make its certificate")
+    token = secrets.token_urlsafe(24)
+    m = S.machines()
+    m[name] = {"hash": S.h(token), "created": time.strftime("%Y-%m-%d %H:%M"), "revoked": False}
+    save_machines(m)
+    blob = base64.urlsafe_b64encode(json.dumps({"u": f"https://{host}:{os.environ.get('MAILBOX_PORT', '8470')}", "f": fingerprint(), "t": token, "n": name}).encode()).decode()
+    print(f"Paired '{name}'. On that rescue computer (Alt+F2 console), run:\n\n  sysmedic-hospital pair\n\nand paste this code:\n\n  H1.{blob}\n")
+    print("The code holds the token: type it only on that machine, not into any chat.")
+    port = os.environ.get("MAILBOX_PORT", "8470")
+    print(f"\nMachine without the program yet (not redeployed)? On it, as root, check the hash matches before running:\n"
+          f"  curl -sk https://{host}:{port}/client -o /usr/local/bin/sysmedic-hospital && sha256sum /usr/local/bin/sysmedic-hospital && chmod +x /usr/local/bin/sysmedic-hospital\n"
+          f"  expected: {S.client_sha()}")
+
+
+def cmd_machines(_):
+    last = {}
+    for m in S.messages():
+        if m["dir"] == "in":
+            last[m["machine"]] = m["ts"]
+    for n, m in S.machines().items():
+        print(f"{n:<20} {'REVOKED' if m.get('revoked') else 'active ':<8} paired {m['created']}  last message {last.get(n, '-')}")
+
+
+def seen_file():
+    return DIR / "seen"
+
+
+def seen():
+    try:
+        return int(seen_file().read_text())
+    except (OSError, ValueError):
+        return 0
+
+
+def show(m):
+    print(f"── #{m['id']} {m['ts']} · {m['machine']} · {m.get('kind', '')}\n{m['text']}\n")
+
+
+def cmd_inbox(a):
+    s = 0 if "--all" in a else seen()
+    new = [m for m in S.messages() if m["dir"] == "in" and m["id"] > s]
+    for m in new:
+        show(m)
+    if new:
+        seen_file().write_text(str(new[-1]["id"]))
+    elif "--all" not in a:
+        print("(no new messages)")
+
+
+def cmd_watch(a):
+    end = time.time() + (int(a[0]) if a else 3500)
+    while time.time() < end:
+        if any(m["dir"] == "in" and m["id"] > seen() for m in S.messages()):
+            return cmd_inbox([])
+        time.sleep(3)
+    sys.exit(3)
+
+
+def cmd_reply(a):
+    if len(a) < 2:
+        sys.exit("usage: hospital reply NAME TEXT...")
+    name = a[0]
+    if name not in S.machines():
+        sys.exit(f"no machine '{name}' (hospital machines)")
+    text = sys.stdin.read() if a[1:] == ["-"] else " ".join(a[1:])
+    m = S.append({"dir": "out", "machine": name, "text": text.strip()})
+    print(f"sent #{m['id']} to {name}")
+
+
+def cmd_revoke(a):
+    m = S.machines()
+    if not a or a[0] not in m:
+        sys.exit("usage: hospital revoke NAME")
+    m[a[0]]["revoked"] = True
+    save_machines(m)
+    print("revoked")
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        return
+    cmd, a = sys.argv[1], sys.argv[2:]
+    if cmd == "serve":
+        return S.main()
+    fn = globals().get("cmd_" + cmd)
+    if not fn:
+        sys.exit(__doc__)
+    fn(a)
+
+
+if __name__ == "__main__":
+    main()
