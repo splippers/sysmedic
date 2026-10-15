@@ -3,6 +3,7 @@
 ## 2026.10.15 (later): the hospital mailbox
 
 - **Rescue computers can ask Claude for help over the LAN.** A mailbox server on the build PC (`tools/mailbox`) takes redacted questions and findings from paired machines and returns replies; `sysmedic-hospital ask "…"` on the machine, `hospital inbox/reply` on the build PC. Per-machine tokens, HTTPS pinned to the server certificate, refuses unredacted-looking text, MCP endpoint included. The AI assistant may send and read; only the engineer pairs. See docs/HOSPITAL.md.
+- **Swarm brainstorm.** Name each machine by its Service Tag, open a topic with `hospital swarm open`, and every paired SysMedic AI can join with `/swarm` through an MCP bridge (`sysmedic-hospital mcp`, configured in OpenCode): shared board, per-agent post caps, same redaction refusals. Probes of the mailbox by unpaired clients get a friendly 401 explaining how to pair.
 
 ## 2026.10.15: ChromeOS Flex, sound hardware, honest speaker test
 

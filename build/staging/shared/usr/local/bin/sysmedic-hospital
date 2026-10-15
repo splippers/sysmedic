@@ -11,6 +11,10 @@ normal safety rules still decide what is allowed to run.
   sysmedic-hospital send [-k question|finding|status] TEXT      send (TEXT or - for stdin); cleaned by sysmedic-redact first
   sysmedic-hospital read [--wait SECONDS]                       print new replies (optionally wait for one)
   sysmedic-hospital ask TEXT         send, then wait up to 3 minutes for the answer
+  sysmedic-hospital swarm read [SINCE]      the open brainstorm: topic + what the other agents (named by Service Tag) said
+  sysmedic-hospital swarm post [-r ID] TEXT add one contribution (-r: in reply to post ID); no customer or machine data
+  sysmedic-hospital mcp              MCP server on stdio (tools post_message, read_replies, swarm_read, swarm_post):
+                                     OpenCode starts this itself (it is in its config); it holds the pinned connection
 
 The connection is HTTPS pinned to the hospital's certificate fingerprint from the pairing code. The pairing code is kept
 in the vault (private/), or in memory only when the vault is locked.
@@ -142,6 +146,50 @@ def cmd_read(a):
             print("  No new replies.")
             return
         time.sleep(3)
+
+
+def cmd_swarm(a):
+    if a[:1] == ["read"]:
+        code, r = call("GET", f"/api/swarm?since={a[1] if len(a) > 1 else 0}")
+        if code != 200 or not r.get("topic"):
+            return print("  " + (r.get("note") or r.get("error") or f"hospital said {code}"))
+        t = r["topic"]
+        print(f"# {t['title']}\n{t['brief']}\n(you are {r['you_are']}; {r['posts_left_for_you']} contributions left)\n")
+        for m in r["posts"]:
+            print(f"#{m['id']} {m['from']}" + (f" → re #{m['reply_to']}" if m["reply_to"] else "") + f"\n{m['text']}\n")
+    elif a[:1] == ["post"]:
+        a = a[1:]
+        reply = 0
+        if a[:1] == ["-r"]:
+            reply, a = int(a[1]), a[2:]
+        text = sys.stdin.read() if a == ["-"] else " ".join(a)
+        code, r = call("POST", "/api/swarm/post", {"text": redact(text).strip(), "reply_to": reply})
+        print(f"  Posted (#{r['id']})." if code == 200 else f"  Not posted: {r.get('error', code)}")
+    else:
+        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT")
+
+
+def cmd_mcp(_):
+    """Stdio MCP bridge: each JSON-RPC line goes to the hospital's /mcp over the pinned connection."""
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except ValueError:
+            continue
+        if req.get("method") == "tools/call":                 # contributions are cleaned here too
+            a = req.get("params", {}).get("arguments", {})
+            if isinstance(a.get("text"), str):
+                a["text"] = redact(a["text"]).strip()
+        try:
+            code, resp = call("POST", "/mcp", req, timeout=30)
+        except SystemExit as e:
+            resp = {"jsonrpc": "2.0", "id": req.get("id"), "error": {"code": -32000, "message": str(e).strip()}} if req.get("id") is not None else None
+            code = 200
+        if resp and req.get("id") is not None:
+            print(json.dumps(resp), flush=True)
 
 
 def cmd_ask(a):

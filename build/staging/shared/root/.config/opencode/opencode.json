@@ -380,6 +380,18 @@
     "list": "deny",
     "lsp": "deny",
     "task": "deny",
-    "websearch": "deny"
+    "websearch": "deny",
+    "hospital_*": "allow"
+  },
+  "mcp": {
+    "hospital": {
+      "type": "local",
+      "command": [
+        "/usr/local/bin/sysmedic-hospital",
+        "mcp"
+      ],
+      "enabled": true,
+      "timeout": 40000
+    }
   }
 }

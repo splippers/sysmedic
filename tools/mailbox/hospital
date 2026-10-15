@@ -114,6 +114,58 @@ def cmd_reply(a):
     print(f"sent #{m['id']} to {name}")
 
 
+def cmd_swarm(a):
+    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | board [SINCE] | say TEXT | close | agents"""
+    sub = a[0] if a else ""
+    tf = DIR / "swarm-topic.json"
+    if sub == "open":
+        if len(a) < 2:
+            sys.exit("usage: hospital swarm open TITLE [-f BRIEF_FILE | BRIEF text...]")
+        title, rest = a[1], a[2:]
+        brief = Path(rest[1]).read_text() if rest[:1] == ["-f"] else " ".join(rest) or title
+        bad = S.why_refused(title + " " + brief)
+        if bad:
+            sys.exit(f"the brief contains {bad}: a brainstorm topic must be free of customer and machine data")
+        old = S.swarm_topic()
+        tf.write_text(json.dumps({"id": (old or {}).get("id", 0) + 1, "title": title, "brief": brief.strip(), "status": "open",
+                                  "opened": time.strftime("%Y-%m-%d %H:%M")}))
+        os.chmod(tf, 0o600)
+        print(f"Brainstorm #{S.swarm_topic()['id']} open: {title}")
+    elif sub == "board":
+        t = S.swarm_topic()
+        if not t:
+            return print("(no brainstorm yet)")
+        since = int(a[1]) if len(a) > 1 else 0
+        print(f"# {t['title']}  [{t['status']}]\n{t['brief']}\n")
+        for m in S.swarm_posts():
+            if m["id"] > since:
+                print(f"#{m['id']} {m['ts']} {m['agent']}" + (f" → re #{m['reply_to']}" if m["reply_to"] else "") + f"\n{m['text']}\n")
+    elif sub == "say":
+        S.swarm_add("HOSPITAL", " ".join(a[1:]))
+        print("posted")
+    elif sub == "close":
+        t = S.swarm_topic()
+        if t:
+            t["status"] = "closed"
+            tf.write_text(json.dumps(t))
+        print("closed")
+    elif sub == "agents":
+        counts = {}
+        for m in S.swarm_posts():
+            counts[m["agent"]] = counts.get(m["agent"], 0) + 1
+        print("\n".join(f"{k:<14}{v} post(s)" for k, v in counts.items()) or "(nobody has posted)")
+    elif sub == "watch":
+        last = max([m["id"] for m in S.swarm_posts()] or [0])
+        end = time.time() + (int(a[1]) if len(a) > 1 else 3500)
+        while time.time() < end:
+            if max([m["id"] for m in S.swarm_posts()] or [0]) > last:
+                return cmd_swarm(["board", str(last)])
+            time.sleep(3)
+        sys.exit(3)
+    else:
+        print(cmd_swarm.__doc__)
+
+
 def cmd_revoke(a):
     m = S.machines()
     if not a or a[0] not in m:
