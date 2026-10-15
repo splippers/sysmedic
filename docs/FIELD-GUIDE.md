@@ -112,6 +112,7 @@ Scan the QR code on console 2 (or run `sysmedic-dash`). The phone must be on the
 | Symptom | Do this |
 |---|---|
 | Everything slow; scan warns "USB 2.0" | Power off, move SysMedic to a USB 3 port/cable |
+| Dell XPS (and some other Dells): the stick or caddy is not in the F12 list, or the laptop drops to SupportAssist, with Secure Boot **on** | The firmware does not list the drive by itself: add the boot option by hand. BIOS setup → **Boot Configuration** → **Add Boot Option** → name it "SysMedic" → pick the file with the file browser: the drive's EFI partition → `\EFI\BOOT\BOOTX64.EFI` (the caddy may instead have `\EFI\ubuntu\shimx64.efi`: use whichever the browser shows) → Apply. Then F12 → "SysMedic". Needs no Secure Boot change, so BitLocker is not disturbed |
 | Won't boot with Secure Boot on (newer Dell/Lenovo/HP business laptops) | The firmware only trusts Windows. BIOS setup → Secure Boot → enable **"Microsoft UEFI CA"** (Lenovo: "Allow Microsoft 3rd Party UEFI CA"), or turn Secure Boot off for the visit. Either way, with BitLocker: have the recovery key, and **turn Secure Boot back on before Windows starts** |
 | Forgot the vault passphrase | Use the recovery key at the passphrase prompt. Lost both: three wrong tries, then **r** (or `sysmedic-vault reset`) erases the vault and sets up a new one; its data is lost |
 | Scan says "kept in memory only" | The vault is locked: `sysmedic-vault unlock` on Alt+F2 before shutting down, or the visit is lost |
