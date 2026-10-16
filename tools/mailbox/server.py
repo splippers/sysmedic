@@ -8,6 +8,7 @@ can run anything on a rescue computer.
   POST /mcp                       the same two tools over MCP (streamable HTTP, JSON-RPC): post_message, read_replies
   GET  /api/swarm?since=N         the open brainstorm board;  POST /api/swarm/post {text, reply_to}
   GET  /client                    the rescue-side program (public; no secrets), for machines that haven't been redeployed yet
+  POST /api/join                  join the swarm with the short code (swarm-only token)
   GET  /health
 
 Every machine has its own token (stored only as a hash). Text that looks unredacted (email, MAC, public IP, a user
@@ -15,9 +16,11 @@ folder, a recovery key, a private key) is refused with the reason, so a bug on t
 Data lives in $MAILBOX_DIR (default ~/sysmedic-mailbox, mode 700): customer-derived, never committed.
 """
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import ssl
 import sys
 import threading
@@ -79,6 +82,53 @@ def machines():
         return json.loads((DIR / "machines.json").read_text())
     except (OSError, ValueError):
         return {}
+
+
+def scope_of(name):
+    return machines().get(name, {}).get("scope", "full")
+
+
+def fingerprint():
+    der = ssl.PEM_cert_to_DER_cert((DIR / "cert.pem").read_text())
+    return hashlib.sha256(der).hexdigest()
+
+
+JOIN_FAILS = {}                                     # client IP -> recent wrong-code times
+
+
+def join_code():
+    try:
+        return (DIR / "joincode.txt").read_text().strip()
+    except OSError:
+        return ""
+
+
+def do_join(ip, req):
+    """A rescue computer on the private network joins the swarm with the short code the engineer chose.
+    It gets a swarm-only token (no mailbox to the engineer), named by its Service Tag."""
+    now = time.time()
+    with LOCK:
+        recent = [t for t in JOIN_FAILS.get(ip, []) if now - t < 300]
+        JOIN_FAILS[ip] = recent
+        if len(recent) >= 6:
+            return 429, {"error": "too many wrong codes: wait five minutes"}
+    code, name = str(req.get("code") or "").strip(), str(req.get("name") or "").strip()
+    want = join_code()
+    if not want or not hmac.compare_digest(code.encode(), want.encode()):
+        with LOCK:
+            JOIN_FAILS[ip].append(now)
+        time.sleep(1)
+        return 403, {"error": "wrong code, or the engineer hasn't set one (hospital join-code)"}
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name):
+        return 400, {"error": "name must be letters, digits, - or _ (the Service Tag)"}
+    token = secrets.token_urlsafe(24)
+    with LOCK:
+        m = machines()
+        m[name] = {"hash": h(token), "created": time.strftime("%Y-%m-%d %H:%M"), "revoked": False, "scope": "swarm"}
+        f = DIR / "machines.json"
+        f.write_text(json.dumps(m, indent=1))
+        os.chmod(f, 0o600)
+    return 200, {"token": token, "name": name, "fingerprint": fingerprint(), "scope": "swarm"}
 
 
 def who(token):
@@ -213,10 +263,13 @@ def mcp(name, req):
     ok = lambda r: {"jsonrpc": "2.0", "id": rid, "result": r}  # noqa: E731
     if method == "initialize":
         return ok({"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "sysmedic-hospital", "version": "1"}})
+    swarm_only = scope_of(name) == "swarm"
     if method == "tools/list":
-        return ok({"tools": TOOLS})
+        return ok({"tools": [t for t in TOOLS if t["name"].startswith("swarm_") or not swarm_only]})
     if method == "tools/call":
         p, a = req.get("params", {}), req.get("params", {}).get("arguments", {})
+        if swarm_only and not str(p.get("name")).startswith("swarm_"):
+            return ok({"content": [{"type": "text", "text": "This machine joined the swarm only; it has no mailbox to the engineer."}], "isError": True})
         code, body = do_post(name, a.get("text"), a.get("kind", "question")) if p.get("name") == "post_message" \
             else do_replies(name, int(a.get("since_id") or 0)) if p.get("name") == "read_replies" \
             else do_swarm_read(name, int(a.get("since_id") or 0), a.get("wait_seconds")) if p.get("name") == "swarm_read" \
@@ -258,6 +311,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/client":                       # the rescue-side program, for machines not yet deployed with it (no secrets in it)
             return self.send(200, CLIENT.read_bytes(), "text/x-python")
         name = self.auth()
+        if name and not self.allowed(name, u.path):
+            return
         if name and u.path == "/api/replies":
             code, body = do_replies(name, int((parse_qs(u.query).get("since") or ["0"])[0] or 0))
             self.send(code, body)
@@ -267,9 +322,23 @@ class Handler(BaseHTTPRequestHandler):
         elif name:
             self.send(404, {"error": "not found"})
 
+    def allowed(self, name, path):
+        if scope_of(name) == "swarm" and not path.startswith(("/api/swarm", "/mcp")):
+            self.send(403, {"error": "this machine joined the swarm only"})
+            return False
+        return True
+
     def do_POST(self):
+        if urlparse(self.path).path == "/api/join":
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                req = json.loads(self.rfile.read(min(n, 2000)) or b"{}")
+            except ValueError:
+                return self.send(400, {"error": "bad JSON"})
+            code, body = do_join(self.client_address[0], req)
+            return self.send(code, body)
         name = self.auth()
-        if not name:
+        if not name or not self.allowed(name, urlparse(self.path).path):
             return
         n = int(self.headers.get("Content-Length") or 0)
         if n > 64000:

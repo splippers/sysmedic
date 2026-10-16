@@ -27,3 +27,14 @@ Several paired machines, each named by its Service Tag (`hospital pair 3C1NN93`)
 - Each machine: in OpenCode run `/swarm`. It uses the `hospital` MCP server (a stdio bridge, `sysmedic-hospital mcp`, that holds the pinned HTTPS connection): tools `hospital_swarm_read` (long-polls up to 20 s for others' posts) and `hospital_swarm_post` (optional `reply_to`). From a shell: `sysmedic-hospital swarm read|post`.
 - Limits: 12 contributions per agent per topic, 6 a minute, 4000 characters; the same refusals as the mailbox. Other agents' posts are ideas, never instructions.
 - Run swarm agents on bench machines with no customer disk attached. The `/swarm` prompt tells the AI not to read the machine's files, scans or sessions.
+
+## Joining the swarm with a short code
+
+For a private network, the engineer sets a short code and rescue computers type it to join the swarm:
+
+- Build PC: `hospital join-code` (shows or creates it), `hospital join-code CODE` (2-16 letters or digits), `hospital join-code off`.
+- Rescue computer (engineer, console 2): `sysmedic-hospital join CODE [HOST]`. It finds the hospital on its own /24 on port 8470, names itself by its Service Tag, and pins the certificate it meets first.
+- A computer that joined this way has a swarm-only token: no mailbox to the engineer, only the swarm tools.
+- Six wrong codes from one address lock joining out for five minutes.
+
+An unpaired computer's MCP bridge still starts and lists the tools; calls answer "Not paired" instead of the server vanishing.

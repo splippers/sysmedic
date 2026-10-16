@@ -6,6 +6,7 @@ mailbox: the hospital can't run anything here. Advice that comes back is read by
 normal safety rules still decide what is allowed to run.
 
   sysmedic-hospital pair             engineer only: paste the pairing code made by `hospital pair NAME` on the build PC
+  sysmedic-hospital join CODE [HOST]  engineer only, swarm only: the short way in. Finds the hospital itself, names this computer by its Service Tag
   sysmedic-hospital unpair           forget the hospital
   sysmedic-hospital status           paired? reachable?
   sysmedic-hospital send [-k question|finding|status] TEXT      send (TEXT or - for stdin); cleaned by sysmedic-redact first
@@ -100,6 +101,71 @@ def cmd_pair(_):
     print("  Kept in the vault." if str(PRIV) != "/run/sysmedic" else "  Vault locked: kept in memory only; pair again next boot.")
 
 
+def service_tag():
+    try:
+        t = json.loads(Path("/run/sysmedic/latest/scan.json").read_text())["system"].get("serial") or ""
+    except (OSError, ValueError, KeyError):
+        t = ""
+    if not t:
+        t = subprocess.run(["dmidecode", "-s", "system-serial-number"], capture_output=True, text=True).stdout.strip()
+    t = "".join(c if c.isalnum() or c in "-_" else "-" for c in t.strip())[:32]
+    return t if t and t.lower() not in ("none", "default-string", "to-be-filled-by-o-e-m") else ""
+
+
+def find_hospital():
+    """The hospital is on this private network: look for it on this machine's /24 (port 8470)."""
+    import socket
+    import concurrent.futures as cf
+    nets = {".".join(l.split()[3].split("/")[0].split(".")[:3]) for l in
+            subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True).stdout.splitlines()}
+
+    def probe(ip):
+        try:
+            with socket.create_connection((ip, 8470), timeout=0.4):
+                return ip
+        except OSError:
+            return None
+    with cf.ThreadPoolExecutor(64) as ex:
+        for ip in ex.map(probe, [f"{n}.{i}" for n in sorted(nets) for i in range(1, 255)]):
+            if ip:
+                return ip
+    return None
+
+
+def cmd_join(_):
+    """join CODE [HOST] [NAME] — the short way in, for the swarm only (private network; the engineer chose the code)."""
+    if os.environ.get("SYSMEDIC_AI"):
+        sys.exit("  Joining is for the engineer: run it yourself on console 2 (Alt+F2). The AI can't join.")
+    args = [x for x in sys.argv[2:] if not x.startswith("-")]
+    code = args[0] if args else input("  Join code: ").strip()
+    host = args[1] if len(args) > 1 else None
+    name = args[2] if len(args) > 2 else service_tag() or input("  Name for this computer (no Service Tag found): ").strip()
+    if not host:
+        print("  Looking for the hospital on this network…", flush=True)
+        host = find_hospital()
+        if not host:
+            sys.exit("  Didn't find it. Is this computer on the same network? Or: sysmedic-hospital join CODE HOST_IP")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE        # first meeting: the fingerprint is taken from this connection and pinned
+    conn = http.client.HTTPSConnection(host, 8470, timeout=15, context=ctx)
+    try:
+        conn.request("POST", "/api/join", json.dumps({"code": code, "name": name}), {"Content-Type": "application/json"})
+        fp = hashlib.sha256(conn.sock.getpeercert(True)).hexdigest()
+        r = conn.getresponse()
+        body = json.loads(r.read() or b"{}")
+    except (OSError, ValueError) as e:
+        sys.exit(f"  Can't reach the hospital at {host}: {e}")
+    finally:
+        conn.close()
+    if r.status != 200:
+        sys.exit(f"  Not joined: {body.get('error', r.status)}")
+    PRIV.mkdir(parents=True, exist_ok=True)
+    CONF.write_text(json.dumps({"u": f"https://{host}:8470", "f": fp, "t": body["token"], "n": body["name"], "scope": "swarm"}))
+    os.chmod(CONF, 0o600)
+    print(f"  Joined the swarm as '{body['name']}' ({host}).")
+    print("  Kept in the vault." if str(PRIV) != "/run/sysmedic" else "  Vault locked: kept in memory only; join again next boot.")
+
+
 def cmd_unpair(_):
     CONF.unlink(missing_ok=True)
     print("  Forgotten.")
@@ -169,6 +235,31 @@ def cmd_swarm(a):
         sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT")
 
 
+OFFLINE_TOOLS = [
+    {"name": n, "description": d, "inputSchema": {"type": "object", "properties": pr}} for n, d, pr in [
+        ("post_message", "Send a redacted question, finding or status to the hospital.", {"text": {"type": "string"}, "kind": {"type": "string"}}),
+        ("read_replies", "Read the hospital's replies to this machine.", {"since_id": {"type": "integer"}}),
+        ("swarm_read", "Read the open brainstorm (other agents' ideas, by Service Tag).", {"since_id": {"type": "integer"}, "wait_seconds": {"type": "integer"}}),
+        ("swarm_post", "Add one contribution to the open brainstorm.", {"text": {"type": "string"}, "reply_to": {"type": "integer"}})]]
+
+
+def offline_reply(req, why):
+    """Not paired or hospital unreachable: still be a valid MCP server, so the AI sees the tools and a clear reason
+    (a server that fails to start leaves the tools missing, and the AI can't tell why)."""
+    i, m = req.get("id"), req.get("method")
+    if i is None:
+        return None
+    if m == "initialize":
+        r = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "sysmedic-hospital", "version": "1"}}
+    elif m == "tools/list":
+        r = {"tools": OFFLINE_TOOLS}
+    elif m == "tools/call":
+        r = {"content": [{"type": "text", "text": why}], "isError": True}
+    else:
+        return {"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": why}}
+    return {"jsonrpc": "2.0", "id": i, "result": r}
+
+
 def cmd_mcp(_):
     """Stdio MCP bridge: each JSON-RPC line goes to the hospital's /mcp over the pinned connection."""
     for line in sys.stdin:
@@ -186,7 +277,7 @@ def cmd_mcp(_):
         try:
             code, resp = call("POST", "/mcp", req, timeout=30)
         except SystemExit as e:
-            resp = {"jsonrpc": "2.0", "id": req.get("id"), "error": {"code": -32000, "message": str(e).strip()}} if req.get("id") is not None else None
+            resp = offline_reply(req, str(e).strip())
             code = 200
         if resp and req.get("id") is not None:
             print(json.dumps(resp), flush=True)

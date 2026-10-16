@@ -2,6 +2,7 @@
 """hospital — the engineer's/Claude's side of the SysMedic mailbox.
 
   hospital pair NAME [--host IP]   make a token for a rescue computer; prints the pairing code to type into it
+  hospital join-code [CODE|off]    the short code rescue computers type to join the swarm (shown, or set)
   hospital machines                who is paired, and when they last wrote
   hospital inbox [--all]           unread messages from the machines (--all: everything)
   hospital watch [SECONDS]         wait for a new message and print it (exit 0 on a message, 3 on timeout)
@@ -13,6 +14,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import ssl
 import subprocess
@@ -59,13 +61,34 @@ def cmd_pair(a):
           f"  expected: {S.client_sha()}")
 
 
+def cmd_join_code(a):
+    f = DIR / "joincode.txt"
+    if a and a[0] == "off":
+        f.unlink(missing_ok=True)
+        return print("Joining switched off.")
+    if a:
+        if not re.fullmatch(r"[A-Za-z0-9]{2,16}", a[0]):
+            sys.exit("the code is 2-16 letters or digits")
+        f.write_text(a[0])
+        os.chmod(f, 0o600)
+    elif not f.exists():
+        f.write_text("%04d" % secrets.randbelow(10000))
+        os.chmod(f, 0o600)
+    port = os.environ.get("MAILBOX_PORT", "8470")
+    print(f"Join code: {f.read_text().strip()}\n\nOn a rescue computer (Alt+F2 console):  sysmedic-hospital join {f.read_text().strip()}\n"
+          f"It finds this PC by itself on the same network, names itself by its Service Tag and gets swarm-only access.\n"
+          f"Change it:  hospital join-code NEWCODE     Switch off:  hospital join-code off\n"
+          f"Not redeployed yet? Fetch the program first (check the hash {S.client_sha()[:16]}…):\n"
+          f"  curl -sk https://{(subprocess.run(['hostname', '-I'], capture_output=True, text=True).stdout.split() or ['HOST'])[0]}:{port}/client -o /usr/local/bin/sysmedic-hospital && chmod +x /usr/local/bin/sysmedic-hospital")
+
+
 def cmd_machines(_):
     last = {}
     for m in S.messages():
         if m["dir"] == "in":
             last[m["machine"]] = m["ts"]
     for n, m in S.machines().items():
-        print(f"{n:<20} {'REVOKED' if m.get('revoked') else 'active ':<8} paired {m['created']}  last message {last.get(n, '-')}")
+        print(f"{n:<20} {'REVOKED' if m.get('revoked') else 'active ':<8} {m.get('scope', 'full'):<6} paired {m['created']}  last message {last.get(n, '-')}")
 
 
 def seen_file():
@@ -182,7 +205,7 @@ def main():
     cmd, a = sys.argv[1], sys.argv[2:]
     if cmd == "serve":
         return S.main()
-    fn = globals().get("cmd_" + cmd)
+    fn = globals().get("cmd_" + cmd.replace("-", "_"))
     if not fn:
         sys.exit(__doc__)
     fn(a)
