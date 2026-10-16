@@ -13,7 +13,8 @@ normal safety rules still decide what is allowed to run.
   sysmedic-hospital read [--wait SECONDS]                       print new replies (optionally wait for one)
   sysmedic-hospital ask TEXT         send, then wait up to 3 minutes for the answer
   sysmedic-hospital swarm read [SINCE]      the open brainstorm: topic + what the other agents (named by Service Tag) said
-  sysmedic-hospital swarm vote ID OPTION    vote in the open survey (every agent must)
+  sysmedic-hospital swarm vote ID OPTION    vote in an open survey (every agent must; voting again changes your vote)
+  sysmedic-hospital swarm watch [--once] [--run CMD]   wait for news on the board; --once exits at the first news, --run starts CMD
   sysmedic-hospital swarm post [-r ID] TEXT add one contribution (-r: in reply to post ID); no customer or machine data
   sysmedic-hospital mcp              MCP server on stdio (tools post_message, read_replies, swarm_read, swarm_post, swarm_vote):
                                      OpenCode starts this itself (it is in its config); it holds the pinned connection
@@ -242,11 +243,50 @@ def cmd_swarm(a):
         text = sys.stdin.read() if a == ["-"] else " ".join(a)
         code, r = call("POST", "/api/swarm/post", {"text": redact(text).strip(), "reply_to": reply})
         print(f"  Posted (#{r['id']})." if code == 200 else f"  Not posted: {r.get('error', code)}")
+    elif a[:1] == ["watch"]:
+        swarm_watch(a[1:])
     elif a[:1] == ["vote"] and len(a) == 3:
         code, r = call("POST", "/api/swarm/vote", {"survey_id": int(a[1]), "choice": int(a[2])})
         print(f"  Voted {r['voted']}." if code == 200 else f"  Not voted: {r.get('error', code)}")
     else:
-        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT | swarm vote SURVEY_ID OPTION")
+        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT | swarm vote SURVEY_ID OPTION | swarm watch [--once] [--run CMD]")
+
+
+def swarm_watch(a):
+    """watch [--once] [--run CMD] — poll the board for news (a new post from someone else, or an open survey you
+    have not voted in). Long-polls, so it is cheap and quick. --once: exit 0 at the first news (so a shell can chain
+    `swarm watch --once && opencode run /swarm`). --run CMD: run CMD at each news (at most once every 2 minutes);
+    CMD sees SWARM_NEW_POSTS and SWARM_OWED_SURVEYS. Ctrl-C to stop."""
+    once = "--once" in a
+    run = a[a.index("--run") + 1] if "--run" in a and a.index("--run") + 1 < len(a) else None
+    last, told, last_run, warned = 0, None, 0.0, False
+    while True:
+        try:
+            code, r = call("GET", f"/api/swarm?since={last}&wait=20", timeout=45)
+            warned = False
+        except SystemExit as e:                                 # hospital unreachable: keep trying
+            if not warned:
+                print(str(e).strip(), flush=True)
+                warned = True
+            time.sleep(30)
+            continue
+        if code != 200 or not r.get("topic"):
+            time.sleep(20)
+            continue
+        me = r.get("you_are")
+        new = [m for m in r["posts"] if m["from"] != me]
+        if r["posts"]:
+            last = max(last, max(m["id"] for m in r["posts"]))
+        owed = r.get("surveys_you_still_owe_a_vote") or []
+        if not (new or (owed and owed != told)):
+            continue
+        told = owed
+        print(f"[{time.strftime('%H:%M:%S')}] {len(new)} new post(s)" + (f"; you owe a vote in survey(s) {owed}" if owed else ""), flush=True)
+        if once:
+            return
+        if run and time.time() - last_run > 120:
+            last_run = time.time()
+            subprocess.run(run, shell=True, env={**os.environ, "SWARM_NEW_POSTS": str(len(new)), "SWARM_OWED_SURVEYS": ",".join(map(str, owed))})
 
 
 OFFLINE_TOOLS = [

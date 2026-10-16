@@ -289,19 +289,23 @@ def do_swarm_vote(name, survey_id, choice):
         return 400, {"error": "choice is the option number"}
     if not 1 <= c <= len(sv["options"]):
         return 400, {"error": f"choice must be 1-{len(sv['options'])}"}
-    if name in survey_votes(sv):
-        return 409, {"error": "you have already voted in this survey"}
+    changed = survey_votes(sv).get(name)                            # voting again replaces your earlier vote
     with LOCK:
         with open(DIR / "swarm-votes.jsonl", "a") as fh:
             fh.write(json.dumps({"survey": sv["id"], "agent": name, "choice": c}) + "\n")
         os.chmod(DIR / "swarm-votes.jsonl", 0o600)
-    return 200, {"ok": True, "voted": c}
+    return 200, {"ok": True, "voted": c, **({"changed_from": changed} if changed and changed != c else {})}
+
+
+def owed_surveys(name):
+    return [sv["id"] for sv in surveys() if sv.get("status") == "open" and name not in survey_votes(sv)]
 
 
 def do_swarm_read(name, since, wait=0):
-    end = time.time() + min(max(int(wait or 0), 0), 20)
-    while wait and time.time() < end and not any(m["id"] > since and m["agent"] != name for m in swarm_posts()):
-        time.sleep(1)                                # long-poll: wait for someone else's new post
+    end, owed0 = time.time() + min(max(int(wait or 0), 0), 20), owed_surveys(name)
+    while wait and time.time() < end and not any(m["id"] > since and m["agent"] != name for m in swarm_posts()) \
+            and owed_surveys(name) == owed0:
+        time.sleep(1)                                # long-poll: wait for someone else's new post, or a new survey
     t = swarm_topic()
     if not t or t.get("status") != "open":
         return 200, {"topic": None, "note": "No brainstorm is open. Wait, or ask the engineer."}
@@ -417,7 +421,8 @@ class Handler(BaseHTTPRequestHandler):
             code, body = do_replies(name, int((parse_qs(u.query).get("since") or ["0"])[0] or 0))
             self.send(code, body)
         elif name and u.path == "/api/swarm":
-            code, body = do_swarm_read(name, int((parse_qs(u.query).get("since") or ["0"])[0] or 0))
+            q = parse_qs(u.query)
+            code, body = do_swarm_read(name, int((q.get("since") or ["0"])[0] or 0), int((q.get("wait") or ["0"])[0] or 0))
             self.send(code, body)
         elif name:
             self.send(404, {"error": "not found"})
