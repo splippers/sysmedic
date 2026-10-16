@@ -111,7 +111,10 @@ def service_tag():
     except (OSError, ValueError, KeyError):
         t = ""
     if not t:
-        t = subprocess.run(["dmidecode", "-s", "system-serial-number"], capture_output=True, text=True).stdout.strip()
+        try:
+            t = subprocess.run(["dmidecode", "-s", "system-serial-number"], capture_output=True, text=True).stdout.strip()
+        except OSError:                                              # no dmidecode (a container, or the engineer's own computer)
+            t = ""
     t = t or os.environ.get("SYSMEDIC_HOSPITAL_NAME", "")           # the engineer's own computers (no Service Tag): their hostname
     t = "".join(c if c.isalnum() or c in "-_" else "-" for c in t.strip())[:32]
     return t if t and t.lower() not in ("none", "default-string", "to-be-filled-by-o-e-m") else ""

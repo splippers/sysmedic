@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""install-swarm [-p PORT] [USER@]HOST — put the hospital client, the /swarm command and the joining options on one of the
+engineer's own computers that runs OpenCode (not a rescue drive: those get all this from sysmedic-deploy).
+
+Needs only SSH and python3 on the target; no sudo. On the target it adds:
+  ~/.local/share/sysmedic-hospital/client.py     the client (this repo's copy)
+  ~/.local/bin/sysmedic-hospital                 wrapper: keeps its pairing in ~/.config/sysmedic-hospital, names the
+                                                 computer by its hostname, so `sysmedic-hospital join PIN` is all to type
+  ~/.config/opencode/opencode.json               + mcp.hospital, permission hospital_*, command /swarm (old file saved as .bak-swarm)
+"""
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent.parent
+CLIENT = REPO / "build/staging/shared/usr/local/bin/sysmedic-hospital"
+TESTS = (REPO / "build/staging/shared/usr/local/bin/sysmedic-tests").read_text()
+
+WRAPPER = """#!/bin/sh
+export SYSMEDIC_HOSPITAL_DIR="${SYSMEDIC_HOSPITAL_DIR:-$HOME/.config/sysmedic-hospital}"
+export SYSMEDIC_HOSPITAL_NAME="${SYSMEDIC_HOSPITAL_NAME:-$(hostname -s | tr 'a-z' 'A-Z')}"
+exec python3 "$HOME/.local/share/sysmedic-hospital/client.py" "$@"
+"""
+
+# runs on the target
+REMOTE = r'''
+import json, os, shutil, sys
+home = os.path.expanduser("~")
+spec = json.load(sys.stdin)
+os.makedirs(f"{home}/.local/bin", exist_ok=True)
+os.makedirs(f"{home}/.local/share/sysmedic-hospital", exist_ok=True)
+os.makedirs(f"{home}/.config/sysmedic-hospital", mode=0o700, exist_ok=True)
+open(f"{home}/.local/share/sysmedic-hospital/client.py", "w").write(spec["client"])
+w = f"{home}/.local/bin/sysmedic-hospital"
+open(w, "w").write(spec["wrapper"]); os.chmod(w, 0o755)
+p = f"{home}/.config/opencode/opencode.json"
+os.makedirs(os.path.dirname(p), exist_ok=True)
+c = json.load(open(p)) if os.path.exists(p) else {"$schema": "https://opencode.ai/config.json"}
+if os.path.exists(p):
+    shutil.copy2(p, p + ".bak-swarm")
+c.setdefault("mcp", {})["hospital"] = {"type": "local", "command": [w, "mcp"], "enabled": True, "timeout": 40000}
+c.setdefault("permission", {})["hospital_*"] = "allow"
+c.setdefault("command", {})["swarm"] = spec["swarm"]
+json.dump(c, open(p, "w"), indent=2)
+print("installed:", w)
+'''
+
+
+def swarm_command():
+    m = re.search(r'cmds\["swarm"\] = (\{.*?\})\n    cmds\["tests"\]', TESTS, re.S)
+    cmd = eval(m.group(1), {})                           # a literal dict written in sysmedic-tests
+    cmd.pop("agent", None)                               # SysMedic's own agent isn't on these computers
+    return cmd
+
+
+def main():
+    args = sys.argv[1:]
+    port = []
+    if args[:1] == ["-p"] and len(args) == 3:
+        port, args = ["-p", args[1]], args[2:]
+    if len(args) != 1:
+        sys.exit(__doc__)
+    target = args[0]
+    spec = {"client": CLIENT.read_text(), "wrapper": WRAPPER, "swarm": swarm_command()}
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", *port, target, "python3", "-c", "'" + REMOTE.replace("'", "'\"'\"'") + "'"],
+                       input=json.dumps(spec), text=True, capture_output=True)
+    print(r.stdout + r.stderr)
+    if r.returncode == 0:
+        print(f"Now on {target}:  sysmedic-hospital join PIN   (PIN from `hospital pin` here), then /swarm in OpenCode.")
+    sys.exit(r.returncode)
+
+
+main()
