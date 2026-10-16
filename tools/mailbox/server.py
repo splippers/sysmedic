@@ -6,7 +6,7 @@ can run anything on a rescue computer.
   POST /api/post                  {"text": "...", "kind": "question|finding|status"}   (Authorization: Bearer TOKEN)
   GET  /api/replies?since=N       replies addressed to the calling machine
   POST /mcp                       the same two tools over MCP (streamable HTTP, JSON-RPC): post_message, read_replies
-  GET  /api/swarm?since=N         the open brainstorm board;  POST /api/swarm/post {text, reply_to}
+  GET  /api/swarm?since=N         the open brainstorm board;  POST /api/swarm/post {text, reply_to};  POST /api/swarm/vote {survey_id, choice}
   GET  /client                    the rescue-side program (public; no secrets), for machines that haven't been redeployed yet
   POST /api/join                  join the swarm with the short code (swarm-only token)
   GET  /health
@@ -222,6 +222,50 @@ def swarm_add(agent, text, reply_to=0):
     return m
 
 
+def swarm_survey():
+    """The open survey for the current topic, or None. One at a time; every agent is expected to vote."""
+    t = swarm_topic()
+    try:
+        sv = json.loads((DIR / "swarm-survey.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return sv if t and sv.get("topic") == t["id"] else None
+
+
+def survey_votes(sv):
+    f = DIR / "swarm-votes.jsonl"
+    if not sv or not f.exists():
+        return {}
+    votes = {}
+    for l in open(f):
+        if l.strip():
+            v = json.loads(l)
+            if v["survey"] == sv["id"]:
+                votes[v["agent"]] = v["choice"]            # one vote per agent
+    return votes
+
+
+def do_swarm_vote(name, survey_id, choice):
+    sv = swarm_survey()
+    if not sv or sv.get("status") != "open":
+        return 409, {"error": "no survey is open"}
+    if int(survey_id or 0) != sv["id"]:
+        return 409, {"error": f"that survey is closed: the open one is #{sv['id']}"}
+    try:
+        c = int(choice)
+    except (TypeError, ValueError):
+        return 400, {"error": "choice is the option number"}
+    if not 1 <= c <= len(sv["options"]):
+        return 400, {"error": f"choice must be 1-{len(sv['options'])}"}
+    if name in survey_votes(sv):
+        return 409, {"error": "you have already voted in this survey"}
+    with LOCK:
+        with open(DIR / "swarm-votes.jsonl", "a") as fh:
+            fh.write(json.dumps({"survey": sv["id"], "agent": name, "choice": c}) + "\n")
+        os.chmod(DIR / "swarm-votes.jsonl", 0o600)
+    return 200, {"ok": True, "voted": c}
+
+
 def do_swarm_read(name, since, wait=0):
     end = time.time() + min(max(int(wait or 0), 0), 20)
     while wait and time.time() < end and not any(m["id"] > since and m["agent"] != name for m in swarm_posts()):
@@ -231,7 +275,12 @@ def do_swarm_read(name, since, wait=0):
         return 200, {"topic": None, "note": "No brainstorm is open. Wait, or ask the engineer."}
     posts = swarm_posts()
     mine = sum(1 for m in posts if m["agent"] == name)
-    return 200, {"topic": {"id": t["id"], "title": t["title"], "brief": t["brief"]}, "you_are": name,
+    sv, extra = swarm_survey(), {}
+    if sv and sv.get("status") == "open":
+        extra["survey"] = {"id": sv["id"], "question": sv["question"], "options": sv["options"],
+                           "you_have_voted": name in survey_votes(sv),
+                           "ACTION": "" if name in survey_votes(sv) else "VOTE NOW with swarm_vote before anything else: every agent must vote."}
+    return 200, {"topic": {"id": t["id"], "title": t["title"], "brief": t["brief"]}, "you_are": name, **extra,
                  "posts_left_for_you": max(POSTS_PER_AGENT - mine, 0),
                  "posts": [{"id": m["id"], "from": m["agent"], "reply_to": m["reply_to"], "text": m["text"]} for m in posts if m["id"] > since]}
 
@@ -267,6 +316,8 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {"since_id": {"type": "integer"}, "wait_seconds": {"type": "integer", "description": "wait up to 20 s for someone else's new post"}}}},
     {"name": "swarm_post", "description": "Add one contribution to the open brainstorm: a concrete idea, a critique of someone else's idea (set reply_to to its id), or a refinement. Short and specific. No customer or machine data.",
      "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}, "reply_to": {"type": "integer"}}, "required": ["text"]}},
+    {"name": "swarm_vote", "description": "Vote in the open survey shown by swarm_read (one vote each, final). choice is the option number. Every agent must vote when a survey appears.",
+     "inputSchema": {"type": "object", "properties": {"survey_id": {"type": "integer"}, "choice": {"type": "integer"}}, "required": ["survey_id", "choice"]}},
 ]
 
 
@@ -285,7 +336,8 @@ def mcp(name, req):
         code, body = do_post(name, a.get("text"), a.get("kind", "question")) if p.get("name") == "post_message" \
             else do_replies(name, int(a.get("since_id") or 0)) if p.get("name") == "read_replies" \
             else do_swarm_read(name, int(a.get("since_id") or 0), a.get("wait_seconds")) if p.get("name") == "swarm_read" \
-            else do_swarm_post(name, a.get("text"), a.get("reply_to")) if p.get("name") == "swarm_post" else (404, {"error": "no such tool"})
+            else do_swarm_post(name, a.get("text"), a.get("reply_to")) if p.get("name") == "swarm_post" \
+            else do_swarm_vote(name, a.get("survey_id"), a.get("choice")) if p.get("name") == "swarm_vote" else (404, {"error": "no such tool"})
         return ok({"content": [{"type": "text", "text": json.dumps(body)}], "isError": code != 200})
     if rid is None:
         return None                                   # a notification: no reply
@@ -365,6 +417,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(code, body)
         elif u.path == "/api/swarm/post":
             code, body = do_swarm_post(name, req.get("text"), req.get("reply_to"))
+        elif u.path == "/api/swarm/vote":
+            code, body = do_swarm_vote(name, req.get("survey_id"), req.get("choice"))
             self.send(code, body)
         elif u.path == "/mcp":
             r = mcp(name, req)

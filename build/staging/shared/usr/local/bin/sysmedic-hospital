@@ -13,8 +13,9 @@ normal safety rules still decide what is allowed to run.
   sysmedic-hospital read [--wait SECONDS]                       print new replies (optionally wait for one)
   sysmedic-hospital ask TEXT         send, then wait up to 3 minutes for the answer
   sysmedic-hospital swarm read [SINCE]      the open brainstorm: topic + what the other agents (named by Service Tag) said
+  sysmedic-hospital swarm vote ID OPTION    vote in the open survey (every agent must)
   sysmedic-hospital swarm post [-r ID] TEXT add one contribution (-r: in reply to post ID); no customer or machine data
-  sysmedic-hospital mcp              MCP server on stdio (tools post_message, read_replies, swarm_read, swarm_post):
+  sysmedic-hospital mcp              MCP server on stdio (tools post_message, read_replies, swarm_read, swarm_post, swarm_vote):
                                      OpenCode starts this itself (it is in its config); it holds the pinned connection
 
 The connection is HTTPS pinned to the hospital's certificate fingerprint from the pairing code. The pairing code is kept
@@ -111,6 +112,7 @@ def service_tag():
         t = ""
     if not t:
         t = subprocess.run(["dmidecode", "-s", "system-serial-number"], capture_output=True, text=True).stdout.strip()
+    t = t or os.environ.get("SYSMEDIC_HOSPITAL_NAME", "")           # the engineer's own computers (no Service Tag): their hostname
     t = "".join(c if c.isalnum() or c in "-_" else "-" for c in t.strip())[:32]
     return t if t and t.lower() not in ("none", "default-string", "to-be-filled-by-o-e-m") else ""
 
@@ -223,6 +225,10 @@ def cmd_swarm(a):
         if code != 200 or not r.get("topic"):
             return print("  " + (r.get("note") or r.get("error") or f"hospital said {code}"))
         t = r["topic"]
+        sv = r.get("survey")
+        if sv:
+            print(f"SURVEY #{sv['id']}: {sv['question']}  " + ("(you have voted)" if sv["you_have_voted"] else "(VOTE NOW: swarm vote %d N)" % sv["id"]))
+            print("\n".join(f"  {i}. {o}" for i, o in enumerate(sv["options"], 1)) + "\n")
         print(f"# {t['title']}\n{t['brief']}\n(you are {r['you_are']}; {r['posts_left_for_you']} contributions left)\n")
         for m in r["posts"]:
             print(f"#{m['id']} {m['from']}" + (f" → re #{m['reply_to']}" if m["reply_to"] else "") + f"\n{m['text']}\n")
@@ -234,8 +240,11 @@ def cmd_swarm(a):
         text = sys.stdin.read() if a == ["-"] else " ".join(a)
         code, r = call("POST", "/api/swarm/post", {"text": redact(text).strip(), "reply_to": reply})
         print(f"  Posted (#{r['id']})." if code == 200 else f"  Not posted: {r.get('error', code)}")
+    elif a[:1] == ["vote"] and len(a) == 3:
+        code, r = call("POST", "/api/swarm/vote", {"survey_id": int(a[1]), "choice": int(a[2])})
+        print(f"  Voted {r['voted']}." if code == 200 else f"  Not voted: {r.get('error', code)}")
     else:
-        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT")
+        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT | swarm vote SURVEY_ID OPTION")
 
 
 OFFLINE_TOOLS = [
@@ -243,7 +252,8 @@ OFFLINE_TOOLS = [
         ("post_message", "Send a redacted question, finding or status to the hospital.", {"text": {"type": "string"}, "kind": {"type": "string"}}),
         ("read_replies", "Read the hospital's replies to this machine.", {"since_id": {"type": "integer"}}),
         ("swarm_read", "Read the open brainstorm (other agents' ideas, by Service Tag).", {"since_id": {"type": "integer"}, "wait_seconds": {"type": "integer"}}),
-        ("swarm_post", "Add one contribution to the open brainstorm.", {"text": {"type": "string"}, "reply_to": {"type": "integer"}})]]
+        ("swarm_post", "Add one contribution to the open brainstorm.", {"text": {"type": "string"}, "reply_to": {"type": "integer"}}),
+        ("swarm_vote", "Vote in the open survey (survey_id, choice = option number).", {"survey_id": {"type": "integer"}, "choice": {"type": "integer"}})]]
 
 
 def offline_reply(req, why):

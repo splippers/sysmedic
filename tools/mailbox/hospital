@@ -148,7 +148,7 @@ def cmd_reply(a):
 
 
 def cmd_swarm(a):
-    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | board [SINCE] | say TEXT | close | agents"""
+    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | board [SINCE] | say TEXT | survey Q OPT1 OPT2.. | survey results|close | close | agents"""
     sub = a[0] if a else ""
     tf = DIR / "swarm-topic.json"
     if sub == "open":
@@ -182,6 +182,38 @@ def cmd_swarm(a):
             t["status"] = "closed"
             tf.write_text(json.dumps(t))
         print("closed")
+    elif sub == "survey":
+        t = S.swarm_topic()
+        if not t:
+            sys.exit("open a brainstorm first")
+        if a[1:2] == ["results"] or a[1:2] == ["close"]:
+            sv = S.swarm_survey()
+            if not sv:
+                return print("(no survey)")
+            votes = S.survey_votes(sv)
+            posters = {m["agent"] for m in S.swarm_posts()} | set(votes)
+            print(f"Survey #{sv['id']} [{sv['status']}]: {sv['question']}")
+            for i, o in enumerate(sv["options"], 1):
+                who = [k for k, v in votes.items() if v == i]
+                print(f"  {i}. {o}: {len(who)}  {' '.join(who)}")
+            missing = sorted(posters - set(votes))
+            print("  not yet voted: " + (" ".join(missing) or "(none)"))
+            if a[1] == "close":
+                sv["status"] = "closed"
+                (DIR / "swarm-survey.json").write_text(json.dumps(sv))
+                print("closed")
+            return
+        if len(a) < 4:
+            sys.exit("usage: hospital swarm survey QUESTION OPTION1 OPTION2 [...] | survey results | survey close")
+        q, opts = a[1], a[2:]
+        bad = S.why_refused(q + " " + " ".join(opts))
+        if bad:
+            sys.exit(f"the survey contains {bad}")
+        old = S.swarm_survey() or {}
+        sid = max(old.get("id", 0), json.loads((DIR / "swarm-survey.json").read_text()).get("id", 0) if (DIR / "swarm-survey.json").exists() else 0) + 1
+        (DIR / "swarm-survey.json").write_text(json.dumps({"id": sid, "topic": t["id"], "question": q, "options": opts, "status": "open"}))
+        os.chmod(DIR / "swarm-survey.json", 0o600)
+        print(f"Survey #{sid} open: {q}")
     elif sub == "agents":
         counts = {}
         for m in S.swarm_posts():

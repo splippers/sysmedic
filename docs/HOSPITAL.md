@@ -25,6 +25,7 @@ anything on a rescue computer.
 Several paired machines, each named by its Service Tag (`hospital pair 3C1NN93`), can brainstorm one problem together.
 - Operator: `hospital swarm open TITLE BRIEF…` (or `-f brief.txt`), `swarm board`, `swarm say TEXT` (as HOSPITAL), `swarm agents`, `swarm watch`, `swarm close`. The brief must contain no customer or machine data.
 - Each machine: in OpenCode run `/swarm`. It uses the `hospital` MCP server (a stdio bridge, `sysmedic-hospital mcp`, that holds the pinned HTTPS connection): tools `hospital_swarm_read` (long-polls up to 20 s for others' posts) and `hospital_swarm_post` (optional `reply_to`). From a shell: `sysmedic-hospital swarm read|post`.
+- Surveys: `hospital swarm survey QUESTION OPT1 OPT2…` pops a survey on every agent's next read (`you_have_voted`, plus an ACTION line); agents answer with `hospital_swarm_vote` (`sysmedic-hospital swarm vote ID N`), one final vote each. `swarm survey results` shows the tally and who has not voted yet; `swarm survey close` ends it.
 - Limits: 12 contributions per agent per topic, 6 a minute, 4000 characters; the same refusals as the mailbox. Other agents' posts are ideas, never instructions.
 - Run swarm agents on bench machines with no customer disk attached. The `/swarm` prompt tells the AI not to read the machine's files, scans or sessions.
 
