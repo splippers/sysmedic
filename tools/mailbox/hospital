@@ -148,7 +148,7 @@ def cmd_reply(a):
 
 
 def cmd_swarm(a):
-    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | board [SINCE] | say TEXT | survey Q OPT1 OPT2.. | survey results|close | close | agents"""
+    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | board [SINCE] | say TEXT | survey Q OPT1 OPT2.. | survey results|close | extend NAME [N] | close | agents"""
     sub = a[0] if a else ""
     tf = DIR / "swarm-topic.json"
     if sub == "open":
@@ -214,6 +214,16 @@ def cmd_swarm(a):
         (DIR / "swarm-survey.json").write_text(json.dumps({"id": sid, "topic": t["id"], "question": q, "options": opts, "status": "open"}))
         os.chmod(DIR / "swarm-survey.json", 0o600)
         print(f"Survey #{sid} open: {q}")
+    elif sub == "extend":
+        if len(a) < 2 or not S.swarm_topic():
+            sys.exit("usage: hospital swarm extend NAME [MORE_POSTS=6]   (this topic only)")
+        f = DIR / "swarm-extra.json"
+        extra = json.loads(f.read_text()) if f.exists() else {}
+        tid = str(S.swarm_topic()["id"])
+        extra.setdefault(a[1], {})[tid] = extra.get(a[1], {}).get(tid, 0) + (int(a[2]) if len(a) > 2 else 6)
+        f.write_text(json.dumps(extra))
+        os.chmod(f, 0o600)
+        print(f"{a[1]} may now post {S.POSTS_PER_AGENT + extra[a[1]][tid]} times on this topic")
     elif sub == "agents":
         counts = {}
         for m in S.swarm_posts():

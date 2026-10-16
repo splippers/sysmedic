@@ -194,6 +194,16 @@ def do_replies(name, since):
 POSTS_PER_AGENT = 12
 
 
+def post_cap(name):
+    """12 posts per agent per topic, plus whatever the engineer granted with `hospital swarm extend`."""
+    try:
+        extra = json.loads((DIR / "swarm-extra.json").read_text())
+    except (OSError, ValueError):
+        extra = {}
+    t = swarm_topic()
+    return POSTS_PER_AGENT + int((extra.get(name) or {}).get(str(t["id"]) if t else "", 0))
+
+
 def swarm_topic():
     try:
         return json.loads((DIR / "swarm-topic.json").read_text())
@@ -279,9 +289,9 @@ def do_swarm_read(name, since, wait=0):
     if sv and sv.get("status") == "open":
         extra["survey"] = {"id": sv["id"], "question": sv["question"], "options": sv["options"],
                            "you_have_voted": name in survey_votes(sv),
-                           "ACTION": "" if name in survey_votes(sv) else "VOTE NOW with swarm_vote before anything else: every agent must vote."}
+                           "ACTION": "" if name in survey_votes(sv) else "VOTE NOW with swarm_vote before anything else: every agent must vote. Voting does not use up your posts, so vote even if posts_left_for_you is 0."}
     return 200, {"topic": {"id": t["id"], "title": t["title"], "brief": t["brief"]}, "you_are": name, **extra,
-                 "posts_left_for_you": max(POSTS_PER_AGENT - mine, 0),
+                 "posts_left_for_you": max(post_cap(name) - mine, 0),
                  "posts": [{"id": m["id"], "from": m["agent"], "reply_to": m["reply_to"], "text": m["text"]} for m in posts if m["id"] > since]}
 
 
@@ -297,8 +307,8 @@ def do_swarm_post(name, text, reply_to=0):
     bad = why_refused(text)
     if bad:
         return 422, {"error": f"refused: the contribution contains {bad}. A brainstorm is about the problem, not about any customer or machine."}
-    if sum(1 for m in swarm_posts() if m["agent"] == name) >= POSTS_PER_AGENT:
-        return 429, {"error": f"you have used your {POSTS_PER_AGENT} contributions for this topic: stop and wait for the engineer's summary"}
+    if sum(1 for m in swarm_posts() if m["agent"] == name) >= post_cap(name):
+        return 429, {"error": f"you have used your {post_cap(name)} contributions for this topic: stop and wait for the engineer's summary"}
     now = time.time()
     recent = [x for x in LAST.get(name + "/swarm", []) if now - x < 60]
     if len(recent) >= 6:
