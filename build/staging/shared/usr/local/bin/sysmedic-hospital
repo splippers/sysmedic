@@ -228,8 +228,7 @@ def cmd_swarm(a):
         if code != 200 or not r.get("topic"):
             return print("  " + (r.get("note") or r.get("error") or f"hospital said {code}"))
         t = r["topic"]
-        sv = r.get("survey")
-        if sv:
+        for sv in r.get("surveys") or ([r["survey"]] if r.get("survey") else []):
             print(f"SURVEY #{sv['id']}: {sv['question']}  " + ("(you have voted)" if sv["you_have_voted"] else "(VOTE NOW: swarm vote %d N)" % sv["id"]))
             print("\n".join(f"  {i}. {o}" for i, o in enumerate(sv["options"], 1)) + "\n")
         print(f"# {t['title']}\n{t['brief']}\n(you are {r['you_are']}; {r['posts_left_for_you']} contributions left)\n")

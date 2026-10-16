@@ -233,14 +233,35 @@ def swarm_add(agent, text, reply_to=0):
     return m
 
 
-def swarm_survey():
-    """The open survey for the current topic, or None. One at a time; every agent is expected to vote."""
+def surveys(topic_id=None):
+    """Every survey of the current topic, oldest first. Several can be open at once; each agent votes once in each."""
     t = swarm_topic()
+    d = DIR / "swarm-surveys.json"
     try:
-        sv = json.loads((DIR / "swarm-survey.json").read_text())
+        allsv = json.loads(d.read_text())
     except (OSError, ValueError):
-        return None
-    return sv if t and sv.get("topic") == t["id"] else None
+        allsv = []
+        try:                                          # older single-survey file
+            allsv = [json.loads((DIR / "swarm-survey.json").read_text())]
+        except (OSError, ValueError):
+            pass
+    return [sv for sv in allsv if t and sv.get("topic") == (topic_id or t["id"])]
+
+
+def save_surveys(allsv):
+    d = DIR / "swarm-surveys.json"
+    with LOCK:
+        d.write_text(json.dumps(allsv))
+        os.chmod(d, 0o600)
+
+
+def get_survey(sid):
+    return next((sv for sv in surveys() if sv["id"] == int(sid or 0)), None)
+
+
+def swarm_survey():
+    """The newest open survey (what the older single-survey code asked for), or None."""
+    return next((sv for sv in reversed(surveys()) if sv.get("status") == "open"), None)
 
 
 def survey_votes(sv):
@@ -257,11 +278,11 @@ def survey_votes(sv):
 
 
 def do_swarm_vote(name, survey_id, choice):
-    sv = swarm_survey()
-    if not sv or sv.get("status") != "open":
-        return 409, {"error": "no survey is open"}
-    if int(survey_id or 0) != sv["id"]:
-        return 409, {"error": f"that survey is closed: the open one is #{sv['id']}"}
+    sv = get_survey(survey_id)
+    if not sv:
+        return 409, {"error": "no such survey"}
+    if sv.get("status") != "open":
+        return 409, {"error": f"survey #{sv['id']} is closed; open ones: " + (", ".join("#%d" % x["id"] for x in surveys() if x.get("status") == "open") or "none")}
     try:
         c = int(choice)
     except (TypeError, ValueError):
@@ -286,11 +307,15 @@ def do_swarm_read(name, since, wait=0):
         return 200, {"topic": None, "note": "No brainstorm is open. Wait, or ask the engineer."}
     posts = swarm_posts()
     mine = sum(1 for m in posts if m["agent"] == name)
-    sv, extra = swarm_survey(), {}
-    if sv and sv.get("status") == "open":
-        extra["survey"] = {"id": sv["id"], "question": sv["question"], "options": sv["options"],
+    extra, opened = {}, [sv for sv in surveys() if sv.get("status") == "open"]
+    if opened:
+        card = lambda sv: {"id": sv["id"], "question": sv["question"], "options": sv["options"],   # noqa: E731
                            "you_have_voted": name in survey_votes(sv),
-                           "ACTION": "" if name in survey_votes(sv) else "VOTE NOW with swarm_vote before anything else: every agent must vote. Voting does not use up your posts, so vote even if posts_left_for_you is 0."}
+                           "ACTION": "" if name in survey_votes(sv) else "VOTE NOW with swarm_vote before anything else: every agent must vote once in each open survey. Voting does not use up your posts, so vote even if posts_left_for_you is 0."}
+        extra["surveys"] = [card(sv) for sv in opened]                 # all open surveys
+        extra["survey"] = next((c for c in extra["surveys"] if not c["you_have_voted"]), extra["surveys"][-1])   # older clients read this one
+        todo = [c["id"] for c in extra["surveys"] if not c["you_have_voted"]]
+        extra["surveys_you_still_owe_a_vote"] = todo
     return 200, {"topic": {"id": t["id"], "title": t["title"], "brief": t["brief"]}, "you_are": name, **extra,
                  "posts_left_for_you": max(post_cap(name) - mine, 0),
                  "posts": [{"id": m["id"], "from": m["agent"], "reply_to": m["reply_to"], "text": m["text"]} for m in posts if m["id"] > since]}

@@ -150,7 +150,7 @@ def cmd_reply(a):
 
 
 def cmd_swarm(a):
-    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | board [SINCE] | say TEXT | survey Q OPT1 OPT2.. | survey results|close | extend NAME [N] | close | agents"""
+    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | board [SINCE] | say TEXT | survey Q OPT1 OPT2.. | survey results|close|reopen [ID|all] | extend NAME [N] | close | agents"""
     sub = a[0] if a else ""
     tf = DIR / "swarm-topic.json"
     if sub == "open":
@@ -188,33 +188,46 @@ def cmd_swarm(a):
         t = S.swarm_topic()
         if not t:
             sys.exit("open a brainstorm first")
-        if a[1:2] == ["results"] or a[1:2] == ["close"]:
-            sv = S.swarm_survey()
-            if not sv:
-                return print("(no survey)")
-            votes = S.survey_votes(sv)
-            posters = {m["agent"] for m in S.swarm_posts()} | set(votes)
-            print(f"Survey #{sv['id']} [{sv['status']}]: {sv['question']}")
-            for i, o in enumerate(sv["options"], 1):
-                who = [k for k, v in votes.items() if v == i]
-                print(f"  {i}. {o}: {len(who)}  {' '.join(who)}")
-            missing = sorted(posters - set(votes))
-            print("  not yet voted: " + (" ".join(missing) or "(none)"))
-            if a[1] == "close":
-                sv["status"] = "closed"
-                (DIR / "swarm-survey.json").write_text(json.dumps(sv))
-                print("closed")
+        allsv = S.surveys()
+        verb = a[1] if len(a) > 1 and a[1] in ("results", "close", "reopen") else ""
+        if verb:
+            arg = a[2] if len(a) > 2 else ""
+            if arg == "all":
+                pick = list(allsv)
+            elif arg.isdigit():
+                pick = [sv for sv in allsv if sv["id"] == int(arg)]
+            elif verb == "results":
+                pick = [sv for sv in allsv if sv["status"] == "open"] or allsv[-1:]    # the open ones, else the newest
+            elif verb == "close":
+                pick = [sv for sv in allsv if sv["status"] == "open"][-1:]            # the newest open one
+            else:
+                sys.exit("usage: hospital swarm survey reopen ID|all")
+            if not pick:
+                return print("(no such survey)")
+            if verb in ("close", "reopen"):
+                for sv in pick:
+                    sv["status"] = "closed" if verb == "close" else "open"
+                S.save_surveys(allsv)
+            for sv in pick:
+                votes = S.survey_votes(sv)
+                posters = {m["agent"] for m in S.swarm_posts()} | set(votes)
+                print(f"Survey #{sv['id']} [{sv['status']}]: {sv['question']}")
+                for i, o in enumerate(sv["options"], 1):
+                    who = [k for k, v in votes.items() if v == i]
+                    print(f"  {i}. {o}: {len(who)}  {' '.join(who)}")
+                print("  not yet voted (by tool): " + (" ".join(sorted(posters - set(votes))) or "(none)"))
+            if verb != "results":
+                print(verb + "d" if verb == "close" else "reopened")
             return
         if len(a) < 4:
-            sys.exit("usage: hospital swarm survey QUESTION OPTION1 OPTION2 [...] | survey results | survey close")
+            sys.exit("usage: hospital swarm survey QUESTION OPTION1 OPTION2 [...] | survey results|close|reopen [ID|all]")
         q, opts = a[1], a[2:]
         bad = S.why_refused(q + " " + " ".join(opts))
         if bad:
             sys.exit(f"the survey contains {bad}")
-        old = S.swarm_survey() or {}
-        sid = max(old.get("id", 0), json.loads((DIR / "swarm-survey.json").read_text()).get("id", 0) if (DIR / "swarm-survey.json").exists() else 0) + 1
-        (DIR / "swarm-survey.json").write_text(json.dumps({"id": sid, "topic": t["id"], "question": q, "options": opts, "status": "open"}))
-        os.chmod(DIR / "swarm-survey.json", 0o600)
+        sid = max([sv["id"] for sv in allsv] + [0]) + 1
+        allsv.append({"id": sid, "topic": t["id"], "question": q, "options": opts, "status": "open"})
+        S.save_surveys(allsv)
         print(f"Survey #{sid} open: {q}")
     elif sub == "extend":
         if len(a) < 2 or not S.swarm_topic():
