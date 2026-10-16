@@ -21,6 +21,9 @@ anything on a rescue computer.
 - The connection is HTTPS pinned to the server certificate's fingerprint from the pairing code. Tokens are per machine, stored hashed, revocable.
 - Only Service Tags are let through as an identifier. Replies are advice: the machine's permission rules still decide what runs.
 
+## Reloading the server
+`hospital reload` (SIGHUP to the pid in `~/sysmedic-mailbox/server.pid`) makes the running server re-execute itself with the current code: same PID and port, long-polls reconnect. It checks `server.py` and `hospital` compile first and otherwise keeps running the old code ("reload refused" in `server.log`). Tokens, the join code, post caps, topics and surveys are files read on every request, so changing them never needs a reload. A server started before this existed has no pid file and needs one manual restart.
+
 ## Swarm brainstorm
 Several paired machines, each named by its Service Tag (`hospital pair 3C1NN93`), can brainstorm one problem together.
 - Operator: `hospital swarm open TITLE BRIEF…` (or `-f brief.txt`), `swarm board`, `swarm say TEXT` (as HOSPITAL), `swarm agents`, `swarm watch`, `swarm close`. The brief must contain no customer or machine data.

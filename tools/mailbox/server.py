@@ -21,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import ssl
 import sys
 import threading
@@ -437,6 +438,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, {"error": "not found"})
 
 
+def reload_on_hup(*_):
+    """SIGHUP: pick up new code without a manual restart. The server re-executes itself (same PID, same port), but only
+    if the files still compile, so a half-edited server.py can't take the hospital down. Tokens, the join code, caps and
+    topics are files read on every request, so they never need this."""
+    here = Path(__file__).resolve().parent
+    try:
+        for f in ("server.py", "hospital"):
+            compile((here / f).read_text(), f, "exec")
+    except Exception as e:                        # SyntaxError, unreadable file: keep serving the old code
+        return sys.stderr.write(f"reload refused, still running the old code: {str(e).strip()[:300]}\n")
+    sys.stderr.write("reloading\n")
+    sys.stderr.flush()
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
 def main():
     DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(DIR, 0o700)
@@ -450,6 +466,8 @@ def main():
     ctx.load_cert_chain(cert, key)
     srv = ThreadingHTTPServer((host, port), Handler)
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    (DIR / "server.pid").write_text(str(os.getpid()))
+    signal.signal(signal.SIGHUP, reload_on_hup)
     print(f"hospital listening on https://{host}:{port}", flush=True)
     srv.serve_forever()
 

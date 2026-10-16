@@ -10,8 +10,10 @@
   hospital reply NAME TEXT...      answer a machine (or read the text from stdin with -)
   hospital revoke NAME             cancel a machine's token
   hospital serve                   run the server in the foreground
+  hospital reload                  tell the running server to pick up new code (SIGHUP; checks it compiles first)
 """
 import base64
+import signal
 import hashlib
 import json
 import os
@@ -239,6 +241,16 @@ def cmd_swarm(a):
         sys.exit(3)
     else:
         print(cmd_swarm.__doc__)
+
+
+def cmd_reload(_):
+    try:
+        pid = int((DIR / "server.pid").read_text())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        sys.exit("no running server found (start it with `hospital serve`; a server started before reload existed needs one manual restart)")
+    os.kill(pid, signal.SIGHUP)
+    print(f"asked server {pid} to reload; see {DIR}/server.log (\"reloading\", or \"reload refused\")")
 
 
 def cmd_revoke(a):
