@@ -6,7 +6,7 @@ mailbox: the hospital can't run anything here. Advice that comes back is read by
 normal safety rules still decide what is allowed to run.
 
   sysmedic-hospital pair             engineer only: paste the pairing code made by `hospital pair NAME` on the build PC
-  sysmedic-hospital join CODE [HOST]  engineer only, swarm only: the short way in. Finds the hospital itself, names this computer by its Service Tag
+  sysmedic-hospital join CODE|PIN [HOST]  engineer only: the short way in (the swarm code: swarm only; a 6-digit PIN from `hospital pin`: full pairing). Finds the hospital itself, names this computer by its Service Tag
   sysmedic-hospital unpair           forget the hospital
   sysmedic-hospital status           paired? reachable?
   sysmedic-hospital send [-k question|finding|status] TEXT      send (TEXT or - for stdin); cleaned by sysmedic-redact first
@@ -86,7 +86,10 @@ def device_line():
 def cmd_pair(_):
     if os.environ.get("SYSMEDIC_AI"):
         sys.exit("  Pairing is for the engineer: run it yourself on console 2 (Alt+F2). The AI can't pair.")
-    code = (sys.argv[2] if len(sys.argv) > 2 else input("  Pairing code (H1.…): ")).strip()
+    code = (sys.argv[2] if len(sys.argv) > 2 else input("  PIN or pairing code (H1.…): ")).strip()
+    if not code.startswith("H1."):                       # a short PIN / join code typed here: that is the join command
+        sys.argv[2:3] = [code]
+        return cmd_join(_)
     try:
         d = json.loads(base64.urlsafe_b64decode(code[3:] + "=" * (-len(code[3:]) % 4)))
         assert code.startswith("H1.") and d["u"].startswith("https://") and d["f"] and d["t"]
@@ -160,9 +163,9 @@ def cmd_join(_):
     if r.status != 200:
         sys.exit(f"  Not joined: {body.get('error', r.status)}")
     PRIV.mkdir(parents=True, exist_ok=True)
-    CONF.write_text(json.dumps({"u": f"https://{host}:8470", "f": fp, "t": body["token"], "n": body["name"], "scope": "swarm"}))
+    CONF.write_text(json.dumps({"u": f"https://{host}:8470", "f": fp, "t": body["token"], "n": body["name"], "scope": body.get("scope", "swarm")}))
     os.chmod(CONF, 0o600)
-    print(f"  Joined the swarm as '{body['name']}' ({host}).")
+    print(f"  Joined ({body.get('scope', 'swarm')}) as '{body['name']}' ({host}).")
     print("  Kept in the vault." if str(PRIV) != "/run/sysmedic" else "  Vault locked: kept in memory only; join again next boot.")
 
 

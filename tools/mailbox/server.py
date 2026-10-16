@@ -103,6 +103,14 @@ def join_code():
         return ""
 
 
+def pin_state():
+    try:
+        d = json.loads((DIR / "pin.json").read_text())
+        return d if d.get("expires", 0) > time.time() else None
+    except (OSError, ValueError):
+        return None
+
+
 def do_join(ip, req):
     """A rescue computer on the private network joins the swarm with the short code the engineer chose.
     It gets a swarm-only token (no mailbox to the engineer), named by its Service Tag."""
@@ -113,22 +121,26 @@ def do_join(ip, req):
         if len(recent) >= 6:
             return 429, {"error": "too many wrong codes: wait five minutes"}
     code, name = str(req.get("code") or "").strip(), str(req.get("name") or "").strip()
-    want = join_code()
-    if not want or not hmac.compare_digest(code.encode(), want.encode()):
+    want, scope = join_code(), "swarm"
+    pin = pin_state()
+    if pin and hmac.compare_digest(code.encode(), pin["pin"].encode()):
+        scope = "full"                                # a one-time PIN (hospital pin): the whole mailbox, then it is spent
+        (DIR / "pin.json").unlink(missing_ok=True)
+    elif not want or not hmac.compare_digest(code.encode(), want.encode()):
         with LOCK:
             JOIN_FAILS[ip].append(now)
         time.sleep(1)
-        return 403, {"error": "wrong code, or the engineer hasn't set one (hospital join-code)"}
+        return 403, {"error": "wrong code, or it has run out (hospital pin / hospital join-code)"}
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name):
         return 400, {"error": "name must be letters, digits, - or _ (the Service Tag)"}
     token = secrets.token_urlsafe(24)
     with LOCK:
         m = machines()
-        m[name] = {"hash": h(token), "created": time.strftime("%Y-%m-%d %H:%M"), "revoked": False, "scope": "swarm"}
+        m[name] = {"hash": h(token), "created": time.strftime("%Y-%m-%d %H:%M"), "revoked": False, "scope": scope}
         f = DIR / "machines.json"
         f.write_text(json.dumps(m, indent=1))
         os.chmod(f, 0o600)
-    return 200, {"token": token, "name": name, "fingerprint": fingerprint(), "scope": "swarm"}
+    return 200, {"token": token, "name": name, "fingerprint": fingerprint(), "scope": scope}
 
 
 def who(token):

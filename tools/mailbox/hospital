@@ -2,6 +2,7 @@
 """hospital — the engineer's/Claude's side of the SysMedic mailbox.
 
   hospital pair NAME [--host IP]   make a token for a rescue computer; prints the pairing code to type into it
+  hospital pin                     a one-time 6-digit PIN for full pairing: sysmedic-hospital join PIN
   hospital join-code [CODE|off]    the short code rescue computers type to join the swarm (shown, or set)
   hospital machines                who is paired, and when they last wrote
   hospital inbox [--all]           unread messages from the machines (--all: everything)
@@ -59,6 +60,15 @@ def cmd_pair(a):
     print(f"\nMachine without the program yet (not redeployed)? On it, as root, check the hash matches before running:\n"
           f"  curl -sk https://{host}:{port}/client -o /usr/local/bin/sysmedic-hospital && sha256sum /usr/local/bin/sysmedic-hospital && chmod +x /usr/local/bin/sysmedic-hospital\n"
           f"  expected: {S.client_sha()}")
+
+
+def cmd_pin(_):
+    """A six-digit PIN, good for 15 minutes and one machine: full pairing (mailbox and swarm) without a long code."""
+    pin = "%06d" % secrets.randbelow(1000000)
+    f = DIR / "pin.json"
+    f.write_text(json.dumps({"pin": pin, "expires": time.time() + 900}))
+    os.chmod(f, 0o600)
+    print(f"PIN {pin}  (15 minutes, one machine)\n\nOn the rescue computer (Alt+F2):  sysmedic-hospital join {pin}")
 
 
 def cmd_join_code(a):

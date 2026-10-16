@@ -38,3 +38,5 @@ For a private network, the engineer sets a short code and rescue computers type 
 - Six wrong codes from one address lock joining out for five minutes.
 
 An unpaired computer's MCP bridge still starts and lists the tools; calls answer "Not paired" instead of the server vanishing.
+
+**Full pairing without the long code:** `hospital pin` makes a six-digit PIN (15 minutes, one machine). On the rescue computer, `sysmedic-hospital join PIN` (or `pair`, which accepts a PIN at its prompt) gives it the whole mailbox as well as the swarm, named by its Service Tag.
