@@ -4,6 +4,7 @@ the dashboard and the AI terminal without joining (or being visible on) the cust
 
   sysmedic-hotspot              status
   sysmedic-hotspot plan         which radio, band and channel it would use, and why
+  sysmedic-hotspot guide        how to get your phone onto it, for the radios found here (what to do with two or more)
   sysmedic-hotspot on           start it  [--band 5|2.4|auto] [--radio phyN]
   sysmedic-hotspot off          stop it
   sysmedic-hotspot setup        your hotspot name, password, band and country (kept in the vault)
@@ -151,6 +152,59 @@ def cert_fingerprint():
         if os.path.exists(path):
             return run(["openssl", "x509", "-in", path, "-noout", "-fingerprint", "-sha256"]).stdout.strip().split("=", 1)[-1]
     return ""
+
+
+def guide_cmd(want, only):
+    """A panel for the engineer: how to put their phone on the hotspot, for the radios this computer has."""
+    h, _ = engineer.hotspot()
+    if not os.environ.get("SYSMEDIC_AI"):
+        apply_country(h)
+    rs = wifilib.radios()
+    p = wifilib.plan(want or h.get("band", "auto"), only)
+    st = state()
+    ap = [r for r in rs if r["ap"]]
+    many = len(rs) > 1
+    print(f"\n  {B}Getting your phone onto the hotspot{N}")
+    if not rs:
+        print("  No Wi-Fi radio was found, so there is no hotspot to join. Plug in a USB Wi-Fi adapter (MediaTek MT7612U/MT7921AU,"
+              " Realtek RTL8812AU) and run this again.")
+        return 1
+    if many:
+        print(f"\n  {G}{len(rs)} Wi-Fi radios found{N}: one can carry the internet link while another hosts your phone, so neither is disturbed.")
+    else:
+        print("\n  One Wi-Fi radio found: it does both jobs, so the hotspot has to share the internet link's channel.")
+    for r in rs:
+        role = (f"internet link, channel {r['client']['channel']}" if r["client"]
+                else "hotspot" if r["own_ap"] else "free")
+        print(f"    {r['phy']}  {r['driver']:<14} {'USB' if r['bus'] == 'usb' else r['bus']:<4} "
+              f"{'can host' if r['ap'] else 'cannot host':<11} {role}")
+    print(f"\n  {B}1. Choose the radio{N}")
+    if p["ok"]:
+        print(f"     It would use {B}{p['label']}{N} on {p['band']} GHz, channel {p['channel']}"
+              + (" (shared with the internet link)." if p["shared"] else " (a radio of its own)."))
+        if many and not p["shared"]:
+            print("     To pick another: sysmedic-hotspot on --radio phyN   (and --band 5 or --band 2.4)")
+    else:
+        print(f"     {R}No radio can host right now:{N}")
+        for w in p["why"]:
+            print(f"       - {w}")
+        if many and len(ap) < len(rs):
+            print("       A radio marked 'cannot host' can still be the internet link: let the other one host.")
+        print("       Or free the built-in radio by using Ethernet or phone USB tethering for the internet, or set the country"
+              " (option 4) so 5 GHz is allowed.")
+    print(f"\n  {B}2. Start it{N}   menu H, option 1  (or: sysmedic-hotspot on). It switches itself off after 30 minutes with nobody on it.")
+    print(f"\n  {B}3. On your phone{N}")
+    print("     Settings > Wi-Fi > pick the hotspot's name. The name and password are on option 5, on a private console:")
+    print("     the password is never printed in a recorded session, and the AI can't read it.")
+    print(f"     A phone with no 5 GHz gives no sign of a 5 GHz hotspot: start it again with --band 2.4.")
+    print(f"     \"No internet\" is expected: this network reaches only SysMedic. Tell the phone to stay connected.")
+    print(f"\n  {B}4. Open SysMedic{N}   https://{ADDR}:8443 (dashboard), https://{ADDR}:8444 (AI terminal, with your access code).")
+    print("     Check the certificate fingerprint against option 5 once, then trust it: it stays the same on every job.")
+    if st["on"]:
+        print(f"\n  {G}It is on now{N}: {st['ssid']}, {clients()} device(s) connected.")
+    elif many:
+        print(f"\n  {DIM}With two radios, keep the internet on the one it chose and leave it alone: moving it would drop the hotspot.{N}")
+    return 0 if p["ok"] else 1
 
 
 def show(here):
@@ -361,6 +415,8 @@ def main():
         return status("--json" in a)
     if cmd == "plan":
         return plan_cmd(want or engineer.hotspot()[0].get("band", "auto"), only)
+    if cmd == "guide":
+        return guide_cmd(want, only)
     if cmd == "on":
         return on(want, only)
     if cmd == "off":

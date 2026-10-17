@@ -54,12 +54,14 @@ while true; do
             clear
             ui_banner "Private hotspot" "a Wi-Fi network of its own for your phone or laptop: nothing on the customer's network, and a bookmark that always works"
             /usr/local/sbin/sysmedic-hotspot status
+            [ "$(ls /sys/class/ieee80211 2>/dev/null | wc -l)" -gt 1 ] && ui_info "More than one Wi-Fi radio found" "one carries the internet, another can host your phone: option 6 explains how"
             ui_section "Choose"
             opt 1 "Start the hotspot" "uses a radio of its own if there is one"
             opt 2 "Stop it"
             opt 3 "What would it use?" "radios, bands, and why"
             opt 4 "My hotspot name, password, band and country" "kept in the vault: follows you from job to job"
             opt 5 "Show the password and bookmarks" "on a private console"
+            opt 6 "How do I get my phone on it?" "step by step, for the radios in this computer"
             opt 0 "Back"
             ask "Choose:" hc
             case "$hc" in
@@ -68,6 +70,7 @@ while true; do
                 3) /usr/local/sbin/sysmedic-hotspot plan ;;
                 4) /usr/local/sbin/sysmedic-hotspot setup ;;
                 5) /usr/local/sbin/sysmedic-hotspot show ;;
+                6) /usr/local/sbin/sysmedic-hotspot guide ;;
             esac
             pause
             ;;

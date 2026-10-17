@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **"How do I get my phone on the hotspot?" (menu H option 6, `sysmedic-hotspot guide`).** A step-by-step panel written for the radios this computer actually has. With two or more Wi-Fi radios it says which one carries the internet and which would host the phone (and how to pick another: `on --radio phyN --band 5|2.4`); with one it explains the shared channel and what to do when the regulatory rules block it (Ethernet or USB tethering for the internet, set the country, or a USB Wi-Fi adapter). Menu H also shows a hint when more than one radio is found. It never prints the hotspot password (that stays on option 5's private console), so the AI may run it.
+
 ## 2026.10.15 (later): the hospital mailbox
 
 - **Rescue computers can ask Claude for help over the LAN.** A mailbox server on the build PC (`tools/mailbox`) takes redacted questions and findings from paired machines and returns replies; `sysmedic-hospital ask "…"` on the machine, `hospital inbox/reply` on the build PC. Per-machine tokens, HTTPS pinned to the server certificate, refuses unredacted-looking text, MCP endpoint included. The AI assistant may send and read; only the engineer pairs. See docs/HOSPITAL.md.
