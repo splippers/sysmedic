@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Optional internet for the hotspot (menu H option 7, `sysmedic-hotspot on --internet`).** Your phone can now reach the internet through the rescue computer's own link. It is asked for every time and never remembered; the AI can't start it. Traffic is NATed out as the rescue computer's, DNS goes to public resolvers, and the hotspot still can't reach the customer's network (private, link-local and CGNAT ranges are dropped) or use IPv6; the dashboard and AI terminal stay the only services on `10.42.0.1`. IP forwarding is turned on only while the hotspot is on and restored when it stops. Tested with a network namespace as the phone: without the flag the internet was blocked; with it 1.1.1.1 answered and a LAN host was refused; stopping removed both tables and put forwarding back. Not yet tried over real Wi-Fi.
+
 - **"How do I get my phone on the hotspot?" (menu H option 6, `sysmedic-hotspot guide`).** A step-by-step panel written for the radios this computer actually has. With two or more Wi-Fi radios it says which one carries the internet and which would host the phone (and how to pick another: `on --radio phyN --band 5|2.4`); with one it explains the shared channel and what to do when the regulatory rules block it (Ethernet or USB tethering for the internet, set the country, or a USB Wi-Fi adapter). Menu H also shows a hint when more than one radio is found. It never prints the hotspot password (that stays on option 5's private console), so the AI may run it.
 
 ## 2026.10.15 (later): the hospital mailbox

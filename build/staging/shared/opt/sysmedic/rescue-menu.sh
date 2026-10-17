@@ -62,6 +62,7 @@ while true; do
             opt 4 "My hotspot name, password, band and country" "kept in the vault: follows you from job to job"
             opt 5 "Show the password and bookmarks" "on a private console"
             opt 6 "How do I get my phone on it?" "step by step, for the radios in this computer"
+            opt 7 "Start it WITH internet for my phone" "through this computer's own link; the customer's network stays out of reach"
             opt 0 "Back"
             ask "Choose:" hc
             case "$hc" in
@@ -71,6 +72,9 @@ while true; do
                 4) /usr/local/sbin/sysmedic-hotspot setup ;;
                 5) /usr/local/sbin/sysmedic-hotspot show ;;
                 6) /usr/local/sbin/sysmedic-hotspot guide ;;
+                7) ui_warn "Your phone's traffic will leave through this customer's internet connection" "as this computer's. Only do this if that is acceptable here."
+                   read -r -p "  Start it with internet? [y/N] " yn
+                   [ "${yn,,}" = y ] && /usr/local/sbin/sysmedic-hotspot on --internet ;;
             esac
             pause
             ;;
