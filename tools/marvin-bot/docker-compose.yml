@@ -1,0 +1,32 @@
+# Marvin Discord bot backed by an OpenCode server (Big Pickle). UNTESTED scaffold.
+# Own compose project: shares nothing with Marvin's production services.
+name: marvin-bot
+services:
+  opencode:
+    image: ghcr.io/sst/opencode:latest   # pin a digest before real use
+    command: ["serve", "--hostname", "0.0.0.0", "--port", "4096"]
+    env_file: .env                        # OPENCODE_SERVER_PASSWORD + provider key; chmod 600
+    volumes:
+      - ./opencode.json:/root/.config/opencode/opencode.json:ro
+      - opencode-state:/root/.local/share/opencode
+      - ./workspace:/workspace:ro
+    working_dir: /workspace
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    expose: ["4096"]                      # compose network only; never `ports:`
+    restart: unless-stopped
+  bot:
+    build: ./bot
+    env_file: .env
+    environment:
+      OPENCODE_URL: http://opencode:4096
+    depends_on: [opencode]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    user: "10001:10001"
+    restart: unless-stopped
+volumes:
+  opencode-state:
