@@ -313,6 +313,7 @@ def on(want, only, internet=False):
     for f in free:
         run(["ip", "link", "set", f, "down"])
         run(["iw", "dev", f, "del"])
+    keep_name()
     run(["iw", "phy", p["phy"], "interface", "add", IFACE, "type", "__ap"])
     if run(["ip", "link", "show", IFACE]).returncode != 0:
         restore_clients(p["phy"], free)
@@ -394,6 +395,18 @@ pid-file={D}/dnsmasq.pid
     return 0
 
 
+LINK = "/run/systemd/network/00-sysmedic-ap.link"
+
+
+def keep_name():
+    """With no client interface left on the radio, udev would rename sm-ap to wlx<mac> the moment it appears and
+    hostapd would lose it. This tells udev to leave the name alone (lives in /run, gone at power off)."""
+    os.makedirs(os.path.dirname(LINK), exist_ok=True)
+    with open(LINK, "w") as f:
+        f.write(f"[Match]\nOriginalName={IFACE}\n\n[Link]\nNamePolicy=keep\nName={IFACE}\n")
+    run(["udevadm", "control", "--reload"])
+
+
 def restore_clients(phy, names):
     """Give the radio its client interfaces back (they were removed so the access point could use it), and to NetworkManager."""
     for f in names:
@@ -417,6 +430,10 @@ def cleanup(st=None):
         run(["sysctl", "-qw", f"net.ipv4.ip_forward={st['ip_forward_before']}"])
     run(["ip", "link", "set", IFACE, "down"])
     run(["iw", "dev", IFACE, "del"])
+    try:
+        os.unlink(LINK)
+    except OSError:
+        pass
     restore_clients(st.get("phy"), st.get("freed", []))
     for f in ("state.json", "hostapd.conf", "hostapd.pid", "dnsmasq.pid"):
         try:
