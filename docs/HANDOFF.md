@@ -121,6 +121,12 @@ separate greybox scene / delete the mode code).
   0.0.0.0:4096. Disabling `eddie.service` was blocked by the auto-mode classifier and is still to do (Jon to run it).
 - **Marvin Discord bot scaffold:** `tools/marvin-bot/` (compose: opencode serve + bot; chat only; allowlists; untested).
 
+- **Migration done (seen 2026-10-18, read-only):** the hospital now runs on Marvin as `sysmedic-hospital.service` (code `/opt/sysmedic-hospital`,
+  data `/var/lib/sysmedic-hospital`, port 8470, health timer `sysmedic-hospital-health.timer`). Marvin's `jon` cannot read the data dir.
+  On LAVE, `~/sysmedic-mailbox` was renamed `~/sysmedic-mailbox.migrated-to-marvin-20261017` (snapshot, last board activity Oct 16 20:29,
+  post #81), and `hospital-forward.socket` (systemd-socket-proxyd) forwards LAVE:8470 to Marvin as a transitional step. The operator CLI
+  on LAVE reads local files only, so `hospital swarm ...` shows an empty board until it is pointed at the new data or given an API path.
+
 ## Marvin (the server) in one paragraph
 
 HP ProDesk 400 G4, Ubuntu 24.04, runs Gluster (bricks 90% and 93% full, CRITICAL from its own disk monitor), Docker, and the
