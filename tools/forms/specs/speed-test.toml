@@ -1,0 +1,12 @@
+title = "Internet speed test"
+summary = "Measures download and upload speed and the delay to a nearby server."
+folder = "Network and Wi-Fi"
+icon = "network-transmit-receive"
+risk = "read"
+command = ["speedtest-cli", "--simple", {if = "single", args = ["--single"]}]
+
+[[field]]
+id = "single"
+label = "Use one connection (closer to what one download sees)"
+type = "bool"
+default = false

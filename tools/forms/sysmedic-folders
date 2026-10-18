@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""sysmedic-folders — build the desktop folders: a directory per folder, with a launcher for every SysMedic window
+(specs) and every ready-made program (apps.toml) that is installed here.
+
+  sysmedic-folders OUT [--all]     write OUT/<Folder>/<name>.desktop (--all: even for programs that aren't installed)
+"""
+import os
+import re
+import shlex
+import shutil
+import sys
+import tomllib
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+import formslib  # noqa: E402
+
+SPECS = os.environ.get("SYSMEDIC_FORMS", "/usr/local/share/sysmedic/forms")
+APPS = os.environ.get("SYSMEDIC_APPS", "/usr/local/share/sysmedic/apps.toml")
+ORDER = ["Start here", "Disks and files", "Recover and clone", "Windows", "Network and Wi-Fi", "Hardware",
+         "Stress and benchmarks", "Security", "Hospital and AI", "Settings"]
+ICONS = {"Start here": "go-home", "Disks and files": "drive-harddisk", "Recover and clone": "document-revert",
+         "Windows": "computer", "Network and Wi-Fi": "network-workgroup", "Hardware": "preferences-system",
+         "Stress and benchmarks": "utilities-system-monitor", "Security": "security-high",
+         "Hospital and AI": "help-browser", "Settings": "preferences-other"}
+
+
+def slug(s):
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+
+
+def app_launcher(a):
+    return (f"[Desktop Entry]\nType=Application\nName={a['name']}\nComment={a['summary']}\nExec={a['exec']}\n"
+            f"Icon={a['icon']}\nTerminal={'true' if a.get('terminal') else 'false'}\n")
+
+
+def build(out, specs_dir, apps_file, everything=False):
+    made, skipped = {}, []
+    entries = []
+    if os.path.isdir(specs_dir):
+        specs, errors = formslib.load_all(specs_dir)
+        skipped += [f"spec {e}" for e in errors]
+        for n, s in specs.items():
+            tool = s["command"][0] if isinstance(s["command"][0], str) else ""
+            if everything or shutil.which(tool):
+                entries.append((s["folder"], f"{n}.desktop", formslib.launcher(s)))
+            else:
+                skipped.append(f"{s['title']} (needs {tool})")
+    if os.path.isfile(apps_file):
+        with open(apps_file, "rb") as f:
+            for a in tomllib.load(f).get("app", []):
+                prog = a.get("test") or shlex.split(a["exec"])[0]
+                if everything or shutil.which(prog):
+                    entries.append((a["folder"], slug(a["name"]) + ".desktop", app_launcher(a)))
+                else:
+                    skipped.append(f"{a['name']} (needs {prog})")
+    for folder, fn, text in entries:
+        d = os.path.join(out, folder)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, fn), "w") as f:
+            f.write(text)
+        os.chmod(os.path.join(d, fn), 0o755)
+        made.setdefault(folder, []).append(fn)
+    for folder in made:
+        with open(os.path.join(out, folder, ".directory"), "w") as f:
+            f.write(f"[Desktop Entry]\nType=Directory\nName={folder}\nIcon={ICONS.get(folder, 'folder')}\n")
+    return made, skipped
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("-h", "--help"):
+        print(__doc__)
+        return 2
+    made, skipped = build(a[0], SPECS, APPS, "--all" in a)
+    for folder in sorted(made, key=lambda f: ORDER.index(f) if f in ORDER else 99):
+        print(f"{folder}: {len(made[folder])}")
+    if skipped and "--all" not in a:
+        print(f"({len(skipped)} not installed here, so no icon)", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

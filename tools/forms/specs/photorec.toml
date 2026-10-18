@@ -1,0 +1,21 @@
+title = "Recover deleted files"
+summary = "Searches a disk for photos, documents and other files that were deleted or lost, and saves copies somewhere safe."
+folder = "Recover and clone"
+icon = "document-revert"
+risk = "read"
+root = true
+env = { TERM = "dumb" }
+done = "Anything it found is in the folder you chose, inside 'recovered.1' (a report.xml lists each file). Names are lost, so look by type."
+command = ["photorec", "/log", "/d", "{dest}/recovered", "/cmd", "{disk}", "partition_none,fileopt,everything,enable,wholespace,search"]
+
+[[field]]
+id = "disk"
+label = "Disk to search"
+type = "disk"
+help = "The disk with the lost files. It is only read, never changed."
+
+[[field]]
+id = "dest"
+label = "Save recovered files to"
+type = "folder"
+help = "Choose a different disk from the one you are searching, with plenty of free space. It reads the whole disk, so a big disk takes hours."

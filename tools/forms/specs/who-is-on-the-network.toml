@@ -1,0 +1,13 @@
+title = "Who is on this network?"
+summary = "Lists the computers, printers and phones answering on the network SysMedic is connected to."
+folder = "Network and Wi-Fi"
+icon = "network-workgroup"
+risk = "read"
+root = true
+command = ["arp-scan", "--localnet", "--retry=2", {if = "slow", args = ["--timeout=500"]}]
+
+[[field]]
+id = "slow"
+label = "Wait longer for slow devices"
+type = "bool"
+default = false

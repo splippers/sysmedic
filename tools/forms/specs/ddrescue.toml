@@ -1,0 +1,26 @@
+title = "Copy a failing disk"
+summary = "Copies as much as can be read from a damaged disk into an image file, then goes back for the difficult parts."
+folder = "Recover and clone"
+icon = "drive-harddisk"
+risk = "read"
+root = true
+progress = 'pct rescued:\s*(\d+(?:\.\d+)?)%'
+command = ["ddrescue", "-f", {if = "direct", args = ["-d"]}, "{disk}", "{dest}/rescue.img", "{dest}/rescue.map"]
+
+[[field]]
+id = "disk"
+label = "Failing disk"
+type = "disk"
+help = "Only read. Never copy onto the failing disk itself."
+
+[[field]]
+id = "dest"
+label = "Keep the image and its map in"
+type = "folder"
+help = "Needs as much free space as the failing disk. Run it again later and it carries on where it stopped."
+
+[[field]]
+id = "direct"
+label = "Skip the system cache (better for dying disks)"
+type = "bool"
+default = true

@@ -1,0 +1,249 @@
+# Ready-made open-source programs that already have a window (docs/GUI-TOOLS.md, tier A).
+# A launcher is made only when the program is installed, so the desktop never shows a dead icon.
+# [[app]] name, exec (the command; the first word is what must exist), folder, icon, summary, [terminal = true]
+
+[[app]]
+name = "SysMedic Control Centre"
+exec = "sysmedic-control-centre"
+folder = "Start here"
+icon = "utilities-system-monitor"
+summary = "Scan, tests, BitLocker, notes and the job report"
+
+[[app]]
+name = "AI assistant"
+exec = "foot --title 'SysMedic AI assistant' sysmedic-ai-launch"
+test = "sysmedic-ai-launch"
+folder = "Start here"
+icon = "help-browser"
+summary = "Ask SysMedic's AI about this machine"
+
+[[app]]
+name = "Files"
+exec = "thunar /"
+folder = "Disks and files"
+icon = "system-file-manager"
+summary = "Browse the customer's disks, USB sticks and network shares"
+
+[[app]]
+name = "Disks"
+exec = "gnome-disks"
+folder = "Disks and files"
+icon = "drive-harddisk"
+summary = "Drive health, partitions, benchmark and images"
+
+[[app]]
+name = "Partition editor"
+exec = "gparted"
+folder = "Disks and files"
+icon = "gparted"
+summary = "Resize, move, copy and repair partitions"
+
+[[app]]
+name = "Drive health (SMART)"
+exec = "gsmartcontrol"
+folder = "Disks and files"
+icon = "drive-harddisk-system"
+summary = "Is this disk dying? The SMART report in plain view"
+
+[[app]]
+name = "What is filling the disk?"
+exec = "baobab"
+folder = "Disks and files"
+icon = "baobab"
+summary = "A chart of which folders use the space"
+
+[[app]]
+name = "Disk space map"
+exec = "qdirstat"
+folder = "Disks and files"
+icon = "qdirstat"
+summary = "A treemap of big files, with clean-up"
+
+[[app]]
+name = "Hex editor"
+exec = "ghex"
+folder = "Disks and files"
+icon = "ghex"
+summary = "Look at the raw bytes of a file or disk"
+
+[[app]]
+name = "Archives"
+exec = "xarchiver"
+folder = "Disks and files"
+icon = "xarchiver"
+summary = "Open and make zip, 7z, tar and other archives"
+
+[[app]]
+name = "Text editor"
+exec = "mousepad"
+folder = "Disks and files"
+icon = "text-editor"
+summary = "Edit a text or configuration file"
+
+[[app]]
+name = "Copy progress map"
+exec = "ddrescueview"
+folder = "Recover and clone"
+icon = "drive-harddisk"
+summary = "See which parts of a failing disk have been rescued"
+
+[[app]]
+name = "Network connections"
+exec = "nm-connection-editor"
+folder = "Network and Wi-Fi"
+icon = "network-wired"
+summary = "Wi-Fi, Ethernet and VPN settings"
+
+[[app]]
+name = "Wi-Fi scanner"
+exec = "linssid"
+folder = "Network and Wi-Fi"
+icon = "network-wireless"
+summary = "Nearby networks, channels and signal strength"
+
+[[app]]
+name = "Network scanner"
+exec = "zenmap"
+folder = "Network and Wi-Fi"
+icon = "network-workgroup"
+summary = "Find devices and open ports on a network"
+
+[[app]]
+name = "Network capture"
+exec = "wireshark"
+folder = "Network and Wi-Fi"
+icon = "wireshark"
+summary = "See the traffic on a network"
+
+[[app]]
+name = "Network tools"
+exec = "gnome-nettool"
+folder = "Network and Wi-Fi"
+icon = "network-server"
+summary = "Ping, traceroute, look-ups and port scan"
+
+[[app]]
+name = "Live network map"
+exec = "etherape"
+folder = "Network and Wi-Fi"
+icon = "etherape"
+summary = "Who is talking to whom, as it happens"
+
+[[app]]
+name = "Remote desktop"
+exec = "remmina"
+folder = "Network and Wi-Fi"
+icon = "org.remmina.Remmina"
+summary = "Connect to another computer (RDP, VNC, SSH)"
+
+[[app]]
+name = "File transfer"
+exec = "filezilla"
+folder = "Network and Wi-Fi"
+icon = "filezilla"
+summary = "FTP, FTPS and SFTP"
+
+[[app]]
+name = "Serial console"
+exec = "gtkterm"
+folder = "Network and Wi-Fi"
+icon = "utilities-terminal"
+summary = "Talk to a router, switch or device on a serial cable"
+
+[[app]]
+name = "Bluetooth"
+exec = "blueman-manager"
+folder = "Hardware"
+icon = "bluetooth"
+summary = "Pair and test Bluetooth devices"
+
+[[app]]
+name = "Hardware list"
+exec = "lshw-gtk"
+folder = "Hardware"
+icon = "hardinfo"
+summary = "Everything inside this computer"
+
+[[app]]
+name = "System information"
+exec = "hardinfo"
+folder = "Hardware"
+icon = "hardinfo"
+summary = "Hardware, drivers, sensors and a quick benchmark"
+
+[[app]]
+name = "Processor and board details"
+exec = "cpu-x"
+folder = "Hardware"
+icon = "cpu-x"
+summary = "CPU, motherboard, memory and graphics, like CPU-Z"
+
+[[app]]
+name = "Temperatures and fans"
+exec = "psensor"
+folder = "Hardware"
+icon = "psensor"
+summary = "Live graphs of temperatures and fan speeds"
+
+[[app]]
+name = "Firmware updates"
+exec = "gnome-firmware"
+folder = "Hardware"
+icon = "gnome-firmware"
+summary = "BIOS and device firmware updates"
+
+[[app]]
+name = "USB devices"
+exec = "usbview"
+folder = "Hardware"
+icon = "usbview"
+summary = "What is plugged in, and at what speed"
+
+[[app]]
+name = "Sound settings"
+exec = "pavucontrol"
+folder = "Hardware"
+icon = "multimedia-volume-control"
+summary = "Volume, outputs and microphones"
+
+[[app]]
+name = "Webcam test"
+exec = "guvcview"
+folder = "Hardware"
+icon = "camera-web"
+summary = "Check the camera works"
+
+[[app]]
+name = "Battery and power"
+exec = "gnome-power-statistics"
+folder = "Hardware"
+icon = "battery"
+summary = "Battery wear and charge history"
+
+[[app]]
+name = "Processes and load"
+exec = "gnome-system-monitor"
+folder = "Hardware"
+icon = "utilities-system-monitor"
+summary = "What is using the processor, memory and network"
+
+[[app]]
+name = "System log"
+exec = "gnome-logs"
+folder = "Hardware"
+icon = "gnome-logs"
+summary = "Errors and events since the machine started"
+
+[[app]]
+name = "Disk speed test"
+exec = "kdiskmark"
+folder = "Stress and benchmarks"
+icon = "kdiskmark"
+summary = "Read and write speed, like CrystalDiskMark"
+
+[[app]]
+name = "Virus scan"
+exec = "clamtk"
+folder = "Security"
+icon = "clamtk"
+summary = "Scan a disk or folder for malware"

@@ -1,0 +1,28 @@
+title = "Erase a disk for good"
+summary = "Overwrites every byte of a disk so nothing can be recovered. Use before a machine or drive leaves the customer's hands."
+folder = "Recover and clone"
+icon = "edit-delete"
+risk = "destroy"
+root = true
+progress = '(\d+(?:\.\d+)?)%'
+command = ["nwipe", "--autonuke", "--nogui", "--verify={verify}", "--method={method}", "{disk}"]
+
+[[field]]
+id = "disk"
+label = "Disk to erase"
+type = "disk"
+help = "EVERYTHING on it is destroyed. SysMedic's own drive is never listed."
+
+[[field]]
+id = "method"
+label = "How thoroughly"
+type = "choice"
+options = [{ value = "zero", label = "One pass of zeros (fast; fine for most drives)" }, { value = "dodshort", label = "Three passes (DoD short)" }, { value = "random", label = "One pass of random data" }]
+default = "zero"
+
+[[field]]
+id = "verify"
+label = "Check it afterwards"
+type = "choice"
+options = [{ value = "last", label = "Check the last pass" }, { value = "off", label = "Don't check" }, { value = "all", label = "Check every pass" }]
+default = "last"

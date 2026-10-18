@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""sysmedic-forms — a window for a console tool: pick the disk and options with the mouse, press Run, watch the output.
+
+  sysmedic-forms TOOL          open the window for one tool (a spec in /usr/local/share/sysmedic/forms)
+  sysmedic-forms --list        the tools that have a window
+  sysmedic-forms --spec FILE   open a spec from anywhere (to try a new one)
+
+The spec format is described in formslib.py. Tools that change or destroy data check the kernel write protection first
+(every disk but SysMedic's own is read-only until the engineer unlocks it), never offer SysMedic's own drive, and
+make you type the disk's name before they start.
+"""
+import os
+import subprocess
+import sys
+import threading
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import formslib  # noqa: E402
+
+SPECS = os.environ.get("SYSMEDIC_FORMS", "/usr/local/share/sysmedic/forms")
+RISK_TEXT = {
+    "read": ("This only looks. It changes nothing on the customer's machine.", "#1f6f43"),
+    "change": ("This changes things on the machine being repaired. The disk must be unlocked first.", "#9a6a00"),
+    "destroy": ("This ERASES data for good. Check the disk name twice.", "#a32121"),
+}
+
+
+def open_window(spec):
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import GLib, Gtk, Pango
+
+    Gtk.Settings.get_default().set_property("gtk-application-prefer-dark-theme", True)
+    win = Gtk.Window(title=spec["title"])
+    win.set_default_size(760, 640)
+    win.set_icon_name(spec["icon"])
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin=16)
+    win.add(box)
+
+    t = Gtk.Label(xalign=0)
+    t.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(spec['title'])}</span>")
+    box.pack_start(t, False, False, 0)
+    s = Gtk.Label(label=spec["summary"], xalign=0, wrap=True)
+    box.pack_start(s, False, False, 0)
+    text, colour = RISK_TEXT[spec["risk"]]
+    r = Gtk.Label(xalign=0, wrap=True)
+    r.set_markup(f"<span foreground='{colour}' weight='bold'>●</span> {GLib.markup_escape_text(text)}")
+    box.pack_start(r, False, False, 0)
+
+    grid = Gtk.Grid(column_spacing=12, row_spacing=8)
+    box.pack_start(grid, False, False, 6)
+    widgets, disk_list = {}, formslib.disks()
+    writes = spec["risk"] != "read"
+    shown_disks = [d for d in disk_list if not (writes and d["boot"])]
+    vals = formslib.defaults(spec)
+
+    for n, f in enumerate(spec["field"]):
+        row = n * 2
+        lab = Gtk.Label(label=f["label"], xalign=0)
+        if f["type"] == "bool":
+            w = Gtk.CheckButton(label=f["label"])
+            w.set_active(bool(vals[f["id"]]))
+            grid.attach(w, 0, row, 2, 1)
+            get = w.get_active
+        else:
+            grid.attach(lab, 0, row, 1, 1)
+            if f["type"] == "disk":
+                w = Gtk.ComboBoxText()
+                for d in shown_disks:
+                    w.append(d["path"], d["label"] + ("  (write-protected)" if d["ro"] and writes else ""))
+                get = w.get_active_id
+            elif f["type"] == "choice":
+                w = Gtk.ComboBoxText()
+                for o in f["options"]:
+                    w.append(o["value"] if isinstance(o, dict) else o, o.get("label", o["value"]) if isinstance(o, dict) else o)
+                w.set_active_id(vals[f["id"]])
+                get = w.get_active_id
+            elif f["type"] in ("folder", "file"):
+                w = Gtk.FileChooserButton(title=f["label"], action=Gtk.FileChooserAction.SELECT_FOLDER if f["type"] == "folder"
+                                          else Gtk.FileChooserAction.OPEN)
+                w.set_current_folder("/mnt" if os.path.isdir("/mnt") else "/")
+                get = w.get_filename
+            else:
+                w = Gtk.Entry(text=vals[f["id"]])
+                get = w.get_text
+            w.set_hexpand(True)
+            grid.attach(w, 1, row, 1, 1)
+        if f.get("help"):
+            h = Gtk.Label(xalign=0, wrap=True)
+            h.set_markup(f"<small>{GLib.markup_escape_text(f['help'])}</small>")
+            grid.attach(h, 1, row + 1, 1, 1)
+        widgets[f["id"]] = get
+
+    view = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+    buf = view.get_buffer()
+    sc = Gtk.ScrolledWindow(vexpand=True)
+    sc.add(view)
+    box.pack_start(sc, True, True, 0)
+    bar = Gtk.ProgressBar(show_text=True)
+    bar.set_no_show_all(True)
+    box.pack_start(bar, False, False, 0)
+
+    btns = Gtk.Box(spacing=8)
+    run_b, stop_b, save_b = Gtk.Button(label="Run"), Gtk.Button(label="Stop"), Gtk.Button(label="Add to job report")
+    stop_b.set_sensitive(False)
+    save_b.set_sensitive(False)
+    close_b = Gtk.Button(label="Close")
+    for b in (run_b, stop_b, save_b):
+        btns.pack_start(b, False, False, 0)
+    btns.pack_end(close_b, False, False, 0)
+    box.pack_start(btns, False, False, 0)
+    state = {"proc": None, "lines": [], "cmd": ""}
+
+    def say(msg):
+        buf.insert(buf.get_end_iter(), msg)
+        view.scroll_to_mark(buf.get_insert(), 0, False, 0, 0)
+
+    def current():
+        return {k: ("" if g() is None else g()) for k, g in widgets.items()}
+
+    def warn(msg):
+        d = Gtk.MessageDialog(transient_for=win, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.OK, text=msg)
+        d.run()
+        d.destroy()
+
+    def on_output(chunk):
+        chunk = formslib.clean(chunk)
+        say(chunk)
+        state["lines"] = (state["lines"] + chunk.replace("\r", "\n").splitlines())[-40:]
+        p = formslib.progress_of(spec, chunk)
+        if p is not None:
+            bar.show()
+            bar.set_fraction(p / 100)
+            bar.set_text(f"{p:.0f}%")
+        return False
+
+    def finished(rc):
+        run_b.set_sensitive(True)
+        stop_b.set_sensitive(False)
+        save_b.set_sensitive(True)
+        say(f"\n{'Finished.' if rc == 0 else f'Stopped with code {rc}.'}\n")
+        if spec.get("done"):
+            say(formslib.finish_text(spec, state["values"]) + "\n")
+        return False
+
+    def worker(cmd):
+        try:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
+                                 env=dict(os.environ, **spec.get("env", {})))
+        except OSError as e:
+            GLib.idle_add(on_output, f"Couldn't start it: {e}\n")
+            GLib.idle_add(finished, 127)
+            return
+        state["proc"] = p
+        while True:
+            chunk = p.stdout.read1(2048) if hasattr(p.stdout, "read1") else p.stdout.read(2048)
+            if not chunk:
+                break
+            GLib.idle_add(on_output, chunk.decode("utf-8", "replace"))
+        GLib.idle_add(finished, p.wait())
+
+    def on_run(_):
+        v = current()
+        bad = formslib.problems(spec, v)
+        if bad:
+            return warn("Not yet:\n\n" + "\n".join(bad))
+        target = next((d for d in disk_list if d["path"] == v.get(next((f["id"] for f in spec["field"] if f["type"] == "disk"), ""))), None)
+        if writes and target:
+            if target["boot"]:
+                return warn("That is the drive SysMedic is running from. It can't be used for this.")
+            if target["ro"]:
+                return warn(f"{target['path']} is write-protected. The engineer unlocks it first (Alt+F2, then: sysmedic-unlock {target['path']}).")
+        if spec["risk"] == "destroy" and target:
+            d = Gtk.MessageDialog(transient_for=win, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.OK_CANCEL,
+                                  text=f"Erase {target['label']}?")
+            d.format_secondary_text(f"Everything on it will be destroyed and cannot be got back.\nType its name ({target['path'].split('/')[-1]}) to go ahead:")
+            e = Gtk.Entry()
+            d.get_content_area().pack_end(e, False, False, 6)
+            d.show_all()
+            ok = d.run() == Gtk.ResponseType.OK and e.get_text().strip() == target["path"].split("/")[-1]
+            d.destroy()
+            if not ok:
+                return None
+        cmd = formslib.build_command(spec, v)
+        state["values"] = v
+        state["cmd"] = formslib.shown(cmd)
+        buf.set_text("")
+        say(f"Running: {state['cmd']}\n\n")
+        bar.hide()
+        run_b.set_sensitive(False)
+        stop_b.set_sensitive(True)
+        threading.Thread(target=worker, args=(cmd,), daemon=True).start()
+        return None
+
+    def on_stop(_):
+        if state["proc"] and state["proc"].poll() is None:
+            state["proc"].terminate()
+            say("\nStopping…\n")
+
+    def on_save(_):
+        note = f"{spec['title']}: ran {state['cmd']}. Last output: " + " | ".join(l for l in state["lines"][-6:] if l.strip())
+        r = subprocess.run(["sysmedic-note", note[:1900]], capture_output=True, text=True)
+        say("\nAdded to the job report.\n" if r.returncode == 0 else f"\nCouldn't add it: {r.stdout}{r.stderr}\n")
+
+    run_b.connect("clicked", on_run)
+    stop_b.connect("clicked", on_stop)
+    save_b.connect("clicked", on_save)
+    close_b.connect("clicked", lambda _: win.destroy())
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    bar.hide()
+    if os.environ.get("SYSMEDIC_FORMS_SELFTEST"):          # headless check: run once, report, quit
+        def go():
+            on_run(None)
+            def done():
+                if run_b.get_sensitive():
+                    print("SELFTEST-OK", repr(buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False))[:300], bar.get_text())
+                    Gtk.main_quit()
+                    return False
+                return True
+            GLib.timeout_add(200, done)
+            return False
+        GLib.timeout_add(300, go)
+    Gtk.main()
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0 if a else 2
+    if a[0] == "--list":
+        specs, errors = formslib.load_all(SPECS)
+        for n, s in specs.items():
+            print(f"{n:<28} {s['risk']:<8} {s['folder']:<20} {s['title']}")
+        for e in errors:
+            print("  broken:", e, file=sys.stderr)
+        return 1 if errors else 0
+    path = a[1] if a[0] == "--spec" and len(a) > 1 else os.path.join(SPECS, os.path.basename(a[0]) + ".toml")
+    try:
+        spec = formslib.load_spec(path)
+    except (OSError, formslib.SpecError) as e:
+        sys.exit(f"No window for '{a[0]}': {e}")
+    open_window(spec)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

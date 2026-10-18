@@ -146,3 +146,9 @@ PhotoRec and TestDisk; ddrescue's live run; partclone and fsarchiver backup and 
 - Does the **stick** get the desktop too? The 8 GB sticks have little room, and a desktop adds memory pressure on 4 GB machines.
 - **GTK or Qt?** GTK keeps the image smaller; Qt (Wireshark, KDiskMark, QDirStat) gives the best tools for those jobs.
 - **Engineer lock:** keep the destructive Forms windows (erase, partition, clear a Windows password) behind the engineer's unlock, as the CLI tools already are.
+
+## Progress
+
+- **2026-10-18, started** in `tools/forms/` (kept out of `build/staging` until the drives being updated are finished, so nothing changes under a running deploy): `formslib.py` (specs, checks, command building, disk list, launchers; 12 unit tests), `sysmedic-forms` (the GTK window; run and progress checked headless), `sysmedic-folders` (builds the desktop folders; makes an icon only for programs that are installed), `apps.toml` (35 ready-made programs), and five starter specs: recover deleted files, copy a failing disk, erase a disk, who is on the network, speed test.
+- Checked against the real tools in the build root: PhotoRec's unattended command recovered a deleted file from a scratch image; the ddrescue, arp-scan and speedtest-cli options exist. **Not yet checked:** nwipe's options (not in the stick's root), and every window on a booted SysMedic.
+- Next: move the files into `build/staging`, add the Tier A packages, the desktop (`pcmanfm --desktop`) and the folder build at login, then test in QEMU with a display.
