@@ -305,13 +305,20 @@ def on(want, only, internet=False):
     pw = engineer.psk(h)
     os.makedirs(D, mode=0o700, exist_ok=True)
     # the interface, kept out of NetworkManager's hands
-    run(["iw", "phy", p["phy"], "interface", "add", IFACE, "type", "__ap"])
-    if run(["ip", "link", "show", IFACE]).returncode != 0:
-        sys.exit(f"Couldn't create the access-point interface on {p['phy']}.")
-    run(["nmcli", "device", "set", IFACE, "managed", "no"])
     free = [i["name"] for r in wifilib.radios() if r["phy"] == p["phy"] and not p["shared"] for i in r["ifaces"] if i["type"] == "managed"]
     for f in free:                                   # NetworkManager must not scan with the hotspot's own radio
         run(["nmcli", "device", "set", f, "managed", "no"])
+    # Many USB dongles can't hold a client and an access point at once, and the new interface would share the
+    # idle client's MAC ("Name not unique"). The radio is ours alone here, so remove the idle client; off() puts it back.
+    for f in free:
+        run(["ip", "link", "set", f, "down"])
+        run(["iw", "dev", f, "del"])
+    run(["iw", "phy", p["phy"], "interface", "add", IFACE, "type", "__ap"])
+    if run(["ip", "link", "show", IFACE]).returncode != 0:
+        restore_clients(p["phy"], free)
+        sys.exit(f"Couldn't create the access-point interface on {p['phy']}.")
+    run(["nmcli", "device", "set", IFACE, "managed", "no"])
+    pre = {"phy": p["phy"], "freed": free}      # what cleanup must undo if a later step fails
     run(["ip", "addr", "flush", "dev", IFACE])
     run(["ip", "addr", "add", f"{ADDR}/24", "dev", IFACE])
     run(["ip", "link", "set", IFACE, "up"])
@@ -342,7 +349,7 @@ ctrl_interface={D}/hostapd
     pid = int(open(f"{D}/hostapd.pid").read()) if os.path.exists(f"{D}/hostapd.pid") else 0
     if pr.returncode != 0 or not pid:
         log = open(f"{D}/hostapd.log").read()[-300:] if os.path.exists(f"{D}/hostapd.log") else (pr.stdout + pr.stderr)[-300:]
-        cleanup()
+        cleanup(pre)
         sys.exit(f"hostapd didn't start: {log.strip()}")
     open(f"{D}/dnsmasq.conf", "w").write(f"""interface={IFACE}
 bind-interfaces
@@ -360,11 +367,11 @@ pid-file={D}/dnsmasq.pid
 """)
     dn = run(["dnsmasq", f"--conf-file={D}/dnsmasq.conf"])
     if dn.returncode != 0:
-        cleanup()
+        cleanup(pre)
         sys.exit(f"dnsmasq didn't start: {(dn.stderr or dn.stdout).strip()}")
     rules = run(["nft", "-f", "-"], input=firewall_rules(internet) + (nat_rules() if internet else ""))
     if rules.returncode != 0:
-        cleanup()
+        cleanup(pre)
         sys.exit(f"The hotspot's firewall rules failed, so it was not started: {rules.stderr.strip()}")
     fwd_before = ""
     if internet:                                     # routing is switched on only while the hotspot is, and put back after
@@ -387,6 +394,14 @@ pid-file={D}/dnsmasq.pid
     return 0
 
 
+def restore_clients(phy, names):
+    """Give the radio its client interfaces back (they were removed so the access point could use it), and to NetworkManager."""
+    for f in names:
+        if phy and run(["ip", "link", "show", f]).returncode != 0:
+            run(["iw", "phy", phy, "interface", "add", f, "type", "managed"])
+        run(["nmcli", "device", "set", f, "managed", "yes"])
+
+
 def cleanup(st=None):
     st = st or state()
     for key in ("watcher", "dnsmasq", "hostapd"):
@@ -402,8 +417,7 @@ def cleanup(st=None):
         run(["sysctl", "-qw", f"net.ipv4.ip_forward={st['ip_forward_before']}"])
     run(["ip", "link", "set", IFACE, "down"])
     run(["iw", "dev", IFACE, "del"])
-    for f in st.get("freed", []):
-        run(["nmcli", "device", "set", f, "managed", "yes"])
+    restore_clients(st.get("phy"), st.get("freed", []))
     for f in ("state.json", "hostapd.conf", "hostapd.pid", "dnsmasq.pid"):
         try:
             os.unlink(f"{D}/{f}")
