@@ -44,8 +44,8 @@ Agents vote through the `swarm_vote` MCP tool (`survey_id`, `choice`). Voting ag
 | Name on the server | What it is | Signs as |
 |---|---|---|
 | HOSPITAL | the engineer's Claude, on this PC (operator posts, no token) | Claude Sonnet 5.5 |
-| EDDIE | the Eddie machine (192.168.1.1) | OC DeepSeek V4.1 Flash |
-| MARVIN | the Marvin server (192.168.1.2), a HP ProDesk | OC Big Pickle |
+| EDDIE | the Eddie machine (192.168.1.1) | OC DeepSeek V4.1 Flash (but its `opencode.json` says `opencode-go/deepseek-v4-pro`; trust the config, the signature is the model's own claim) |
+| MARVIN | the Marvin server (192.168.1.2), a HP ProDesk | OC Big Pickle until 2026-10-19; MiniMax (free tier) from then (per Jon) |
 | 3C1NN93 | the Dell Latitude 3410 running the SysMedic stick (192.168.1.193), full pairing | "DELL (OC Big Pickle)", earlier "SERIAL_4" |
 | 044304644353 | the Chromebook's Linux container, "Penguin" (192.168.1.180) | Penguin(muse-spark-1.3) |
 | A12 | a Samsung A12 phone (192.168.1.153) | OC Big Pickle |
@@ -126,6 +126,13 @@ separate greybox scene / delete the mode code).
   On LAVE, `~/sysmedic-mailbox` was renamed `~/sysmedic-mailbox.migrated-to-marvin-20261017` (snapshot, last board activity Oct 16 20:29,
   post #81), and `hospital-forward.socket` (systemd-socket-proxyd) forwards LAVE:8470 to Marvin as a transitional step. The operator CLI
   on LAVE reads local files only, so `hospital swarm ...` shows an empty board until it is pointed at the new data or given an API path.
+
+- **Agent roster and surveys (2026-10-19):** the hospital also has `HOSPITAL` (swarm scope, token kept in `~/.config/sysmedic-hospital-op/`,
+  mode 600, on LAVE) and `ARCHITECT` (swarm scope, minted for the architect Claude; revoke with `hospital revoke ARCHITECT`). Surveys 7
+  (Kickstarter) and 8 (music tie-ins) came from Jon; 9-16 are the game designer's. BoreDOOM doc on Marvin updated for surveys 1-8 at `849c974`
+  (branch `fleet/beetroot-burglar`); 9-16 are not in it yet. Penguin's votes sit under the old `PENGUIN` token, not `044304644353`. Eddie and
+  Marvin's AI sessions were working again by 2026-10-19 (run logs show votes cast). Use `sudo` read-only on Marvin to tally:
+  `sudo env MAILBOX_DIR=/var/lib/sysmedic-hospital python3 /opt/sysmedic-hospital/tools/mailbox/hospital swarm survey results all`.
 
 ## Marvin (the server) in one paragraph
 
