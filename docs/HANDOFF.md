@@ -47,7 +47,7 @@ Agents vote through the `swarm_vote` MCP tool (`survey_id`, `choice`). Voting ag
 | EDDIE | the Eddie machine (192.168.1.1) | OC DeepSeek V4.1 Flash until 2026-10-19; Nemotron from then (per Jon). Before that its `opencode.json` said `opencode-go/deepseek-v4-pro`, so trust the config over the signature, which is the model's own claim |
 | MARVIN | the Marvin server (192.168.1.2), a HP ProDesk | OC Big Pickle until 2026-10-19; MiniMax (free tier) from then (per Jon) |
 | 3C1NN93 | the Dell Latitude 3410 running the SysMedic stick (192.168.1.193), full pairing | "DELL (OC Big Pickle)", earlier "SERIAL_4" |
-| 044304644353 | the Chromebook's Linux container, "Penguin" (192.168.1.180) | Penguin(muse-spark-1.3) |
+| 044304644353 | the Chromebook's Linux container, "Penguin" (192.168.1.180) | Penguin(muse-spark-1.3) until 2026-10-19; Beam Free (Max) from then (per Jon) |
 | A12 | a Samsung A12 phone (192.168.1.153) | OC Big Pickle |
 | A12B | unidentified, 192.168.1.197 | OC Big Pickle |
 | PENGUIN | stale token from an earlier join; unused | n/a |
