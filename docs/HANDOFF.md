@@ -47,10 +47,10 @@ Agents vote through the `swarm_vote` MCP tool (`survey_id`, `choice`). Voting ag
 | EDDIE | the Eddie machine (192.168.1.1) | OC DeepSeek V4.1 Flash until 2026-10-19; Nemotron from then (per Jon). Before that its `opencode.json` said `opencode-go/deepseek-v4-pro`, so trust the config over the signature, which is the model's own claim |
 | MARVIN | the Marvin server (192.168.1.2), a HP ProDesk | OC Big Pickle until 2026-10-19; MiniMax (free tier) from then (per Jon) |
 | 3C1NN93 | the Dell Latitude 3410 running the SysMedic stick (192.168.1.193), full pairing | "DELL (OC Big Pickle)", earlier "SERIAL_4" |
-| 044304644353 | the Chromebook's Linux container, "Penguin" (192.168.1.180) | Penguin(muse-spark-1.3) until 2026-10-19; Beam Free (Max) from then (per Jon) |
+| PENGUIN | the Chromebook's Linux container, "Penguin" (192.168.1.180); this is the token it actually votes and posts with | Penguin(muse-spark-1.3) until 2026-10-19; Beam Free (Max) from then (per Jon) |
 | A12 | a Samsung A12 phone (192.168.1.153) | OC Big Pickle until 2026-10-19; GLM 5.3 from then (per Jon) |
 | A12B | unidentified, 192.168.1.197 | OC Big Pickle until 2026-10-19; LongCat 2.5 from then (per Jon) |
-| PENGUIN | stale token from an earlier join; unused | n/a |
+| 044304644353 | the Chromebook's earlier identity (its Service Tag); **revoked 2026-10-19**, never used for votes. Its 5 early posts are still on the board under this name. If the Chromebook cannot connect, re-pair it | n/a |
 
 One agent, one vote. The Dell and Penguin voted in surveys 1-5 as **board posts**, which the server did not record; the
 server tallies undercount them. When tallying, add them by hand and say so.
@@ -106,7 +106,7 @@ separate greybox scene / delete the mode code).
 6. **A mistake already made and corrected:** the session read "MARVIN has not voted" off post counts, but votes cast through the
    tool do not add posts. Always read the survey results output, not post counts, to see who has voted.
 7. **The soft stop rule** in the `/swarm` prompt (about six posts) made agents go quiet. It now says not to stop while a survey vote is owed.
-   Post caps are enforced by the server (12 per agent per topic, extended per agent with `swarm extend`; EDDIE, MARVIN, 044304644353 and 3C1NN93 are at 18).
+   Post caps are enforced by the server (12 per agent per topic, extended per agent with `swarm extend`; EDDIE, MARVIN, 044304644353 and 3C1NN93 are at 18; A12 at 24).
 
 ## Updates after this file was first written (2026-10-17)
 
@@ -130,7 +130,7 @@ separate greybox scene / delete the mode code).
 - **Agent roster and surveys (2026-10-19):** the hospital also has `HOSPITAL` (swarm scope, token kept in `~/.config/sysmedic-hospital-op/`,
   mode 600, on LAVE) and `ARCHITECT` (swarm scope, minted for the architect Claude; revoke with `hospital revoke ARCHITECT`). Surveys 7
   (Kickstarter) and 8 (music tie-ins) came from Jon; 9-16 are the game designer's. BoreDOOM doc on Marvin updated for surveys 1-8 at `849c974`
-  (branch `fleet/beetroot-burglar`); 9-16 are not in it yet. Penguin's votes sit under the old `PENGUIN` token, not `044304644353`. Eddie and
+  (branch `fleet/beetroot-burglar`); 9-16 are not in it yet. Penguin's votes sit under the `PENGUIN` token, not `044304644353` (now revoked; backup `machines.json.bak-revoke-044304644353`). Eddie and
   Marvin's AI sessions were working again by 2026-10-19 (run logs show votes cast). Use `sudo` read-only on Marvin to tally:
   `sudo env MAILBOX_DIR=/var/lib/sysmedic-hospital python3 /opt/sysmedic-hospital/tools/mailbox/hospital swarm survey results all`.
 
