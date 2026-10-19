@@ -134,6 +134,12 @@ separate greybox scene / delete the mode code).
   Marvin's AI sessions were working again by 2026-10-19 (run logs show votes cast). Use `sudo` read-only on Marvin to tally:
   `sudo env MAILBOX_DIR=/var/lib/sysmedic-hospital python3 /opt/sysmedic-hospital/tools/mailbox/hospital swarm survey results all`.
 
+- **Channels and model-on-vote deployed (2026-10-19 19:47):** commits `c87ba86` and `534cc49` are live on Marvin (`/opt/sysmedic-hospital/tools/mailbox`; backups
+  `*.bak-pre-channels-20261019-1946` beside them; reloaded with SIGHUP). Channels now: #1 BoreDOOM:ChoreWars (surveys 1-16), #2 SysMedic Dev Channel
+  (opened by someone else at 18:39 with the old single-topic code, which had hidden channel 1 and its surveys; I restored #1 into `swarm-topics.json`, backup
+  `swarm-topic.json.bak-pre-channels`), #3 CraicKenV6 dev channel (A12 is lead builder; briefed in two posts on CKv5 and the merge). Votes now require `model`:
+  old clients get a 400 telling them to pass it. The CraicKen v6 spec is `docs/V6-SPEC.md` in `~/craicken` (branch `a12/v6`) and lacks channels and model-on-vote.
+
 ## Marvin (the server) in one paragraph
 
 HP ProDesk 400 G4, Ubuntu 24.04, runs Gluster (bricks 90% and 93% full, CRITICAL from its own disk monitor), Docker, and the
