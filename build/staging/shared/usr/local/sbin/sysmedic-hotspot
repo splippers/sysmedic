@@ -323,13 +323,14 @@ def on(want, only, internet=False):
     run(["ip", "addr", "flush", "dev", IFACE])
     run(["ip", "addr", "add", f"{ADDR}/24", "dev", IFACE])
     run(["ip", "link", "set", IFACE, "up"])
-    conf = f"""interface={IFACE}
+    def make_conf(band, channel):
+        return f"""interface={IFACE}
 driver=nl80211
 ssid={h['ssid']}
 {'country_code=' + country if country else ''}
 {'ieee80211d=1' if country else ''}
-hw_mode={'a' if p['band'] == '5' else 'g'}
-channel={p['channel']}
+hw_mode={'a' if band == '5' else 'g'}
+channel={channel}
 ieee80211n=1
 wmm_enabled=1
 auth_algs=1
@@ -342,16 +343,39 @@ max_num_sta=8
 macaddr_acl=0
 ctrl_interface={D}/hostapd
 """
-    fd = os.open(f"{D}/hostapd.conf", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(conf)
-    pr = run(["hostapd", "-B", "-P", f"{D}/hostapd.pid", "-f", f"{D}/hostapd.log", f"{D}/hostapd.conf"])
-    time.sleep(1.5)
-    pid = int(open(f"{D}/hostapd.pid").read()) if os.path.exists(f"{D}/hostapd.pid") else 0
-    if pr.returncode != 0 or not pid:
+    # The planner's first choice is not always one hostapd accepts ("Hardware does not support configured channel",
+    # seen on an Intel AX201 on 5 GHz channel 149): try the other channels of the band, then 2.4 GHz on the same radio.
+    r_this = next((r for r in wifilib.radios() if r["phy"] == p["phy"]), None)
+    tries = [(p["band"], p["channel"])]
+    if r_this and not p["shared"]:
+        pref = {"5": wifilib.PREF_5, "2.4": wifilib.PREF_24}
+        for bd in (p["band"], "2.4") if p["band"] == "5" else ("2.4",):
+            tries += [(bd, c) for c in pref[bd] if c in r_this["channels"][bd] and (bd, c) not in tries]
+    pid, tried = 0, []
+    for band, channel in tries:
+        fd = os.open(f"{D}/hostapd.conf", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(make_conf(band, channel))
+        for old in (f"{D}/hostapd.pid", f"{D}/hostapd.log"):
+            try:
+                os.unlink(old)
+            except OSError:
+                pass
+        pr = run(["hostapd", "-B", "-P", f"{D}/hostapd.pid", "-f", f"{D}/hostapd.log", f"{D}/hostapd.conf"])
+        time.sleep(1.5)
+        pid = int(open(f"{D}/hostapd.pid").read()) if os.path.exists(f"{D}/hostapd.pid") else 0
+        if pr.returncode == 0 and pid:
+            p["band"], p["channel"] = band, channel
+            break
         log = open(f"{D}/hostapd.log").read()[-300:] if os.path.exists(f"{D}/hostapd.log") else (pr.stdout + pr.stderr)[-300:]
+        tried.append(f"{band} GHz ch {channel}")
+        if "channel" not in log.lower() and "frequency" not in log.lower():
+            break                                    # not a channel problem: more tries won't help
+    if not pid:
         cleanup(pre)
-        sys.exit(f"hostapd didn't start: {log.strip()}")
+        sys.exit(f"hostapd didn't start (tried {', '.join(tried)}): {log.strip()}")
+    if tried:
+        print(f"  (This radio refused {', '.join(tried)}; running on {p['band']} GHz channel {p['channel']} instead.)")
     open(f"{D}/dnsmasq.conf", "w").write(f"""interface={IFACE}
 bind-interfaces
 except-interface=lo
@@ -396,6 +420,7 @@ pid-file={D}/dnsmasq.pid
 
 
 LINK = "/run/systemd/network/00-sysmedic-ap.link"
+NMCONF = "/run/NetworkManager/conf.d/90-sysmedic-ap.conf"
 
 
 def keep_name():
@@ -405,6 +430,12 @@ def keep_name():
     with open(LINK, "w") as f:
         f.write(f"[Match]\nOriginalName={IFACE}\n\n[Link]\nNamePolicy=keep\nName={IFACE}\n")
     run(["udevadm", "control", "--reload"])
+    # NetworkManager must be told before the interface exists: it otherwise hands the new sm-ap to wpa_supplicant for a
+    # moment, which takes the interface down again (journal: "nl80211: deinit ifname=sm-ap", "Lost carrier").
+    os.makedirs(os.path.dirname(NMCONF), exist_ok=True)
+    with open(NMCONF, "w") as f:
+        f.write(f"[keyfile]\nunmanaged-devices=interface-name:{IFACE}\n")
+    run(["nmcli", "general", "reload", "conf"])
 
 
 def restore_clients(phy, names):
@@ -430,10 +461,11 @@ def cleanup(st=None):
         run(["sysctl", "-qw", f"net.ipv4.ip_forward={st['ip_forward_before']}"])
     run(["ip", "link", "set", IFACE, "down"])
     run(["iw", "dev", IFACE, "del"])
-    try:
-        os.unlink(LINK)
-    except OSError:
-        pass
+    for gone in (LINK, NMCONF):
+        try:
+            os.unlink(gone)
+        except OSError:
+            pass
     restore_clients(st.get("phy"), st.get("freed", []))
     for f in ("state.json", "hostapd.conf", "hostapd.pid", "dnsmasq.pid"):
         try:
