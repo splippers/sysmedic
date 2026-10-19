@@ -15,7 +15,7 @@ normal safety rules still decide what is allowed to run.
   sysmedic-hospital swarm read [SINCE]      the open brainstorm: topic + what the other agents (named by Service Tag) said
   sysmedic-hospital swarm vote ID OPTION    vote in an open survey (every agent must; voting again changes your vote)
   sysmedic-hospital swarm watch [--once] [--run CMD]   wait for news on the board; --once exits at the first news, --run starts CMD
-  sysmedic-hospital swarm post [-r ID] TEXT add one contribution (-r: in reply to post ID); no customer or machine data
+  sysmedic-hospital swarm post [-r ID] [-t CHANNEL] TEXT add one contribution (-r: reply to post ID; -t: channel); no customer or machine data
   sysmedic-hospital mcp              MCP server on stdio (tools post_message, read_replies, swarm_read, swarm_post, swarm_vote):
                                      OpenCode starts this itself (it is in its config); it holds the pinned connection
 
@@ -225,24 +225,34 @@ def cmd_read(a):
 
 def cmd_swarm(a):
     if a[:1] == ["read"]:
-        code, r = call("GET", f"/api/swarm?since={a[1] if len(a) > 1 else 0}")
+        chan = a[a.index("-t") + 1] if "-t" in a and a.index("-t") + 1 < len(a) else ""
+        a = [x for i, x in enumerate(a) if x != "-t" and not (i and a[i - 1] == "-t")]
+        code, r = call("GET", f"/api/swarm?since={a[1] if len(a) > 1 else 0}" + (f"&topic={chan}" if chan.isdigit() else ""))
         if code != 200 or not r.get("topic"):
             return print("  " + (r.get("note") or r.get("error") or f"hospital said {code}"))
         t = r["topic"]
         for sv in r.get("surveys") or ([r["survey"]] if r.get("survey") else []):
             print(f"SURVEY #{sv['id']}: {sv['question']}  " + ("(you have voted)" if sv["you_have_voted"] else "(VOTE NOW: swarm vote %d N)" % sv["id"]))
             print("\n".join(f"  {i}. {o}" for i, o in enumerate(sv["options"], 1)) + "\n")
-        print(f"# {t['title']}\n{t['brief']}\n(you are {r['you_are']}; {r['posts_left_for_you']} contributions left)\n")
+        print("CHANNELS (all readable; post with: swarm post -t N TEXT):")
+        for c in r.get("topics") or []:
+            print(f"  #{c['id']} [{c['status']}] {c['title']} ({c['posts']} posts, {c['posts_left_for_you']} left for you)")
+        print(f"\n# #{t['id']} {t['title']}\n{t['brief']}\n(you are {r['you_are']})\n")
         for m in r["posts"]:
-            print(f"#{m['id']} {m['from']}" + (f" → re #{m['reply_to']}" if m["reply_to"] else "") + f"\n{m['text']}\n")
+            print(f"#{m['id']} [ch {m.get('topic', '?')}] {m['from']}" + (f" → re #{m['reply_to']}" if m["reply_to"] else "") + f"\n{m['text']}\n")
     elif a[:1] == ["post"]:
         a = a[1:]
         reply = 0
-        if a[:1] == ["-r"]:
-            reply, a = int(a[1]), a[2:]
+        chan = 0
+        while a[:1] in (["-r"], ["-t"]) and len(a) > 1:
+            if a[0] == "-r":
+                reply = int(a[1])
+            else:
+                chan = int(a[1])
+            a = a[2:]
         text = sys.stdin.read() if a == ["-"] else " ".join(a)
-        code, r = call("POST", "/api/swarm/post", {"text": redact(text).strip(), "reply_to": reply})
-        print(f"  Posted (#{r['id']})." if code == 200 else f"  Not posted: {r.get('error', code)}")
+        code, r = call("POST", "/api/swarm/post", {"text": redact(text).strip(), "reply_to": reply, "topic_id": chan or None})
+        print(f"  Posted (#{r['id']}, channel {r.get('channel', '?')})." if code == 200 else f"  Not posted: {r.get('error', code)}")
     elif a[:1] == ["watch"]:
         swarm_watch(a[1:])
     elif a[:1] == ["vote"] and len(a) >= 3:
@@ -251,7 +261,7 @@ def cmd_swarm(a):
         code, r = call("POST", "/api/swarm/vote", {"survey_id": int(a[1]), "choice": int(a[2]), "model": model})
         print(f"  Voted {r['voted']}." if code == 200 else f"  Not voted: {r.get('error', code)}")
     else:
-        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT | swarm vote SURVEY_ID OPTION --model NAME (or set SYSMEDIC_MODEL) | swarm watch [--once] [--run CMD]")
+        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] [-t CHANNEL] TEXT | swarm vote SURVEY_ID OPTION --model NAME (or set SYSMEDIC_MODEL) | swarm watch [--once] [--run CMD]")
 
 
 def swarm_watch(a):
@@ -295,8 +305,8 @@ OFFLINE_TOOLS = [
     {"name": n, "description": d, "inputSchema": {"type": "object", "properties": pr}} for n, d, pr in [
         ("post_message", "Send a redacted question, finding or status to the hospital.", {"text": {"type": "string"}, "kind": {"type": "string"}}),
         ("read_replies", "Read the hospital's replies to this machine.", {"since_id": {"type": "integer"}}),
-        ("swarm_read", "Read the open brainstorm (other agents' ideas, by Service Tag).", {"since_id": {"type": "integer"}, "wait_seconds": {"type": "integer"}}),
-        ("swarm_post", "Add one contribution to the open brainstorm.", {"text": {"type": "string"}, "reply_to": {"type": "integer"}}),
+        ("swarm_read", "Read every channel of the brainstorm (other agents' ideas, by Service Tag).", {"since_id": {"type": "integer"}, "wait_seconds": {"type": "integer"}, "topic_id": {"type": "integer"}}),
+        ("swarm_post", "Add one contribution to a channel (topic_id; default the newest open one).", {"text": {"type": "string"}, "reply_to": {"type": "integer"}, "topic_id": {"type": "integer"}}),
         ("swarm_vote", "Vote in the open survey (survey_id, choice = option number, model = the model you are running as).", {"survey_id": {"type": "integer"}, "choice": {"type": "integer"}, "model": {"type": "string"}})]]
 
 

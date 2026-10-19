@@ -150,9 +150,18 @@ def cmd_reply(a):
 
 
 def cmd_swarm(a):
-    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | board [SINCE] | say TEXT | survey Q OPT1 OPT2.. | survey results|close|reopen [ID|all] | extend NAME [N] | close | agents"""
+    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | channels | board [SINCE] [-t CHANNEL] | say [-t CHANNEL] TEXT | survey [-t CHANNEL] Q OPT1 OPT2.. | survey results|close|reopen [ID|all] | extend NAME [N] [-t CHANNEL] | close|reopen-channel CHANNEL | agents
+    Every channel stays readable to every client; -t picks one (default: the newest open channel)."""
     sub = a[0] if a else ""
-    tf = DIR / "swarm-topic.json"
+
+    def opt_t(args):
+        """Pull "-t N" out of args: returns (channel id or None, the rest)."""
+        if "-t" in args and args.index("-t") + 1 < len(args):
+            i = args.index("-t")
+            if not args[i + 1].isdigit() or not S.get_topic(args[i + 1]):
+                sys.exit("no such channel; see: hospital swarm channels")
+            return int(args[i + 1]), args[:i] + args[i + 2:]
+        return None, args
     if sub == "open":
         if len(a) < 2:
             sys.exit("usage: hospital swarm open TITLE [-f BRIEF_FILE | BRIEF text...]")
@@ -161,33 +170,42 @@ def cmd_swarm(a):
         bad = S.why_refused(title + " " + brief)
         if bad:
             sys.exit(f"the brief contains {bad}: a brainstorm topic must be free of customer and machine data")
-        old = S.swarm_topic()
-        tf.write_text(json.dumps({"id": (old or {}).get("id", 0) + 1, "title": title, "brief": brief.strip(), "status": "open",
-                                  "opened": time.strftime("%Y-%m-%d %H:%M")}))
-        os.chmod(tf, 0o600)
-        print(f"Brainstorm #{S.swarm_topic()['id']} open: {title}")
+        ts = S.topics()                                     # a new channel; the others stay open and readable
+        ts.append({"id": max([t["id"] for t in ts] + [0]) + 1, "title": title, "brief": brief.strip(), "status": "open",
+                   "opened": time.strftime("%Y-%m-%d %H:%M")})
+        S.save_topics(ts)
+        print(f"Channel #{ts[-1]['id']} open: {title}")
+    elif sub == "channels":
+        for t in S.topics():
+            print(f"#{t['id']} [{t.get('status', 'open')}] {t['title']}  ({len(S.swarm_posts(t['id']))} posts, {len(S.surveys(t['id']))} surveys)")
     elif sub == "board":
-        t = S.swarm_topic()
-        if not t:
+        if not S.topics():
             return print("(no brainstorm yet)")
+        tid, a = opt_t(a)
         since = int(a[1]) if len(a) > 1 else 0
-        print(f"# {t['title']}  [{t['status']}]\n{t['brief']}\n")
-        for m in S.swarm_posts():
-            if m["id"] > since:
-                print(f"#{m['id']} {m['ts']} {m['agent']}" + (f" → re #{m['reply_to']}" if m["reply_to"] else "") + f"\n{m['text']}\n")
+        for t in ([S.get_topic(tid)] if tid else S.topics()):
+            print(f"# #{t['id']} {t['title']}  [{t.get('status', 'open')}]\n{t['brief']}\n")
+            for m in S.swarm_posts(t["id"]):
+                if m["id"] > since:
+                    print(f"#{m['id']} {m['ts']} {m['agent']}" + (f" → re #{m['reply_to']}" if m["reply_to"] else "") + f"\n{m['text']}\n")
     elif sub == "say":
-        S.swarm_add("HOSPITAL", " ".join(a[1:]))
+        tid, a = opt_t(a)
+        S.swarm_add("HOSPITAL", " ".join(a[1:]), 0, tid)
         print("posted")
-    elif sub == "close":
-        t = S.swarm_topic()
-        if t:
-            t["status"] = "closed"
-            tf.write_text(json.dumps(t))
-        print("closed")
+    elif sub in ("close", "reopen-channel"):
+        if len(a) < 2 or not a[1].isdigit() or not S.get_topic(a[1]):
+            sys.exit("usage: hospital swarm close|reopen-channel CHANNEL   (see: hospital swarm channels)")
+        ts = S.topics()
+        for t in ts:
+            if t["id"] == int(a[1]):
+                t["status"] = "closed" if sub == "close" else "open"
+        S.save_topics(ts)
+        print("closed (still readable)" if sub == "close" else "reopened")
     elif sub == "survey":
-        t = S.swarm_topic()
+        tid, a = opt_t(a)
+        t = S.get_topic(tid) if tid else S.swarm_topic()
         if not t:
-            sys.exit("open a brainstorm first")
+            sys.exit("open a channel first")
         allsv = S.surveys()
         verb = a[1] if len(a) > 1 and a[1] in ("results", "close", "reopen") else ""
         if verb:
@@ -231,18 +249,20 @@ def cmd_swarm(a):
         S.save_surveys(allsv)
         print(f"Survey #{sid} open: {q}")
     elif sub == "extend":
+        tid, a = opt_t(a)
         if len(a) < 2 or not S.swarm_topic():
-            sys.exit("usage: hospital swarm extend NAME [MORE_POSTS=6]   (this topic only)")
+            sys.exit("usage: hospital swarm extend NAME [MORE_POSTS=6] [-t CHANNEL]   (one channel; default the newest open)")
         f = DIR / "swarm-extra.json"
         extra = json.loads(f.read_text()) if f.exists() else {}
-        tid = str(S.swarm_topic()["id"])
+        tid = str(tid or S.swarm_topic()["id"])
         extra.setdefault(a[1], {})[tid] = extra.get(a[1], {}).get(tid, 0) + (int(a[2]) if len(a) > 2 else 6)
         f.write_text(json.dumps(extra))
         os.chmod(f, 0o600)
-        print(f"{a[1]} may now post {S.POSTS_PER_AGENT + extra[a[1]][tid]} times on this topic")
+        print(f"{a[1]} may now post {S.POSTS_PER_AGENT + extra[a[1]][tid]} times in channel #{tid}")
     elif sub == "agents":
+        tid, a = opt_t(a)
         counts = {}
-        for m in S.swarm_posts():
+        for m in S.swarm_posts(tid):
             counts[m["agent"]] = counts.get(m["agent"], 0) + 1
         print("\n".join(f"{k:<14}{v} post(s)" for k, v in counts.items()) or "(nobody has posted)")
     elif sub == "watch":
