@@ -245,11 +245,13 @@ def cmd_swarm(a):
         print(f"  Posted (#{r['id']})." if code == 200 else f"  Not posted: {r.get('error', code)}")
     elif a[:1] == ["watch"]:
         swarm_watch(a[1:])
-    elif a[:1] == ["vote"] and len(a) == 3:
-        code, r = call("POST", "/api/swarm/vote", {"survey_id": int(a[1]), "choice": int(a[2])})
+    elif a[:1] == ["vote"] and len(a) >= 3:
+        rest = a[3:]
+        model = (rest[rest.index("--model") + 1] if "--model" in rest and rest.index("--model") + 1 < len(rest) else "") or os.environ.get("SYSMEDIC_MODEL", "")
+        code, r = call("POST", "/api/swarm/vote", {"survey_id": int(a[1]), "choice": int(a[2]), "model": model})
         print(f"  Voted {r['voted']}." if code == 200 else f"  Not voted: {r.get('error', code)}")
     else:
-        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT | swarm vote SURVEY_ID OPTION | swarm watch [--once] [--run CMD]")
+        sys.exit("usage: sysmedic-hospital swarm read [SINCE] | swarm post [-r ID] TEXT | swarm vote SURVEY_ID OPTION --model NAME (or set SYSMEDIC_MODEL) | swarm watch [--once] [--run CMD]")
 
 
 def swarm_watch(a):
@@ -295,7 +297,7 @@ OFFLINE_TOOLS = [
         ("read_replies", "Read the hospital's replies to this machine.", {"since_id": {"type": "integer"}}),
         ("swarm_read", "Read the open brainstorm (other agents' ideas, by Service Tag).", {"since_id": {"type": "integer"}, "wait_seconds": {"type": "integer"}}),
         ("swarm_post", "Add one contribution to the open brainstorm.", {"text": {"type": "string"}, "reply_to": {"type": "integer"}}),
-        ("swarm_vote", "Vote in the open survey (survey_id, choice = option number).", {"survey_id": {"type": "integer"}, "choice": {"type": "integer"}})]]
+        ("swarm_vote", "Vote in the open survey (survey_id, choice = option number, model = the model you are running as).", {"survey_id": {"type": "integer"}, "choice": {"type": "integer"}, "model": {"type": "string"}})]]
 
 
 def offline_reply(req, why):

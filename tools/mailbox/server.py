@@ -264,6 +264,19 @@ def swarm_survey():
     return next((sv for sv in reversed(surveys()) if sv.get("status") == "open"), None)
 
 
+def survey_vote_records(sv):
+    """Latest vote record per agent: {agent: {choice, model, ts}}. Older records have no model or ts."""
+    f = DIR / "swarm-votes.jsonl"
+    out = {}
+    if sv and f.exists():
+        for l in open(f):
+            if l.strip():
+                v = json.loads(l)
+                if v["survey"] == sv["id"]:
+                    out[v["agent"]] = {"choice": v["choice"], "model": v.get("model", ""), "ts": v.get("ts", "")}
+    return out
+
+
 def survey_votes(sv):
     f = DIR / "swarm-votes.jsonl"
     if not sv or not f.exists():
@@ -277,7 +290,13 @@ def survey_votes(sv):
     return votes
 
 
-def do_swarm_vote(name, survey_id, choice):
+def clean_model(model):
+    """The model an agent says it is (e.g. 'OC Big Pickle'): one short printable line, or '' if it gave none."""
+    m = " ".join(str(model or "").split())
+    return m[:60] if m.isprintable() else ""
+
+
+def do_swarm_vote(name, survey_id, choice, model=None):
     sv = get_survey(survey_id)
     if not sv:
         return 409, {"error": "no such survey"}
@@ -289,10 +308,13 @@ def do_swarm_vote(name, survey_id, choice):
         return 400, {"error": "choice is the option number"}
     if not 1 <= c <= len(sv["options"]):
         return 400, {"error": f"choice must be 1-{len(sv['options'])}"}
+    model = clean_model(model)
+    if not model:
+        return 400, {"error": "say which model you are: pass model (e.g. 'OC Big Pickle', 'MiniMax', 'Nemotron'). Every vote records it."}
     changed = survey_votes(sv).get(name)                            # voting again replaces your earlier vote
     with LOCK:
         with open(DIR / "swarm-votes.jsonl", "a") as fh:
-            fh.write(json.dumps({"survey": sv["id"], "agent": name, "choice": c}) + "\n")
+            fh.write(json.dumps({"survey": sv["id"], "agent": name, "choice": c, "model": model, "ts": time.strftime("%Y-%m-%d %H:%M:%S")}) + "\n")
         os.chmod(DIR / "swarm-votes.jsonl", 0o600)
     return 200, {"ok": True, "voted": c, **({"changed_from": changed} if changed and changed != c else {})}
 
@@ -356,8 +378,8 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {"since_id": {"type": "integer"}, "wait_seconds": {"type": "integer", "description": "wait up to 20 s for someone else's new post"}}}},
     {"name": "swarm_post", "description": "Add one contribution to the open brainstorm: a concrete idea, a critique of someone else's idea (set reply_to to its id), or a refinement. Short and specific. No customer or machine data.",
      "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}, "reply_to": {"type": "integer"}}, "required": ["text"]}},
-    {"name": "swarm_vote", "description": "Vote in the open survey shown by swarm_read (one vote each, final). choice is the option number. Every agent must vote when a survey appears.",
-     "inputSchema": {"type": "object", "properties": {"survey_id": {"type": "integer"}, "choice": {"type": "integer"}}, "required": ["survey_id", "choice"]}},
+    {"name": "swarm_vote", "description": "Vote in the open survey shown by swarm_read (one vote each; voting again changes it). choice is the option number; model is the name of the model you are running as (recorded with the vote). Every agent must vote when a survey appears.",
+     "inputSchema": {"type": "object", "properties": {"survey_id": {"type": "integer"}, "choice": {"type": "integer"}, "model": {"type": "string", "description": "your model, e.g. OC Big Pickle"}}, "required": ["survey_id", "choice", "model"]}},
 ]
 
 
@@ -377,7 +399,7 @@ def mcp(name, req):
             else do_replies(name, int(a.get("since_id") or 0)) if p.get("name") == "read_replies" \
             else do_swarm_read(name, int(a.get("since_id") or 0), a.get("wait_seconds")) if p.get("name") == "swarm_read" \
             else do_swarm_post(name, a.get("text"), a.get("reply_to")) if p.get("name") == "swarm_post" \
-            else do_swarm_vote(name, a.get("survey_id"), a.get("choice")) if p.get("name") == "swarm_vote" else (404, {"error": "no such tool"})
+            else do_swarm_vote(name, a.get("survey_id"), a.get("choice"), a.get("model")) if p.get("name") == "swarm_vote" else (404, {"error": "no such tool"})
         return ok({"content": [{"type": "text", "text": json.dumps(body)}], "isError": code != 200})
     if rid is None:
         return None                                   # a notification: no reply
@@ -459,7 +481,7 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/swarm/post":
             code, body = do_swarm_post(name, req.get("text"), req.get("reply_to"))
         elif u.path == "/api/swarm/vote":
-            code, body = do_swarm_vote(name, req.get("survey_id"), req.get("choice"))
+            code, body = do_swarm_vote(name, req.get("survey_id"), req.get("choice"), req.get("model"))
             self.send(code, body)
         elif u.path == "/mcp":
             r = mcp(name, req)

@@ -210,10 +210,11 @@ def cmd_swarm(a):
                 S.save_surveys(allsv)
             for sv in pick:
                 votes = S.survey_votes(sv)
+                recs = S.survey_vote_records(sv)
                 posters = {m["agent"] for m in S.swarm_posts()} | set(votes)
                 print(f"Survey #{sv['id']} [{sv['status']}]: {sv['question']}")
                 for i, o in enumerate(sv["options"], 1):
-                    who = [k for k, v in votes.items() if v == i]
+                    who = [k + (f" [{recs[k]['model']}]" if recs.get(k, {}).get("model") else " [model not recorded]") for k, v in votes.items() if v == i]
                     print(f"  {i}. {o}: {len(who)}  {' '.join(who)}")
                 print("  not yet voted (by tool): " + (" ".join(sorted(posters - set(votes))) or "(none)"))
             if verb != "results":
