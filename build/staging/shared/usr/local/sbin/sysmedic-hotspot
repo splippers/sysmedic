@@ -292,8 +292,14 @@ def setup():
 def on(want, only, internet=False):
     if os.environ.get("SYSMEDIC_AI"):
         sys.exit("The AI can't start the hotspot; the engineer does, at the device (menu H).")
-    if state()["on"]:
-        return status()
+    st0 = state()
+    if st0["on"]:
+        if bool(st0.get("internet")) == bool(internet):
+            return status()
+        # asked for internet on (or off) while it is running: restart it the new way, on the same band, not a silent no-op
+        print(f"  Restarting the hotspot {'with' if internet else 'without'} internet for the phone...")
+        want = want or st0.get("band")
+        cleanup(st0)
     h, kept = engineer.hotspot()
     want = want or h.get("band", "auto")
     country = h.get("country") or regdomain()
@@ -380,7 +386,7 @@ ctrl_interface={D}/hostapd
 bind-interfaces
 except-interface=lo
 dhcp-range=10.42.0.20,10.42.0.60,255.255.255.0,2h
-{f"dhcp-option=3,{ADDR}" if internet else "dhcp-option=3"}
+dhcp-option=3,{ADDR}
 dhcp-option=6,{ADDR}
 dhcp-leasefile={D}/leases
 no-resolv
