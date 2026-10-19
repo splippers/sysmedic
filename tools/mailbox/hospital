@@ -99,8 +99,15 @@ def cmd_machines(_):
     for m in S.messages():
         if m["dir"] == "in":
             last[m["machine"]] = m["ts"]
+    try:
+        revs = json.loads((DIR / "clients.json").read_text())
+    except (OSError, ValueError):
+        revs = {}
+    cur = S.client_rev()
     for n, m in S.machines().items():
-        print(f"{n:<20} {'REVOKED' if m.get('revoked') else 'active ':<8} {m.get('scope', 'full'):<6} paired {m['created']}  last message {last.get(n, '-')}")
+        r = (revs.get(n) or {}).get("rev")
+        ver = "client ?" if not r else f"client {r}" + ("" if r == cur else " STALE")
+        print(f"{n:<20} {'REVOKED' if m.get('revoked') else 'active ':<8} {m.get('scope', 'full'):<6} paired {m['created']}  last message {last.get(n, '-')}  {ver}")
 
 
 def seen_file():

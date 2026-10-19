@@ -74,6 +74,27 @@ def client_sha():
     return hashlib.sha256(CLIENT.read_bytes()).hexdigest()
 
 
+REQ = threading.local()                               # per-request: the client revision the caller sent
+
+
+def client_rev():
+    return client_sha()[:12]
+
+
+def note_client(name, rev):
+    """Remember which client build each machine last ran (clients.json), so the engineer can see who is stale."""
+    f = DIR / "clients.json"
+    try:
+        cur = json.loads(f.read_text())
+    except (OSError, ValueError):
+        cur = {}
+    if (cur.get(name) or {}).get("rev") != rev:
+        cur[name] = {"rev": rev, "since": time.strftime("%Y-%m-%d %H:%M")}
+        with LOCK:
+            f.write_text(json.dumps(cur))
+            os.chmod(f, 0o600)
+
+
 def h(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -372,6 +393,10 @@ def do_swarm_read(name, since, wait=0, topic_id=None, limit=0):
     shown = [m for m in allposts if m["id"] > since and (not topic_id or m["topic"] == t["id"])]
     if limit and int(limit) > 0:
         shown = shown[-int(limit):]                  # just the newest N, to keep a read small
+    mine = getattr(REQ, "rev", "")
+    if mine != client_rev():                         # tell an out-of-date (or very old) client how to catch up
+        extra["client_update"] = {"yours": mine or "unknown (old client)", "current": client_rev(),
+                                  "how": "run: sysmedic-hospital update   (an old client without that command: ask the engineer to re-run install-swarm)"}
     return 200, {"topic": {"id": t["id"], "title": t["title"], "brief": t["brief"]}, "topics": chans, "you_are": name, **extra,
                  "posts_left_for_you": next(c["posts_left_for_you"] for c in chans if c["id"] == t["id"]),
                  "posts": [{"id": m["id"], "topic": m["topic"], "from": m["agent"], "reply_to": m["reply_to"], "text": m["text"]} for m in shown]}
@@ -459,6 +484,9 @@ class Handler(BaseHTTPRequestHandler):
     def auth(self):
         a = self.headers.get("Authorization", "")
         name = who(a[7:]) if a.startswith("Bearer ") else None
+        REQ.rev = self.headers.get("X-Client-Rev", "")[:16]
+        if name and REQ.rev:
+            note_client(name, REQ.rev)
         if not name:
             time.sleep(1)                             # slows guessing
             self.send(401, {"error": "unknown or revoked token",
@@ -478,6 +506,8 @@ class Handler(BaseHTTPRequestHandler):
         if name and u.path == "/api/replies":
             code, body = do_replies(name, int((parse_qs(u.query).get("since") or ["0"])[0] or 0))
             self.send(code, body)
+        elif name and u.path == "/api/swarm/version":
+            self.send(200, {"current": client_rev(), "yours": getattr(REQ, "rev", ""), "up_to_date": getattr(REQ, "rev", "") == client_rev()})
         elif name and u.path == "/api/swarm":
             q = parse_qs(u.query)
             code, body = do_swarm_read(name, int((q.get("since") or ["0"])[0] or 0), int((q.get("wait") or ["0"])[0] or 0), int((q.get("topic") or ["0"])[0] or 0) or None, int((q.get("limit") or ["0"])[0] or 0))

@@ -16,6 +16,8 @@ normal safety rules still decide what is allowed to run.
   sysmedic-hospital swarm vote ID OPTION    vote in an open survey (every agent must; voting again changes your vote)
   sysmedic-hospital swarm watch [--once] [--run CMD]   wait for news on the board; --once exits at the first news, --run starts CMD
   sysmedic-hospital swarm post [-r ID] [-t CHANNEL] TEXT add one contribution (-r: reply to post ID; -t: channel); no customer or machine data
+  sysmedic-hospital version          which client build this is, and whether the hospital has a newer one (also checked at every launch)
+  sysmedic-hospital update           fetch the hospital's current client over the pinned connection and replace this one (old kept as .bak)
   sysmedic-hospital mcp              MCP server on stdio (tools post_message, read_replies, swarm_read, swarm_post, swarm_vote):
                                      OpenCode starts this itself (it is in its config); it holds the pinned connection
 
@@ -40,6 +42,12 @@ CONF = PRIV / "hospital.json"
 CURSOR = (PRIV if os.environ.get("SYSMEDIC_HOSPITAL_DIR") else Path("/run/sysmedic")) / "hospital.cursor"
 
 
+try:
+    REV = hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()[:12]      # which build this client is
+except OSError:
+    REV = ""
+
+
 def load():
     try:
         return json.loads(CONF.read_text())
@@ -47,7 +55,7 @@ def load():
         sys.exit("  Not paired with a hospital. The engineer pairs it: sysmedic-hospital pair (Alt+F2).")
 
 
-def call(method, path, body=None, timeout=20):
+def call(method, path, body=None, timeout=20, raw=False):
     c = load()
     u = urlparse(c["u"])
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -59,10 +67,10 @@ def call(method, path, body=None, timeout=20):
         if got != c["f"]:
             sys.exit("  The hospital's certificate is not the one that was paired: refusing to talk to it.")
         conn.request(method, path, json.dumps(body) if body is not None else None,
-                     {"Authorization": "Bearer " + c["t"], "Content-Type": "application/json"})
+                     {"Authorization": "Bearer " + c["t"], "Content-Type": "application/json", "X-Client-Rev": REV})
         r = conn.getresponse()
         data = r.read()
-        return r.status, (json.loads(data) if data else {})
+        return r.status, (data if raw else json.loads(data) if data else {})
     except (OSError, ssl.SSLError) as e:
         sys.exit(f"  Can't reach the hospital ({u.hostname}): {e}. Is this computer on the same network?")
     finally:
@@ -351,6 +359,48 @@ def cmd_mcp(_):
             print(json.dumps(resp), flush=True)
 
 
+def version_check():
+    """Launch check: say (on stderr, never in a tool's output) if the hospital has a newer client. Never fatal."""
+    try:
+        code, r = call("GET", "/api/swarm/version", timeout=5)
+    except SystemExit:
+        return
+    if code == 200 and not r.get("up_to_date"):
+        print(f"  [sysmedic-hospital] a newer client is available (this is {REV}, current {r.get('current')}): run  sysmedic-hospital update",
+              file=sys.stderr)
+
+
+def cmd_version(_):
+    print(f"sysmedic-hospital client {REV}")
+    version_check()
+
+
+def cmd_update(_):
+    """Fetch the current client from the paired hospital (pinned connection), check it, replace this file (the old one is kept as .bak)."""
+    code, info = call("GET", "/api/swarm/version", timeout=10)
+    if code != 200:
+        sys.exit("  The hospital cannot say which client is current (it may be an older server).")
+    if info.get("up_to_date"):
+        return print(f"  Already current ({REV}).")
+    code, data = call("GET", "/client", timeout=30, raw=True)
+    if code != 200 or hashlib.sha256(data).hexdigest()[:12] != info["current"]:
+        sys.exit("  The download does not match the hospital's current client: not installing it.")
+    try:
+        compile(data.decode(), "sysmedic-hospital", "exec")
+    except (SyntaxError, ValueError) as e:
+        sys.exit(f"  The download does not compile ({e}): not installing it.")
+    me = Path(__file__).resolve()
+    tmp = me.with_name(me.name + ".new")
+    try:
+        tmp.write_bytes(data)
+        os.chmod(tmp, me.stat().st_mode & 0o777)
+        me.with_name(me.name + ".bak").write_bytes(me.read_bytes())
+        os.replace(tmp, me)
+    except OSError as e:
+        sys.exit(f"  Cannot replace {me}: {e}. Ask the engineer to re-run install-swarm.")
+    print(f"  Updated {REV} -> {info['current']}. Restart anything that uses it (OpenCode reads it at start).")
+
+
 def cmd_ask(a):
     cmd_send(a)
     cmd_read(["--wait", "180"])
@@ -363,6 +413,8 @@ def main():
     fn = globals().get("cmd_" + sys.argv[1])
     if not fn:
         sys.exit(__doc__)
+    if sys.argv[1] in ("mcp", "swarm", "send", "read", "ask"):
+        version_check()                                   # a quick check at launch
     fn(sys.argv[2:])
 
 
