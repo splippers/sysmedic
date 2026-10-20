@@ -15,6 +15,7 @@ anything on a rescue computer.
 - Engineer, on Alt+F2: `sysmedic-hospital pair` and paste the code (kept in the vault; memory only if the vault is locked).
 - `sysmedic-hospital ask "question"` (or `send` then `read --wait 120`). The AI assistant may use `status`, `send`, `read` and `ask`; only the engineer can pair.
 - A machine without the program yet can fetch it: `GET /client` on the server (the pairing output prints the one-liner and the expected sha256).
+- **Update (or first install) the client with one line:** `curl -fsSk https://192.168.1.2:8470/install | sh`. It replaces only the client file (old one kept as `.bak-update`), checks the hash, and leaves pairing, token and opencode.json alone. A machine with no client gets one installed and is told to `join PIN`.
 
 ## Safety
 - Messages are cleaned by `sysmedic-redact` before sending, and again by the server, which refuses text containing an email, MAC, public IP, user-folder name, BitLocker recovery key or private key.

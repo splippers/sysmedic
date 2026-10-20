@@ -469,6 +469,41 @@ def mcp(name, req):
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}}
 
 
+
+INSTALL_SH = r"""#!/bin/sh
+# SysMedic hospital client: update it, or install it if missing. Safe to run again. Changes only the client program:
+# never your pairing, token, or opencode.json.
+URL=@URL@
+WANT=@REV@
+t=$(mktemp) || exit 1
+curl -fsSk "$URL/client" -o "$t" || { echo "download failed"; rm -f "$t"; exit 1; }
+got=$(sha256sum "$t" | cut -c1-12)
+[ "$got" = "$WANT" ] || { echo "wrong file (got $got, want $WANT); nothing changed"; rm -f "$t"; exit 1; }
+W=$(command -v sysmedic-hospital)
+T=
+if [ -n "$W" ]; then
+  if grep -q 'client\.py' "$W" 2>/dev/null; then
+    T=$(sed -n 's/.*python3 *"\{0,1\}\([^" ]*client\.py\).*/\1/p' "$W" | head -1 | sed "s|\$HOME|$HOME|")
+  else
+    T=$(readlink -f "$W")
+  fi
+fi
+[ -n "$T" ] && [ -f "$T" ] || T=$HOME/.local/share/sysmedic-hospital/client.py
+if [ -f "$T" ]; then
+  cp "$T" "$T.bak-update"
+else
+  mkdir -p "$(dirname "$T")" "$HOME/.local/bin" "$HOME/.config/sysmedic-hospital"
+  printf '%s\n' '#!/bin/sh' 'export SYSMEDIC_HOSPITAL_DIR="${SYSMEDIC_HOSPITAL_DIR:-$HOME/.config/sysmedic-hospital}"' \
+    'export SYSMEDIC_HOSPITAL_NAME="${SYSMEDIC_HOSPITAL_NAME:-$(hostname -s | tr a-z A-Z)}"' \
+    'exec python3 "$HOME/.local/share/sysmedic-hospital/client.py" "$@"' > "$HOME/.local/bin/sysmedic-hospital"
+  chmod 755 "$HOME/.local/bin/sysmedic-hospital"
+  echo "first install: ask the engineer for a PIN, then run: sysmedic-hospital join PIN"
+fi
+cat "$t" > "$T" && chmod 755 "$T"; rm -f "$t"
+echo "client file: $T  revision: $(sha256sum "$T" | cut -c1-12)"
+"""
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "sysmedic-hospital"
 
@@ -500,6 +535,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path == "/health":
             return self.send(200, {"ok": True})
+        if u.path == "/install":                      # `curl -fsSk https://HOST:PORT/install | sh`: update (or first-install) the client
+            return self.send(200, INSTALL_SH.replace("@URL@", "https://" + (self.headers.get("Host") or "")).replace("@REV@", client_rev()).encode(), "text/x-shellscript")
         if u.path == "/client":                       # the rescue-side program, for machines not yet deployed with it (no secrets in it)
             return self.send(200, CLIENT.read_bytes(), "text/x-python")
         name = self.auth()
