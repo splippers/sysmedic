@@ -45,7 +45,7 @@ def wired_with_link():
 
 
 def capture(iface, seconds, path):
-    p = subprocess.Popen(["tcpdump", "-i", iface, "-nn", "-s", "0", "-U", "-w", path, FILTER], stderr=subprocess.DEVNULL)
+    p = subprocess.Popen(["tcpdump", "-i", iface, "-Q", "in", "-nn", "-s", "0", "-U", "-w", path, FILTER], stderr=subprocess.DEVNULL)
     t0 = time.time()
     try:
         while time.time() - t0 < seconds and p.poll() is None:
