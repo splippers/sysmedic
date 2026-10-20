@@ -130,6 +130,16 @@ class T(unittest.TestCase):
     def test_duplicate_ip(self):
         self.assertTrue(any("192.168.10.77" in t and "duplicate" in t for _, t in D.findings(self.net)))
 
+    def test_lldp_telemetry_tlv(self):
+        import json
+        t = json.dumps({"h": "BOX", "d": 93, "m": 20, "t": 88}).encode()
+        b = tlv(1, b"\x04" + M(SW)) + tlv(2, b"\x05eth0") + tlv(3, struct.pack(">H", 120)) + tlv(127, b"SM1\x01" + t) + b"\x00\x00"
+        n = D.analyse(pcap([eth("01:80:c2:00:00:0e", SW, 0x88CC, b)]))
+        self.assertEqual(n.links[0]["telemetry"]["h"], "BOX")
+        msgs = " ".join(m for _, m in D.findings(n))
+        self.assertIn("disk 93% full", msgs)
+        self.assertIn("88 °C", msgs)
+
     def test_empty_capture(self):
         n = D.analyse(pcap([]))
         self.assertTrue(any("Nothing was heard" in t for _, t in D.findings(n)))

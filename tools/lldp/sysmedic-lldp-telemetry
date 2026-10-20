@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""sysmedic-lldp-telemetry — make this machine announce its health on the wire, through lldpd.
+
+Every run refreshes two things lldpd sends to its neighbours (the switch, and sysmedic-discover on a rescue computer):
+  * the LLDP system description: one readable line any LLDP viewer or switch page can show;
+  * a custom TLV (OUI 53:4d:31 "SM1", subtype 1) holding the same facts as compact JSON, which sysmedic-discover reads.
+LLDP is link-local (never routed) but anything on the same switch or Wi-Fi segment can read it. It carries: hostname,
+OS, uptime, load, memory/disk/temperature, the names of listening services, container count, management addresses.
+No users, no secrets.
+
+  sysmedic-lldp-telemetry            collect and apply (root)         --print   show what it would send, change nothing
+"""
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+OUI = "53,4d,31"
+MAXTLV = 480
+
+
+def sh(cmd, timeout=6):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def os_name():
+    try:
+        d = dict(l.rstrip().split("=", 1) for l in open("/etc/os-release") if "=" in l)
+        return d.get("PRETTY_NAME", "").strip('"')
+    except OSError:
+        return ""
+
+
+def memory_pct():
+    m = {}
+    for l in open("/proc/meminfo"):
+        k, v = l.split(":")
+        m[k] = int(v.split()[0])
+    return round(100 * (1 - m["MemAvailable"] / m["MemTotal"]))
+
+
+def temp_max():
+    best = 0
+    for p in __import__("glob").glob("/sys/class/thermal/thermal_zone*/temp") + __import__("glob").glob("/sys/class/hwmon/hwmon*/temp*_input"):
+        try:
+            best = max(best, int(open(p).read()) // 1000)
+        except (OSError, ValueError):
+            pass
+    return best
+
+
+def services():
+    names = []
+    for l in sh(["ss", "-Hltnp"]).splitlines():
+        m = re.search(r'users:\(\("([^"]+)"', l)
+        port = re.search(r":(\d+)\s", l.split()[3] + " ") if len(l.split()) > 3 else None
+        if m and port and not re.search(r"127\.|\[::1\]", l.split()[3]):
+            n = {"sshd": "ssh", "smbd": "smb", "docker-proxy": "docker", "systemd-resolve": "dns"}.get(m.group(1), m.group(1))
+            names.append(f"{n}:{port.group(1)}")
+    seen = []
+    for n in names:
+        if n not in seen:
+            seen.append(n)
+    return seen[:10]
+
+
+def uptime_s():
+    return int(float(open("/proc/uptime").read().split()[0]))
+
+
+def human_up(s):
+    d, h = s // 86400, s % 86400 // 3600
+    return f"{d}d{h}h" if d else f"{h}h{s % 3600 // 60}m"
+
+
+def sm_version():
+    for p in ("/etc/sysmedic/version", "/opt/sysmedic-hospital/VERSION"):
+        try:
+            return open(p).read().strip()
+        except OSError:
+            pass
+    return ""
+
+
+def collect():
+    du = shutil.disk_usage("/")
+    t = {"h": socket.gethostname(), "os": os_name(), "k": os.uname().release, "up": uptime_s(),
+         "l": round(os.getloadavg()[0], 2), "cpu": os.cpu_count(), "m": memory_pct(), "d": round(100 * du.used / du.total),
+         "t": temp_max(), "sv": services(), "ts": int(time.time())}
+    if shutil.which("docker"):
+        t["ct"] = len([x for x in sh(["docker", "ps", "-q"]).split() if x])
+    v = sm_version()
+    if v:
+        t["sm"] = v
+    return {k: v for k, v in t.items() if v not in ("", None, 0) or k in ("m", "d", "l")}
+
+
+def description(t):
+    bits = [t["h"], t.get("os", ""), f"up {human_up(t['up'])}", f"load {t['l']}", f"mem {t['m']}%", f"disk {t['d']}%"]
+    if t.get("t"):
+        bits.append(f"{t['t']}°C")
+    if t.get("ct") is not None:
+        bits.append(f"{t['ct']} containers")
+    if t.get("sv"):
+        bits.append("svc " + ",".join(t["sv"][:6]))
+    if t.get("sm"):
+        bits.append("SM " + t["sm"])
+    return " · ".join(b for b in bits if b)[:250]
+
+
+def tlv_json(t):
+    s = json.dumps(t, separators=(",", ":"))
+    while len(s) > MAXTLV and t.get("sv"):             # shed the long list first, then the rest stays whole
+        t["sv"] = t["sv"][:-1]
+        s = json.dumps(t, separators=(",", ":"))
+    return s
+
+
+def apply(t):
+    d = description(t)
+    r1 = subprocess.run(["lldpcli", "configure", "system", "description", d], capture_output=True, text=True)
+    hexs = ",".join(f"{b:02x}" for b in tlv_json(t).encode())
+    sh(["lldpcli", "configure", "lldp", "custom-tlv", "clear"])
+    r2 = subprocess.run(["lldpcli", "configure", "lldp", "custom-tlv", "add", "oui", OUI, "subtype", "1", "oui-info", hexs],
+                        capture_output=True, text=True)
+    return r1.returncode == 0 and r2.returncode == 0, (r1.stderr + r2.stderr).strip()
+
+
+def main(a):
+    if "-h" in a or "--help" in a:
+        print(__doc__)
+        return 0
+    t = collect()
+    if "--print" in a:
+        print(description(t))
+        print(tlv_json(dict(t)))
+        return 0
+    if os.geteuid() != 0:
+        print("Run as root.")
+        return 1
+    ok, err = apply(t)
+    if not ok:
+        print("lldpd refused the update:", err)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

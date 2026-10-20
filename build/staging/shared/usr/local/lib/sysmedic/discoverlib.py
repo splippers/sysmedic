@@ -4,6 +4,7 @@ Reads a pcap and understands: LLDP and CDP (which switch and port, VLAN, power, 
 DHCP (who hands out addresses), ARP, mDNS / SSDP / NetBIOS announcements, IPv6 router advertisements.
 Pure Python, no third-party modules, so it also runs on a pcap taken somewhere else.
 """
+import json
 import re
 import socket
 import struct
@@ -101,6 +102,11 @@ def parse_lldp(p):
             elif oui == b"\x00\x80\xc2" and sub == 3 and len(val) >= 3:
                 vid, nl = struct.unpack(">H", val[:2])[0], val[2]
                 d["vlans"][vid] = val[3:3 + nl].decode("utf-8", "replace")
+            elif oui == b"SM1" and sub == 1:
+                try:
+                    d["telemetry"] = json.loads(val.decode("utf-8", "replace"))
+                except ValueError:
+                    pass
             elif oui == b"\x00\x12\x0f" and sub == 1 and len(val) >= 5:
                 d["autoneg"] = bool(val[0] & 1)
             elif oui == b"\x00\x12\x0f" and sub == 2 and len(val) >= 3:
@@ -412,6 +418,15 @@ def findings(net):
             out.append(("warn", f"The switch ({l.get('name', l['src'])}) reports HALF duplex on this port: slow and error-prone. Check the cable and speed settings."))
         if l.get("autoneg") is False:
             out.append(("info", "The switch port has auto-negotiation switched off."))
+    for l in net.links:
+        t = l.get("telemetry") or {}
+        who = t.get("h") or l.get("name") or l["src"]
+        if t.get("d", 0) >= 90:
+            out.append(("warn", f"{who} reports its disk {t['d']}% full."))
+        if t.get("m", 0) >= 90:
+            out.append(("warn", f"{who} reports memory {t['m']}% used."))
+        if t.get("t", 0) >= 85:
+            out.append(("warn", f"{who} reports {t['t']} °C: check cooling."))
     if not net.links and net.frames:
         out.append(("info", "No switch announced itself (LLDP/CDP). Many unmanaged and home switches don't."))
     if not net.frames:

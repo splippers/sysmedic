@@ -89,9 +89,17 @@ def render(net, iface):
             row.append(", ".join(l["caps"]))
         if row:
             w("        " + " · ".join(row))
-        d = l.get("descr") or l.get("platform")
-        if d:
-            w(f"        {DIM}{d}{N}")
+        t = l.get("telemetry")
+        if t:
+            up = t.get("up", 0)
+            w(f"        {G}telemetry{N}  {t.get('h', '')}  up {up // 86400}d{up % 86400 // 3600}h · load {t.get('l', '?')} · mem {t.get('m', '?')}% · "
+              f"disk {t.get('d', '?')}%" + (f" · {t['t']}°C" if t.get("t") else "") + (f" · {t['ct']} containers" if t.get("ct") is not None else ""))
+            if t.get("sv"):
+                w(f"        {DIM}services: {', '.join(t['sv'])}{N}")
+        else:
+            d = l.get("descr") or l.get("platform")
+            if d:
+                w(f"        {DIM}{d}{N}")
     if net.vlan_tags:
         w(f"    VLAN tags seen on the wire: {', '.join(str(v) for v in sorted(net.vlan_tags))}")
     if net.stp:
