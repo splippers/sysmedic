@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""install-albatross-snmp [--allow NET] [--no-ufw] [USER@]HOST...
+
+Give one of the engineer's own computers the fleet's SNMP telemetry (the "Albatross" layout Eddie and Marvin run):
+snmpd answering a read-only community from the LAN only, with the same load/disk/process checks and `extend` metrics.
+
+The community is generated ON the target (openssl rand) and kept in /etc/snmp/.read-community (root, 0600). It is never
+printed or copied through this script. Read it on the host (sudo cat /etc/snmp/.read-community) to point a poller at it.
+An existing /etc/snmp/snmpd.conf is saved once as snmpd.conf.pre-albatross. With ufw active, UDP 161 is opened to NET only.
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+METRICS = HERE / "albatross-metrics.sh"
+CONF_TAIL = r'''
+sysLocation Splippers-Fleet
+sysContact jon@splippers.com
+load 15 10 5
+includeAllDisks 10%
+proc sshd 2 50
+proc snmpd 1 10
+proc cron 1 10
+proc docker 1 1
+proc containerd 1 10
+proc ollama 1 1
+proc nginx 1 10
+extend albatross-metrics /etc/snmp/scripts/albatross-metrics.sh
+extend docker-running /bin/sh -c 'docker ps -q 2>/dev/null | wc -l || echo 0'
+extend docker-all /bin/sh -c 'docker ps -aq 2>/dev/null | wc -l || echo 0'
+extend ollama-up /bin/sh -c 'curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && echo 1 || echo 0'
+extend tcp-connections /bin/sh -c 'ss -tH state established | wc -l'
+extend zombie-procs /bin/sh -c 'ps aux | awk "/[Zz]/{c++} END{print c+0}"'
+extend open-fds /bin/sh -c 'awk "{print \$1}" /proc/sys/fs/file-nr'
+'''
+REMOTE = r'''
+set -e
+S="sudo -n"
+NET="$1"; UFW="$2"
+command -v snmpd >/dev/null || $S env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq snmpd >/dev/null 2>&1
+command -v snmpd >/dev/null || { echo "snmpd could not be installed"; exit 3; }
+$S mkdir -p /etc/snmp/scripts
+$S install -m 0755 /tmp/albatross-metrics.sh.$$ /etc/snmp/scripts/albatross-metrics.sh
+[ -f /etc/snmp/snmpd.conf ] && ! [ -f /etc/snmp/snmpd.conf.pre-albatross ] && $S cp /etc/snmp/snmpd.conf /etc/snmp/snmpd.conf.pre-albatross
+if ! $S test -s /etc/snmp/.read-community; then
+  $S sh -c 'umask 077; openssl rand -hex 12 > /etc/snmp/.read-community'
+fi
+$S sh -c "umask 077; { printf 'rocommunity %s %s\nrocommunity %s 127.0.0.1\nagentAddress udp:161\nsysName %s\n' \"\$(cat /etc/snmp/.read-community)\" '$NET' \"\$(cat /etc/snmp/.read-community)\" \"\$(hostname)\"; cat /tmp/snmpd.conf.tail.$$; } > /etc/snmp/snmpd.conf"
+rm -f /tmp/albatross-metrics.sh.$$ /tmp/snmpd.conf.tail.$$
+$S systemctl enable --now snmpd >/dev/null 2>&1; $S systemctl restart snmpd; sleep 2
+if [ "$UFW" = 1 ] && $S ufw status 2>/dev/null | grep -q "Status: active"; then
+  $S ufw allow from "$NET" to any port 161 proto udp comment 'ALBATROSS SNMP' >/dev/null && echo "ufw: 161/udp open to $NET"
+fi
+ok=$($S sh -c 'snmpget -v2c -c "$(cat /etc/snmp/.read-community)" -Ovq 127.0.0.1 sysName.0 2>&1' | head -1)
+echo "$(hostname): snmpd $(systemctl is-active snmpd); listening on $(ss -lun | grep -c ':161 ') socket(s); local query sysName=$ok"
+'''
+
+
+def run(host, net, ufw):
+    ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host]
+    tag = str(abs(hash(host)) % 100000)
+    for name, body in (("albatross-metrics.sh", METRICS.read_text()), ("snmpd.conf.tail", CONF_TAIL)):
+        r = subprocess.run(ssh + [f"cat > /tmp/{name}.{tag}"], input=body, text=True, capture_output=True)
+        if r.returncode:
+            print(f"{host}: copy failed: {r.stderr.strip()[:200]}")
+            return 1
+    r = subprocess.run(ssh + [f"bash -s -- '{net}' {1 if ufw else 0}"], input=REMOTE.replace("$$", tag), text=True, capture_output=True)
+    print(f"{host}: " + "; ".join(x for x in r.stdout.strip().splitlines() if x) + (f" [{r.stderr.strip()[:200]}]" if r.returncode else ""))
+    return r.returncode
+
+
+def main():
+    a = sys.argv[1:]
+    net = a[a.index("--allow") + 1] if "--allow" in a else "192.168.1.0/24"
+    hosts = [x for i, x in enumerate(a) if not x.startswith("-") and (i == 0 or a[i - 1] != "--allow")]
+    if not hosts:
+        print(__doc__)
+        return 2
+    return max(run(h, net, "--no-ufw" not in a) for h in hosts)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
