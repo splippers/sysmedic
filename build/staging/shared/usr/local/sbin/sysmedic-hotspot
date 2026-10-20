@@ -205,6 +205,9 @@ def guide_cmd(want, only):
                 else "hotspot" if r["own_ap"] else "free")
         print(f"    {r['phy']}  {r['driver']:<14} {'USB' if r['bus'] == 'usb' else r['bus']:<4} "
               f"{'can host' if r['ap'] else 'cannot host':<11} {role}")
+    import wifiguide
+    for line in wifiguide.panel(rs):
+        print(line)
     print(f"\n  {B}1. Choose the radio{N}")
     if p["ok"]:
         print(f"     It would use {B}{p['label']}{N} on {p['band']} GHz, channel {p['channel']}"

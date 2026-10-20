@@ -16,6 +16,10 @@ The boot scan reports drivers that couldn't load their firmware, e.g. *"The iwlw
 
 Public resolvers (1.1.1.1, 9.9.9.9) are queried alongside the site's DNS, so lookups work even when the site's DNS is broken. The scan reports **"Internet is reachable but DNS is failing"** as a site fault.
 
+### Two Wi-Fi radios: which one does what
+
+Use a **USB Wi-Fi dongle for the internet** and the computer's **own (PCIe/built-in) Wi-Fi for the phone hotspot**, both on **2.4 GHz**. The boot Wi-Fi screen and `wifi` say so for the radios found; `wifi` sets the built-in radio aside while you pick, so the network list is the dongle's. A dual-band router often has a separate 2.4 GHz name. The hotspot defaults to 2.4 GHz; ask for 5 GHz with `sysmedic-hotspot on --band 5`.
+
 ### The clock
 
 A machine whose hardware clock is wrong (a flat CMOS battery, a BIOS never set) starts SysMedic with the wrong time too, and then every secure connection fails: the cloud AI, apt ("Release file is not valid yet") and malware signatures all see certificates as "not yet valid" or expired. It looks like a network fault, but it isn't.

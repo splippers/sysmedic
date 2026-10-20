@@ -2,7 +2,8 @@
 
 A radio (phy) can often be a client and an access point at the same moment, but then both must share one channel;
 a second radio (a USB dongle) is free to choose. The plan prefers a radio that isn't carrying the internet link,
-on 5 GHz (faster, quieter) when the regulatory rules allow an access point there, else 2.4 GHz.
+on 2.4 GHz (the setup that works in the field: a USB dongle for the internet, the built-in radio for the hotspot, both on
+2.4 GHz). 5 GHz is only used when asked for (--band 5).
 """
 import os
 import re
@@ -102,12 +103,12 @@ def plan(want="auto", only=None):
             why.append(f"{label}: can't act as an access point")
             continue
         free = r["client"] is None
-        for band in (["5", "2.4"] if want == "auto" else [want]):
+        for band in (["2.4", "5"] if want == "auto" else [want]):
             if free:
                 ch = pick_channel(r, band)
                 if ch:
                     options.append({"phy": r["phy"], "band": band, "channel": ch, "shared": False,
-                                    "score": (2 if r["bus"] == "usb" else 1) + (10 if band == "5" else 5) + 20, "label": label})
+                                    "score": (1 if r["bus"] == "usb" else 2) + (5 if band == "5" else 10) + 20, "label": label})
                 else:
                     why.append(f"{label}: no channel on {band} GHz where the regulatory rules allow an access point"
                                + (" (set the country: sysmedic-hotspot setup)" if band == "5" else ""))
@@ -128,11 +129,11 @@ def plan(want="auto", only=None):
                                    "isn't allowed here (regulatory rules)")
                         continue
                     options.append({"phy": r["phy"], "band": cband, "channel": cl["channel"], "shared": True,
-                                    "score": (10 if cband == "5" else 5), "label": label})
+                                    "score": (5 if cband == "5" else 10), "label": label})
                 else:
                     ch = pick_channel(r, band)
                     if ch:
-                        options.append({"phy": r["phy"], "band": band, "channel": ch, "shared": False, "score": 10 + (10 if band == "5" else 5),
+                        options.append({"phy": r["phy"], "band": band, "channel": ch, "shared": False, "score": 10 + (5 if band == "5" else 10),
                                         "label": label})
     options.sort(key=lambda o: -o["score"])
     if not options:

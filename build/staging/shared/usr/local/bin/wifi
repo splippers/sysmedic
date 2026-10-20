@@ -1,6 +1,12 @@
 #!/bin/bash
 # SysMedic Wi-Fi: NetworkManager's on-screen network picker (arrow keys, Enter, Esc to leave).
 nmcli radio wifi on >/dev/null 2>&1
+guide=$(python3 -c 'import sys; sys.path.insert(0, "/usr/local/lib/sysmedic"); import wifiguide; wifiguide.show()' 2>/dev/null)
+if [ -n "$guide" ] && [ -t 0 ]; then
+    echo ""; echo "$guide"; echo ""
+    read -r -p "  Press Enter to choose a network… " _
+    [ -z "${SYSMEDIC_AI:-}" ] && python3 /usr/local/lib/sysmedic/wifiguide.py --reserve 2>/dev/null
+fi
 nmtui connect "$@"
 echo ""
 nmcli -f DEVICE,TYPE,STATE,CONNECTION device | grep -E 'DEVICE|wifi|ethernet'

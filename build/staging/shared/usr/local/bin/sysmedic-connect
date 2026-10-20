@@ -51,6 +51,7 @@ nmcli radio wifi on >/dev/null 2>&1
 echo "  No internet yet. Connecting gives you the ${BOLD}cloud AI${NC}, current malware signatures,"
 echo "  and the phone dashboard. Everything else works offline."
 echo ""
+python3 -c 'import sys; sys.path.insert(0, "/usr/local/lib/sysmedic"); import wifiguide; wifiguide.show()' 2>/dev/null && echo ""
 echo "  ${BOLD}Wi-Fi networks nearby${NC}"
 list=$(nmcli -f SSID,SIGNAL,SECURITY device wifi list --rescan yes 2>/dev/null | head -9)
 if [ "$(echo "$list" | wc -l)" -gt 1 ]; then
