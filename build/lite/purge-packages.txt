@@ -1,0 +1,14 @@
+# SysMedic Stick Lite: packages removed from the stick root to make a 4 GB-stick image (apt-get purge --autoremove).
+# GPU/3D test and media tools (these pull LLVM, Mesa and the Vulkan/VA drivers, ~500 MB uncompressed)
+glmark2-es2-drm glmark2-es2-wayland mesa-utils vulkan-tools mesa-vulkan-drivers vkmark kmscube
+intel-gpu-tools radeontop nvtop vainfo intel-media-va-driver mesa-va-drivers
+# A desktop the stick never starts
+sway foot seatd plymouth-themes
+# Packet-capture GUI and its big libraries (tcpdump, ngrep, iftop... stay)
+tshark termshark
+# Heavy CPU/memory test suites and kernel tools (stress-ng, memtester, sysbench and fio stay)
+linux-tools-generic-hwe-24.04 linux-hwe-7.0-tools-7.0.0-38 s-tui stressapptest tinymembench lmbench bonnie++ pcm
+# snap is not used on the stick
+snapd
+# Cloud SDKs that came in with cloud-init
+python3-boto3 python3-botocore python3-s3transfer

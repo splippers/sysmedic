@@ -4,6 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 I=$PWD/iso
+ROOT_DIR=${ROOT_DIR:-root}             # the live root to pack (Stick Lite packs a trimmed copy)
+ISO_OUT=${ISO_OUT:-sysmedic-v2.iso}
 # ./iso is the base image, loop-mounted read-only; mount it if it isn't (e.g. after a reboot)
 BASE=$( [ -f sysmedic-v1-hybrid.iso ] && echo sysmedic-v1-hybrid.iso || ls downloads/ubuntu-24.04*-live-server-amd64.iso 2>/dev/null | tail -1 )
 if [ ! -f "$I/boot/grub/i386-pc/eltorito.img" ]; then
@@ -20,7 +22,7 @@ EXCL="boot.catalog md5sum.txt pool dists casper/initrd.new casper/ubuntu-server-
 # The stock ISO's installer layers (and their manifests): without them casper boots SysMedic, not the installer
 EXCL="$EXCL $(cd "$I" && { ls -d casper/*installer* casper/hwe-* 2>/dev/null || true; } | tr '\n' ' ')"
 
-sudo mksquashfs root newiso-ubuntu-server-minimal.squashfs -comp zstd -b 1M -noappend -quiet
+sudo mksquashfs "$ROOT_DIR" newiso-ubuntu-server-minimal.squashfs -comp zstd -b 1M -noappend -quiet
 # casper stacks the stock ubuntu-server layer ON TOP of ./root. Our root already contains everything in it,
 # and its stale copies hid ours (e.g. /etc/group without netdev, so wpa_supplicant never started), so it
 # ships empty.
@@ -28,7 +30,7 @@ mkdir -p empty-layer && rm -f empty-layer.squashfs
 mksquashfs empty-layer empty-layer.squashfs -noappend -quiet >/dev/null
 
 build() {
-    xorriso -as mkisofs -r -V SYSMEDIC_2404 -o sysmedic-v2.iso \
+    xorriso -as mkisofs -r -V SYSMEDIC_2404 -o "$ISO_OUT" \
       --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img -partition_offset 16 --mbr-force-bootable \
       -append_partition 2 28732ac11ff8d211ba4b00a0c93ec93b "$EFI_IMG" -appended_part_as_gpt \
       -iso_mbr_part_type a2a0d0ebe5b9334487c068b6b72699c7 \
@@ -40,7 +42,7 @@ build() {
       /casper/ubuntu-server-minimal.ubuntu-server.squashfs="$PWD/empty-layer.squashfs" \
       /casper/vmlinuz="$PWD/kernel/vmlinuz" /casper/initrd="$PWD/kernel/initrd" \
       /boot/grub/grub.cfg="$PWD/staging/iso/boot/grub/grub.cfg" \
-      /boot/memtest86+x64.bin="$PWD/root/boot/memtest86+x64.bin" /boot/memtest86+x64.efi="$PWD/root/boot/memtest86+x64.efi" > xorriso.log 2>&1 || true
+      /boot/memtest86+x64.bin="$PWD/$ROOT_DIR/boot/memtest86+x64.bin" /boot/memtest86+x64.efi="$PWD/$ROOT_DIR/boot/memtest86+x64.efi" > xorriso.log 2>&1 || true
     # Fail loudly: a failed xorriso used to leave the previous ISO in place, unnoticed
     grep -q 'produced' xorriso.log || { grep -E 'FAILURE|SORRY|aborting' xorriso.log >&2; echo "ERROR: ISO build failed (xorriso.log)" >&2; exit 1; }
     grep -E 'produced' xorriso.log
@@ -50,11 +52,11 @@ build() {
 touch md5sum.txt
 build
 mkdir -p v2mnt
-sudo mount -o loop,ro sysmedic-v2.iso v2mnt
+sudo mount -o loop,ro "$ISO_OUT" v2mnt
 (cd v2mnt && find . -type f ! -name md5sum.txt ! -name boot.catalog -print0 | sort -z | xargs -0 md5sum) > md5sum.txt
 sudo umount v2mnt
 build
-sudo mount -o loop,ro sysmedic-v2.iso v2mnt
+sudo mount -o loop,ro "$ISO_OUT" v2mnt
 (cd v2mnt && md5sum -c --quiet md5sum.txt) && echo "md5 all OK"
 sudo umount v2mnt
-ls -lh sysmedic-v2.iso
+ls -lh "$ISO_OUT"

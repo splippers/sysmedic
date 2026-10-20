@@ -6,7 +6,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 TARGET=$1
-ISO=sysmedic-v2.iso
+ISO=${ISO:-sysmedic-v2.iso}
+LITE=${LITE:-0}                    # Stick Lite: cloud AI only, so no Ollama runtime or models on the persistence partition
 # Ollama runtime and models: from the kit if bootstrap.sh fetched them, else this PC's own Ollama install
 OLLAMA_SRC_MODELS=$( [ -d ollama-models/manifests ] && echo "$PWD/ollama-models" || echo /usr/share/ollama/.ollama/models )
 OLLAMA_BIN=$( [ -x downloads/ollama/bin/ollama ] && echo downloads/ollama/bin/ollama || echo /usr/local/bin/ollama )
@@ -14,10 +15,11 @@ OLLAMA_LIB=$( [ -d downloads/ollama/lib/ollama ] && echo downloads/ollama/lib/ol
 # The stick always runs the 3B model (sysmedic-ask's pick_model), so the 7B (4.7 GB) only goes on drives with room to spare:
 # an 8 GB stick gets the 3B alone and keeps about 3 GB for the vault. Override with SYSMEDIC_MODELS="...".
 tsize=$( [ -b "$TARGET" ] && sudo blockdev --getsize64 "$TARGET" || stat -c %s "$TARGET" )
-if [ -n "${SYSMEDIC_MODELS:-}" ]; then MODELS=$SYSMEDIC_MODELS
+if [ "$LITE" = 1 ]; then MODELS=""
+elif [ -n "${SYSMEDIC_MODELS:-}" ]; then MODELS=$SYSMEDIC_MODELS
 elif [ "$tsize" -lt 14000000000 ]; then MODELS="qwen2.5:3b"
 else MODELS="qwen2.5:3b qwen2.5:7b"; fi
-echo "Models on this drive: $MODELS ($((tsize / 1000000000)) GB drive)"
+echo "Models on this drive: ${MODELS:-none (Lite: cloud AI only)} ($((tsize / 1000000000)) GB drive)"
 
 sudo dd if="$ISO" of="$TARGET" bs=4M conv=fsync,notrunc status=none
 sync
@@ -44,10 +46,13 @@ sudo mkfs.ext4 -q -F -L FOG_AMB_PERSIST -m 0 "$PART"
 mkdir -p pmnt
 sudo mount "$PART" pmnt
 P=pmnt
-sudo mkdir -p $P/{logs,backups,sessions} $P/ollama/{bin,lib/ollama} $P/ollama/models/blobs
+sudo mkdir -p $P/{logs,backups,sessions}
+if [ "$LITE" != 1 ]; then
+sudo mkdir -p $P/ollama/{bin,lib/ollama} $P/ollama/models/blobs
 sudo cp "$OLLAMA_BIN" $P/ollama/bin/
 sudo cp -a "$OLLAMA_LIB"/libggml-*.so* $P/ollama/lib/ollama/   # CPU backends
 [ -d "$OLLAMA_LIB/vulkan" ] && sudo cp -a "$OLLAMA_LIB/vulkan" $P/ollama/lib/ollama/   # discrete GPUs (sysmedic-ai-device decides)
+fi
 
 for m in $MODELS; do
     name=${m%:*} tag=${m#*:}
@@ -70,14 +75,14 @@ SysMedic persistence partition (label FOG_AMB_PERSIST)
 logs/      SysMedic and Ollama logs
 backups/   data rescued from machines being repaired
 sessions/  repair session records saved with menu option 3 (sync-back)
-ollama/    offline AI: Ollama runtime (CPU) + the qwen2.5 model(s) listed in ollama/models
+ollama/    offline AI: Ollama runtime (CPU) + the qwen2.5 model(s) listed in ollama/models (not on Stick Lite)
 clamav/    ClamAV virus signatures (updated automatically when online)
 private/   serial numbers from scans — kept away from the AI
 
 SysMedic only mounts this partition when it is on the same USB stick it booted from.
 EOF
 sync
-sudo du -sh $P/ollama
+[ "$LITE" = 1 ] || sudo du -sh $P/ollama
 df -h $P | tail -1
 sudo umount pmnt
 [ -n "$LOOP" ] && sudo losetup -d "$LOOP"

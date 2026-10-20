@@ -70,7 +70,7 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     clear
     setvtrgb /etc/sysmedic/vtrgb 2>/dev/null; clear   # SysMedic Night palette (also set at boot by setvtrgb.service)
     python3 /usr/local/lib/sysmedic/logo.py --animate --tagline "${_U_B:-}RESCUE SYSTEM${_U_N:-}" \
-        --tagline "${_U_D:-}$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev)${_U_N:-}" \
+        --tagline "${_U_D:-}$(cat /etc/sysmedic/edition 2>/dev/null || echo dev)$([ -e /etc/sysmedic/lite ] && echo ' lite') edition · v$(cat /etc/sysmedic/version 2>/dev/null || echo dev)${_U_N:-}" \
         --tagline "${_U_ACC:-}network: $(/usr/local/bin/sysmedic-connect --status)${_U_N:-}" 2>/dev/null \
         || ui_banner "Rescue system" "$(cat /etc/sysmedic/edition 2>/dev/null || echo dev) edition"
     ui_rule
@@ -103,6 +103,11 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
         fi
     fi
 
+    if [ "$mode" = offline ] && [ -e /etc/sysmedic/lite ]; then
+        ui_warn "SysMedic Lite has no offline assistant" "connect to the internet (menu 13: Wi-Fi) for the cloud AI, or work from the rescue menu"
+        sleep 4
+        exec /usr/local/bin/ambulance
+    fi
     if [ "$mode" = offline ] && [ "$mem_gb" -lt 6 ]; then
         ui_warn "The offline assistant needs 6 GB RAM; this machine has ${mem_gb} GB" "opening the rescue menu"
         sleep 4

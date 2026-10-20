@@ -312,6 +312,8 @@ gpu() {
     if command -v glmark2-es2-drm >/dev/null; then
         glmark2-es2-drm 2>&1 | grep -E 'GL_RENDERER|Score|\[|FPS' | tail -12 | sed 's/^/  /'
         record "glmark2: $(glmark2-es2-drm --off-screen 2>/dev/null | awk '/Score/ {print $NF}' | tail -1)"
+    elif [ -e /etc/sysmedic/lite ]; then
+        echo "  The 3D benchmark isn't on SysMedic Lite (it keeps a 4 GB stick small); the full stick and the caddy have it."
     fi
     echo "  Live GPU load: intel_gpu_top (Intel), radeontop (AMD), nvtop (NVIDIA/all)"
 }

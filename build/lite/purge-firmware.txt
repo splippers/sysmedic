@@ -1,0 +1,9 @@
+# SysMedic Stick Lite: firmware packages removed with `dpkg --purge --force-depends` (the linux-firmware metapackage names them).
+# Switch/NIC ASIC and SoC firmware that no laptop or desktop rescue job needs. Wi-Fi, Bluetooth, Intel/AMD graphics, Realtek,
+# Broadcom, MediaTek and storage firmware all stay.
+linux-firmware-mellanox-spectrum
+linux-firmware-marvell-prestera
+linux-firmware-netronome
+linux-firmware-qualcomm-misc
+linux-firmware-qualcomm-graphics
+linux-firmware-nvidia-graphics

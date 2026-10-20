@@ -4,6 +4,8 @@
 #   ./sysmedic-deploy --caddy [/dev/sdX]   update the plugged-in caddy SSD in place
 #   ./sysmedic-deploy --stick-image        rebuild the stick image only (sysmedic-v2.iso, stick-test.img)
 #   ./sysmedic-deploy --stick [/dev/sdX]   rebuild and write the stick; its sessions are backed up and restored
+#   ./sysmedic-deploy --stick-lite-image   rebuild the Stick Lite image (sysmedic-lite.iso: cloud AI only, fits a 4 GB stick)
+#   ./sysmedic-deploy --stick-lite [/dev/sdX]  rebuild and write a Stick Lite (its sessions are backed up and restored)
 #   ./sysmedic-deploy --version            print the version the shared core would get
 #   ./sysmedic-deploy --release [--publish] build + sign the caddy update bundle (release/); --publish uploads it
 #                                          to the public releases repo (RELEASE_REPO), where caddies find it
@@ -19,6 +21,11 @@ export PYTHONDONTWRITEBYTECODE=1    # running staging's Python must not leave __
 KIT=$PWD
 ST=$KIT/staging
 STICK_ROOT=$KIT/root
+LITE_ROOT=$KIT/root-lite     # a trimmed copy of STICK_ROOT, rebuilt for every Stick Lite image
+LITE=${LITE:-0}
+ISO=sysmedic-v2.iso
+TESTIMG=stick-test.img
+[ "$LITE" = 1 ] && { ISO=sysmedic-lite.iso; TESTIMG=stick-lite-test.img; }
 WORK=$(mktemp -d /tmp/sysmedic-deploy.XXXX)
 trap 'cleanup' EXIT
 
@@ -454,6 +461,31 @@ PY
 
 # ── Stick ──────────────────────────────────────────────────────────────────
 
+# make_lite_root: STICK_ROOT (already up to date) → LITE_ROOT, minus what a 4 GB stick can't carry. The full root is never changed.
+make_lite_root() {
+    local f
+    say "Stick Lite: copying the stick root and removing what a 4 GB stick can't carry"
+    for d in dev proc sys; do ! mountpoint -q "$STICK_ROOT/$d" || die "$STICK_ROOT/$d is mounted: unmount it first"; done
+    sudo mkdir -p "$LITE_ROOT"
+    sudo rsync -aHAXx --delete --info=stats0 "$STICK_ROOT/" "$LITE_ROOT/"
+    local pk fw
+    pk=$(sed 's/#.*//' "$KIT/lite/purge-packages.txt" | tr -s ' \t\n' ' ')
+    fw=$(sed 's/#.*//' "$KIT/lite/purge-firmware.txt" | tr -s ' \t\n' ' ')
+    chroot_run "$LITE_ROOT" bash -c "export DEBIAN_FRONTEND=noninteractive
+        present=''; for p in $pk; do dpkg-query -W -f='\${Status}' \$p 2>/dev/null | grep -q 'ok installed' && present=\"\$present \$p\"; done
+        [ -z \"\$present\" ] || apt-get purge -y -q --autoremove \$present 2>&1 | grep -E '^E:|^Removing' | tail -3
+        for p in $fw; do dpkg-query -W -f='\${Status}' \$p 2>/dev/null | grep -q 'ok installed' && dpkg --purge --force-depends \$p 2>&1 | tail -1; done
+        apt-get clean; rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*-old /var/lib/dpkg/*-old /tmp/* /var/tmp/*
+        find /usr -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null
+        find /usr/share/doc -type f ! -name copyright -delete 2>/dev/null; rm -rf /usr/share/info/* /usr/share/lintian 2>/dev/null
+        find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' ! -name 'locale.alias' -exec rm -rf {} + 2>/dev/null
+        true" || die "Stick Lite: removing packages failed"
+    echo lite | sudo tee "$LITE_ROOT/etc/sysmedic/lite" >/dev/null
+    # the deployed Lite must still be a working SysMedic: the same smoke test as the full stick
+    smoke_test "$LITE_ROOT"
+    say "Stick Lite root: $(sudo du -xsm "$LITE_ROOT" | cut -f1) MB (full stick root: $(sudo du -xsm "$STICK_ROOT" | cut -f1) MB)"
+}
+
 build_stick_image() {
     local kv
     install_tree "$STICK_ROOT" stick
@@ -470,11 +502,21 @@ build_stick_image() {
     for d in dev proc sys; do      # never pack the build PC's /dev, /proc or /sys into the image
         ! mountpoint -q "$STICK_ROOT/$d" || die "$STICK_ROOT/$d is still mounted: unmount it before building the ISO"
     done
-    say "Building the stick ISO"
-    ./build-iso.sh | tail -2
-    rm -f stick-test.img; truncate -s "$(sudo blockdev --getsize64 "${STICK_DEV:-/dev/null}" 2>/dev/null || echo 15376318464)" stick-test.img
-    ./make-stick.sh stick-test.img | tail -1
-    say "Stick image ready: sysmedic-v2.iso, stick-test.img (test with QEMU before writing)"
+    local pack=$STICK_ROOT
+    if [ "$LITE" = 1 ]; then
+        make_lite_root
+        pack=$LITE_ROOT
+        for d in dev proc sys; do ! mountpoint -q "$LITE_ROOT/$d" || die "$LITE_ROOT/$d is still mounted"; done
+    fi
+    say "Building the $( [ "$LITE" = 1 ] && echo "Lite " )stick ISO"
+    ROOT_DIR=$(basename "$pack") ISO_OUT=$ISO ./build-iso.sh | tail -2
+    if [ "$LITE" = 1 ]; then
+        local isosz; isosz=$(stat -c %s "$ISO")
+        [ "$isosz" -lt 1500000000 ] || die "Stick Lite ISO is $((isosz / 1000000)) MB: too big for a 4 GB stick with room for persistence (trim build/lite/purge-*.txt)"
+    fi
+    rm -f "$TESTIMG"; truncate -s "$(sudo blockdev --getsize64 "${STICK_DEV:-/dev/null}" 2>/dev/null || { [ "$LITE" = 1 ] && echo 3699999744 || echo 15376318464; })" "$TESTIMG"
+    ISO=$ISO LITE=$LITE ./make-stick.sh "$TESTIMG" | tail -1
+    say "Stick image ready: $ISO, $TESTIMG (test with QEMU before writing)"
 }
 
 find_stick() {   # a USB disk with the SysMedic ISO and a persistence partition
@@ -511,15 +553,15 @@ deploy_stick() {
         fi
     fi
     say "Writing the stick (about 15–20 minutes on a USB 2.0 stick)"
-    ./make-stick.sh "$dev" | tail -1
+    ISO=$ISO LITE=$LITE ./make-stick.sh "$dev" | tail -1
     say "Verifying the written image against the tested one"
-    local size pstart; size=$(stat -c %s sysmedic-v2.iso)
+    local size pstart; size=$(stat -c %s "$ISO")
     # Stop where the persistence partition starts: it can overlap the ISO's last sectors (xorriso's spare
     # partition table, dead once make-stick moves the GPT to the end of the disk), and it's freshly made each time.
     pstart=$(( $(cat "/sys/class/block/$(lsblk -lno NAME,PARTN "$dev" | awk '$2==4{print $1}')/start" 2>/dev/null || echo 0) * 512 ))
     [ "$pstart" -gt 1536 ] && [ "$pstart" -lt "$size" ] && size=$pstart
     # sectors 0-2 hold the partition tables, which get a fresh GUID for the persistence partition
-    if ! sudo cmp -s -n $((size - 1536)) -i 1536 "$dev" stick-test.img; then die "Verification failed: the stick doesn't match the tested image"; fi
+    if ! sudo cmp -s -n $((size - 1536)) -i 1536 "$dev" "$TESTIMG"; then die "Verification failed: the stick doesn't match the tested image"; fi
     say "Verified."
     if [ -n "$persist" ] && [ -s "$tarball" ]; then
         persist=$(lsblk -lpno NAME,LABEL "$dev" | awk '$2=="FOG_AMB_PERSIST"{print $1; exit}')
@@ -529,15 +571,17 @@ deploy_stick() {
         sync; sudo umount "$WORK/persist"; MOUNTS=("${MOUNTS[@]/$WORK\/persist}")
         say "Restored the stick's sessions."
     fi
-    say "Stick updated: SysMedic stick edition v$DEPLOYED_VERSION. Safe to unplug."
+    say "Stick updated: SysMedic stick edition$( [ "$LITE" = 1 ] && echo " (Lite)") v$DEPLOYED_VERSION. Safe to unplug."
 }
 
 case "${1:-}" in
     --caddy)       deploy_caddy "${2:-}" ;;
     --stick-image) build_stick_image ;;
     --stick)       deploy_stick "${2:-}" ;;
+    --stick-lite-image) LITE=1; ISO=sysmedic-lite.iso; TESTIMG=stick-lite-test.img; build_stick_image ;;
+    --stick-lite)  LITE=1; ISO=sysmedic-lite.iso; TESTIMG=stick-lite-test.img; deploy_stick "${2:-}" ;;
     --version)     version ;;
     --self)        deploy_self ;;
     --release)     build_release "${2:-}" ;;
-    *)             sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *)             sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

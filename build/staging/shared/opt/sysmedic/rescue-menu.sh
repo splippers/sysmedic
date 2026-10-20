@@ -36,7 +36,10 @@ while true; do
             ;;
         o|O)
             clear
-            if curl -sf --max-time 3 http://127.0.0.1:11434/api/version >/dev/null || /usr/local/sbin/start-ollama >/dev/null 2>&1; then
+            if [ -e /etc/sysmedic/lite ]; then
+                ui_warn "SysMedic Lite has no offline assistant" "it carries the cloud AI only: connect to the internet (option 13) and use option 5"
+                read -p "  Press Enter..."
+            elif curl -sf --max-time 3 http://127.0.0.1:11434/api/version >/dev/null || /usr/local/sbin/start-ollama >/dev/null 2>&1; then
                 tmux -f /etc/sysmedic/tmux.conf new-session -A -s ai-offline "/usr/local/bin/sysmedic-ai-session offline"
             else
                 ui_warn "The offline AI isn't running and didn't start" "repair it with option 6, or check: sysmedic-ai-repair --check"

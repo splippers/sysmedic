@@ -802,6 +802,8 @@ def window(messages):
 
 @timed_main("sysmedic-ask")
 def main():
+    if os.path.exists("/etc/sysmedic/lite"):
+        sys.exit("SysMedic Lite has no offline assistant (it keeps a 4 GB stick small). Connect to the internet and use the cloud AI: menu option 5.")
     args = sys.argv[1:]
     if args[:1] == ["--is-read-only"]:          # used by the remote-AI gate (etc/sysmedic/audit.sh)
         cmd = " ".join(args[1:])
