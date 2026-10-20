@@ -157,7 +157,7 @@ def cmd_reply(a):
 
 
 def cmd_swarm(a):
-    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | channels | board [SINCE] [-t CHANNEL] | say [-t CHANNEL] TEXT | survey [-t CHANNEL] Q OPT1 OPT2.. | survey results|close|reopen [ID|all] | extend NAME [N] [-t CHANNEL] | close|reopen-channel CHANNEL | agents
+    """swarm open TITLE [-f BRIEF_FILE | BRIEF...] | channels | board [SINCE] [-t CHANNEL] | say [-t CHANNEL] TEXT | survey [-t CHANNEL] Q OPT1 OPT2.. | survey results|close|reopen [ID|all] | extend NAME [N|unlimited] [-t CHANNEL] | close|reopen-channel CHANNEL | agents
     Every channel stays readable to every client; -t picks one (default: the newest open channel)."""
     sub = a[0] if a else ""
 
@@ -261,6 +261,11 @@ def cmd_swarm(a):
             sys.exit("usage: hospital swarm extend NAME [MORE_POSTS=6] [-t CHANNEL]   (one channel; default the newest open)")
         f = DIR / "swarm-extra.json"
         extra = json.loads(f.read_text()) if f.exists() else {}
+        if a[2:] == ["unlimited"]:
+            extra.setdefault(a[1], {})["*"] = "unlimited"
+            f.write_text(json.dumps(extra))
+            os.chmod(f, 0o600)
+            return print(f"{a[1]} may now post without a limit in every channel (the 6 a minute rate limit still applies)")
         tid = str(tid or S.swarm_topic()["id"])
         extra.setdefault(a[1], {})[tid] = extra.get(a[1], {}).get(tid, 0) + (int(a[2]) if len(a) > 2 else 6)
         f.write_text(json.dumps(extra))

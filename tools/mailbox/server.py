@@ -252,6 +252,8 @@ def post_cap(name, topic_id=None):
         extra = json.loads((DIR / "swarm-extra.json").read_text())
     except (OSError, ValueError):
         extra = {}
+    if (extra.get(name) or {}).get("*") == "unlimited":     # `hospital swarm extend NAME unlimited`
+        return 10 ** 9
     t = get_topic(topic_id) if topic_id else swarm_topic()
     return POSTS_PER_AGENT + int((extra.get(name) or {}).get(str(t["id"]) if t else "", 0))
 

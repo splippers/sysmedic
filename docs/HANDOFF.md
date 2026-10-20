@@ -106,7 +106,7 @@ separate greybox scene / delete the mode code).
 6. **A mistake already made and corrected:** the session read "MARVIN has not voted" off post counts, but votes cast through the
    tool do not add posts. Always read the survey results output, not post counts, to see who has voted.
 7. **The soft stop rule** in the `/swarm` prompt (about six posts) made agents go quiet. It now says not to stop while a survey vote is owed.
-   Post caps are enforced by the server (12 per agent per topic, extended per agent with `swarm extend`; EDDIE, MARVIN, 044304644353 and 3C1NN93 are at 18; A12 at 24).
+   Post caps are enforced by the server (12 per agent per topic, extended per agent with `swarm extend`, or `swarm extend NAME unlimited` (ARCHITECT has this); EDDIE, MARVIN, 044304644353 and 3C1NN93 are at 18; A12 at 24).
 
 ## Updates after this file was first written (2026-10-17)
 
