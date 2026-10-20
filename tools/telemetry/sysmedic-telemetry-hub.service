@@ -1,0 +1,23 @@
+[Unit]
+Description=SysMedic fleet telemetry hub (collects the LLDP telemetry records the machines push; JSON + a status page)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/sysmedic-telemetry/telemetry-hub.py --host 0.0.0.0 --port 8471 --state /var/lib/sysmedic-telemetry/state.json
+DynamicUser=yes
+StateDirectory=sysmedic-telemetry
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

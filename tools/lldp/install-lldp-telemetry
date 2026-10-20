@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""install-lldp-telemetry [-p PORT] [--remove] [--dry-run] [USER@]HOST...
+"""install-lldp-telemetry [-p PORT] [--hub http://HOST:PORT|off] [--remove] [--dry-run] [USER@]HOST...
 
 Put the LLDP telemetry broadcaster on one of the engineer's own computers (needs SSH and passwordless sudo there):
   * lldpd is installed with apt if it is missing (an existing lldpd and its configuration are left as they are);
   * /usr/local/sbin/sysmedic-lldp-telemetry plus a systemd service and a 30-second timer refresh what lldpd announces;
+  * --hub URL also makes every refresh push the record to a telemetry hub (tools/telemetry); --hub off stops that;
   * --remove stops and deletes the timer, service and script (lldpd itself stays).
 Nothing else on the host is touched. Host keys are checked as usual: a changed key stops the install for that host.
 """
+import re
 import subprocess
 import sys
 import zlib
@@ -40,6 +42,7 @@ S="sudo -n"
 if [ "$REMOVE" = 1 ]; then
   $S systemctl disable --now sysmedic-lldp-telemetry.timer 2>/dev/null || true
   $S rm -f /etc/systemd/system/sysmedic-lldp-telemetry.service /etc/systemd/system/sysmedic-lldp-telemetry.timer /usr/local/sbin/sysmedic-lldp-telemetry
+  $S rm -f /etc/sysmedic/telemetry-hub
   $S systemctl daemon-reload
   $S lldpcli configure lldp custom-tlv clear 2>/dev/null || true
   echo removed; exit 0
@@ -52,12 +55,15 @@ $S install -m 0644 /tmp/sysmedic-lldp-telemetry.timer.$$ /etc/systemd/system/sys
 rm -f /tmp/sysmedic-lldp-telemetry*.$$
 $S systemctl daemon-reload
 $S systemctl enable --now sysmedic-lldp-telemetry.timer >/dev/null
+if [ -n "$HUB" ]; then
+  if [ "$HUB" = off ]; then $S rm -f /etc/sysmedic/telemetry-hub; else $S mkdir -p /etc/sysmedic; echo "$HUB" | $S tee /etc/sysmedic/telemetry-hub >/dev/null; fi
+fi
 $S /usr/local/sbin/sysmedic-lldp-telemetry
 echo "installed; announcing: $(/usr/local/sbin/sysmedic-lldp-telemetry --print | head -1)"
 '''
 
 
-def run(host, port, remove, dry):
+def run(host, port, remove, dry, hub=""):
     ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8"] + (["-p", port] if port else []) + [host]
     scp = ["scp", "-q", "-o", "BatchMode=yes"] + (["-P", port] if port else [])
     if dry:
@@ -72,7 +78,7 @@ def run(host, port, remove, dry):
             if r.returncode:
                 print(f"{host}: could not copy files: {r.stderr.strip()[:200]}")
                 return 1
-    r = subprocess.run(ssh + [f"REMOVE={1 if remove else 0} bash -s"], input=REMOTE.replace("$$", tag), text=True, capture_output=True)
+    r = subprocess.run(ssh + [f"REMOVE={1 if remove else 0} HUB='{hub}' bash -s"], input=REMOTE.replace("$$", tag), text=True, capture_output=True)
     print(f"{host}: {(r.stdout.strip().splitlines() or [''])[-1] or r.stderr.strip()[:300]}")
     return r.returncode
 
@@ -80,11 +86,15 @@ def run(host, port, remove, dry):
 def main():
     a = sys.argv[1:]
     port = a[a.index("-p") + 1] if "-p" in a else ""
-    hosts = [x for i, x in enumerate(a) if not x.startswith("-") and (i == 0 or a[i - 1] != "-p")]
+    hub = a[a.index("--hub") + 1] if "--hub" in a else ""
+    if hub and hub != "off" and not re.fullmatch(r"http://[A-Za-z0-9.\-]+(:[0-9]{1,5})?", hub):
+        print("--hub wants http://HOST[:PORT] (or off)")
+        return 2
+    hosts = [x for i, x in enumerate(a) if not x.startswith("-") and (i == 0 or a[i - 1] not in ("-p", "--hub"))]
     if not hosts or "-h" in a:
         print(__doc__)
         return 2
-    return max(run(h, port, "--remove" in a, "--dry-run" in a) for h in hosts)
+    return max(run(h, port, "--remove" in a, "--dry-run" in a, hub) for h in hosts)
 
 
 if __name__ == "__main__":
