@@ -482,9 +482,7 @@ def setup(here=False):
     print(f"\n  {B}Recovery key{N} {D}(write it down now and keep it away from the drive; it is shown only once):{N}\n")
     print(f"      {B}{rkey}{N}\n")
     print(f"  {D}It opens the vault if the passphrase is forgotten: sysmedic-vault unlock accepts it in place of the passphrase.{N}")
-    last = rkey.split("-")[-1]
-    while input(f"\n  {CY}❯{N} To confirm you've written it down, type its last 6 digits: ").strip() != last:
-        print(f"  {Y}▲{N} That's not it. The key again: {B}{rkey}{N}")
+    input(f"\n  {CY}❯{N} Press Enter when you've noted it down: ")      # a pause so the key isn't cleared away, not a check
     os.system("clear")
     print(f"\n  {G}✔{N} Done. Customer data on this drive is now encrypted.\n")
     time.sleep(2)
