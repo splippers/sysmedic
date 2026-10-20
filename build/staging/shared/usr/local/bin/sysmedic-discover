@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""sysmedic-discover — what is this network, and what am I plugged into? Listens only; sends nothing.
+
+  sysmedic-discover [IFACE] [--seconds N]   listen on a wired port (default: the one with a link, 65 s: LLDP/CDP repeat every 30-60 s)
+  sysmedic-discover --pcap FILE             analyse a capture made elsewhere (tcpdump -w FILE)
+  --json                                    machine-readable result      --save   keep a copy in the job's session folder
+
+It answers: which switch and port, which VLAN, how fast, is power supplied; who runs DHCP; the spanning-tree root;
+and a list of the devices that announced themselves (ARP, DHCP, mDNS/Bonjour, UPnP, NetBIOS, IPv6 routers).
+Nothing is transmitted and nothing is scanned: safe on a customer's network. Needs root (a packet capture).
+"""
+import json
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+import discoverlib as D  # noqa: E402
+
+B, DIM, G, Y, R, C, N = "\033[1m", "\033[2m", "\033[0;32m", "\033[1;33m", "\033[0;31m", "\033[0;36m", "\033[0m"
+FILTER = ("ether proto 0x88cc or ether dst 01:00:0c:cc:cc:cc or ether dst 01:80:c2:00:00:00 or arp or udp port 67 or udp port 68 "
+          "or udp port 5353 or udp port 1900 or udp port 137 or udp port 5355 or (icmp6 and ip6[40] == 134)")
+
+
+def wired_with_link():
+    out = []
+    try:
+        names = sorted(os.listdir("/sys/class/net"))
+    except OSError:
+        return out
+    for n in names:
+        base = f"/sys/class/net/{n}"
+        if n == "lo" or os.path.exists(base + "/wireless") or os.path.exists(base + "/phy80211") or n.startswith(("sm-", "docker", "veth", "br-", "virbr")):
+            continue
+        try:
+            if open(base + "/carrier").read().strip() == "1":
+                out.append(n)
+        except OSError:
+            pass
+    return out
+
+
+def capture(iface, seconds, path):
+    p = subprocess.Popen(["tcpdump", "-i", iface, "-nn", "-s", "0", "-U", "-w", path, FILTER], stderr=subprocess.DEVNULL)
+    t0 = time.time()
+    try:
+        while time.time() - t0 < seconds and p.poll() is None:
+            left = int(seconds - (time.time() - t0))
+            print(f"\r  {DIM}Listening on {iface}… {left:>3}s left (Ctrl-C to stop early){N}", end="", flush=True)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        p.send_signal(signal.SIGINT)
+        try:
+            p.wait(5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    print("\r" + " " * 70 + "\r", end="")
+    return p.returncode
+
+
+def render(net, iface):
+    s = []
+    w = s.append
+    w(f"\n  {B}Network discovery{N}  {DIM}(listened {int((net.t1 or 0) - (net.t0 or 0))}s on {iface or 'a capture file'}, {net.frames} frames, nothing sent){N}")
+    w(f"\n  {B}Which switch and port am I on?{N}")
+    if not net.links:
+        w(f"    {Y}No switch announced itself.{N} Unmanaged and home switches don't send LLDP/CDP. Try again for 65 s, or look at the cable.")
+    for l in net.links:
+        w(f"    {G}{l['proto']}{N}  switch {B}{l.get('name') or l.get('chassis') or l['src']}{N}   port {B}{l.get('port') or '?'}{N}"
+          + (f"  ({l['port_desc']})" if l.get("port_desc") and l.get("port_desc") != l.get("port") else ""))
+        row = []
+        if l.get("pvid") and l["pvid"] not in l.get("vlans", {}):
+            row.append(f"VLAN {l['pvid']}")
+        for vid, nm in sorted(l.get("vlans", {}).items()):
+            row.append(f"VLAN {vid}" + (f" \"{nm}\"" if nm else "") + (" (this port)" if vid == l.get("pvid") else ""))
+        if l.get("duplex"):
+            row.append(f"{l['duplex']} duplex")
+        if l.get("poe"):
+            row.append("PoE: " + l["poe"])
+        if l.get("mgmt"):
+            row.append(f"manage at {l['mgmt']}")
+        if l.get("caps"):
+            row.append(", ".join(l["caps"]))
+        if row:
+            w("        " + " · ".join(row))
+        d = l.get("descr") or l.get("platform")
+        if d:
+            w(f"        {DIM}{d}{N}")
+    if net.vlan_tags:
+        w(f"    VLAN tags seen on the wire: {', '.join(str(v) for v in sorted(net.vlan_tags))}")
+    if net.stp:
+        roots = sorted({v['root'] for v in net.stp.values()})
+        w(f"\n  {B}Spanning tree{N}   root bridge {', '.join(roots)}   ({len(net.stp)} bridge(s) announcing)")
+    w(f"\n  {B}Who hands out addresses (DHCP){N}")
+    if not net.dhcp_servers:
+        w(f"    {DIM}No DHCP answers heard. They only appear when a device asks; plug in again or wait for one to renew.{N}")
+    for ip, sv in net.dhcp_servers.items():
+        w(f"    {B}{ip}{N}  ({sv['mac']}{' · ' + D.vendor(sv['mac']) if D.vendor(sv['mac']) else ''})  gateway {', '.join(sv['router']) or '-'}"
+          f"  DNS {', '.join(sv['dns']) or '-'}  mask {sv['mask'] or '-'}" + (f"  domain {sv['domain']}" if sv['domain'] else ""))
+    if net.ra:
+        w(f"\n  {B}IPv6 routers{N}   " + ", ".join(f"{v['ip']} ({k})" for k, v in net.ra.items()))
+    hs = [(m, h) for m, h in net.hosts.items()]
+    w(f"\n  {B}Devices that announced themselves{N}   ({len(hs)})")
+    for m, h in sorted(hs, key=lambda kv: (sorted(kv[1]["ips"]) or ["~"])):
+        name = ", ".join(sorted(h["names"])[:2])
+        w(f"    {', '.join(sorted(h['ips'])) or '-':<16} {m}  {(h['vendor'] or '')[:24]:<24} {name[:26]:<26} {DIM}{'/'.join(sorted(h['seen']))}{N}")
+        sv = sorted(h["services"])
+        if sv:
+            w(f"        {DIM}{', '.join(sv)[:100]}{N}")
+    fs = D.findings(net)
+    w(f"\n  {B}Worth a look{N}")
+    if not fs:
+        w(f"    {G}Nothing unusual heard.{N}")
+    for kind, t in fs:
+        w(f"    {Y if kind == 'warn' else C}{'!' if kind == 'warn' else 'i'}{N} {t}")
+    w("")
+    return "\n".join(s)
+
+
+def main(a):
+    if any(x in a for x in ("-h", "--help")):
+        print(__doc__)
+        return 0
+    seconds = int(a[a.index("--seconds") + 1]) if "--seconds" in a else 65
+    pcap = a[a.index("--pcap") + 1] if "--pcap" in a else None
+    skip = {a[a.index(o) + 1] for o in ("--seconds", "--pcap") if o in a}
+    pos = [x for x in a if not x.startswith("--") and x not in skip]
+    iface = None
+    if not pcap:
+        if os.geteuid() != 0:
+            print("Run as root (it listens on the network port).")
+            return 1
+        iface = pos[0] if pos else None
+        if not iface:
+            up = wired_with_link()
+            if not up:
+                print(f"  {Y}No wired port has a link.{N} Plug in a cable, or name an interface: sysmedic-discover wlp3s0")
+                return 1
+            iface = up[0]
+            if len(up) > 1:
+                print(f"  {DIM}Several wired ports have a link ({', '.join(up)}); using {iface}. Name another to choose it.{N}")
+        pcap = tempfile.mktemp(prefix="sm-discover-", suffix=".pcap")
+        capture(iface, seconds, pcap)
+        keep = pcap
+    else:
+        keep = None
+    try:
+        net = D.analyse(pcap)
+    except (OSError, ValueError) as e:
+        print(f"  Couldn't read the capture: {e}")
+        return 1
+    finally:
+        if keep and os.path.exists(keep) and "--keep-pcap" not in a:
+            os.unlink(keep)
+    if "--json" in a:
+        print(json.dumps(D.summary(net), indent=1))
+    else:
+        txt = render(net, iface)
+        print(txt)
+    if "--save" in a or (not pcap_arg(a) and os.environ.get("SYSMEDIC_DISCOVER_SAVE") != "0"):
+        try:
+            import session
+            when = time.strftime("%Y%m%d-%H%M%S")
+            sd = session.session_dir()
+            (sd / f"discover-{when}.json").write_text(json.dumps(D.summary(net), indent=1))
+            session.audit("discover", f"passive network discovery on {iface or 'capture file'}: {len(net.links)} switch link(s), "
+                          f"{len(net.dhcp_servers)} DHCP server(s), {len(net.hosts)} device(s); nothing sent")
+            if "--json" not in a:
+                print(f"  {DIM}Saved to the session: discover-{when}.json{N}\n")
+        except Exception:
+            pass
+    return 0
+
+
+def pcap_arg(a):
+    return "--pcap" in a
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

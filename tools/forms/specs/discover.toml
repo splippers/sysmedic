@@ -1,0 +1,22 @@
+title = "What network is this?"
+summary = "Listens (sends nothing) to show which switch and port you are plugged into, the VLAN, who runs DHCP, and what announces itself."
+folder = "Network and Wi-Fi"
+icon = "network-workgroup"
+risk = "read"
+root = true
+command = ["sysmedic-discover", {if = "iface", args = ["{iface}"]}, "--seconds", "{seconds}"]
+
+[[field]]
+id = "iface"
+label = "Network port (leave empty to use the wired port that has a link)"
+type = "text"
+default = ""
+required = false
+
+[[field]]
+id = "seconds"
+label = "How long to listen, in seconds (switches announce every 30-60 s)"
+type = "number"
+default = 65
+min = 10
+max = 300

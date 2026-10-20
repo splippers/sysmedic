@@ -79,6 +79,7 @@ Details: [NETWORK](NETWORK.md)
 - **Capture:** tcpdump, tshark, termshark, ngrep, iftop, nload, bmon, nethogs, iptraf-ng.
 - **LAN and services:** nmap, ncat, arp-scan, nbtscan, avahi-utils, smbclient, cifs-utils, nfs-common, snmp, lldpd, ndisc6, ipcalc, sipcalc, lftp, tnftp, telnet, tftp-hpa, socat, netcat, bridge-utils, vlan, hostapd, dnsmasq-base.
 - **Serial and BMC:** minicom, picocom, ipmitool.
+- **Network discovery (`sysmedic-discover`, menu N), listen-only:** which switch port you are on (LLDP/CDP: switch, port, VLAN, duplex, PoE), spanning-tree root, DHCP servers (flags a second one), IPv6 routers, and devices that announce themselves (ARP, DHCP, mDNS, UPnP, NetBIOS). Sends nothing; safe on a customer's network.
 - **DNS fallback:** public resolvers are used alongside the site's DNS. A broken site DNS is reported as a finding.
 - Services that would announce on a customer network (lldpd, hostapd, avahi, rpcbind) stay off until started deliberately.
 
@@ -126,6 +127,7 @@ Details: [IMPROVING-SYSMEDIC](IMPROVING-SYSMEDIC.md)
 | `sysmedic-report` | Job report |
 | `sysmedic-note "…"` / `--job` / `--feedback` | Notes |
 | `sysmedic-dash` | Phone dashboard QR code |
+| `sysmedic-discover` | Listen-only network discovery (switch port, DHCP, devices) |
 | `sysmedic-transcript` | Bundle this visit for review |
 | `sysmedic-collect` **(caddy)** | Collect sessions from a SysMedic stick |
 | `sysmedic-help` | These docs, on the drive |

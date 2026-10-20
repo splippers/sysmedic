@@ -29,6 +29,7 @@ CARDS = [
     ("Other systems", [("11", "Fix Linux boot (GRUB/initramfs)"), ("12", "Fix macOS (HFS+/APFS)"),
                        ("L", "Linux RAID & LVM: start read-only")]),
     ("Connect & save", [("13", "Wi-Fi"), ("14", "Save extra logs to this session"),
+                        ("N", "Network discovery: which switch port, who is here (listens only)"),
                         ("H", "Private hotspot: " + ("ON" if os.path.exists("/run/sysmedic/hotspot/state.json") else "off")),
                         ("K", "Remote access code: " + ("set (kept in the vault)" if os.path.exists("/run/sysmedic/vault-fs/access-code") else "random each boot")),
                         ("V", "Encrypted vault: " + {"open": "open (this visit is saved)", "ram": "LOCKED: this visit is in memory only",
