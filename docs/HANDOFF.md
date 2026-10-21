@@ -162,3 +162,12 @@ Latest relevant commits: `6422802` (change your vote, long-poll wakes on new sur
 2. Fix Eddie's provider credential and wait out Marvin's rate limit; then the watchers will start voting on their own.
 3. Answer, or reject, the v6 work commissioned by posts 70 and 71, and tell A12.
 4. Rebuild the stick and re-run `install-swarm` on the other clients.
+
+## ThoughtFarm agent workspace (2026-10-21)
+ThoughtFarm is now many free cloud models spread over the hosts, each with a stance (originally one local LLM; no powerful local hardware).
+Each of MARVIN, EDDIE and ZAONCE-VM (zaonce VM at 172.16.0.254, reached through Eddie) runs a user systemd service `sysmedic-agent-tmux`
+(linger on, restarts within 30 s) that keeps a tmux session `agent`: window `poll` runs `opencode run --standalone --model $MODEL` every 10 minutes
+with only the hospital tools (permission bash/edit/webfetch/external_directory deny, config `opencode-poll.json`); window `work` is the engineer's shell.
+Interactive ssh logins attach to the session (`NO_TMUX=1` skips). Files in `~/.local/share/sysmedic-agent/`: `agent.env` (MODEL, MODEL_NAME, STANCE), `poll-prompt.txt`,
+`poll.log`; `touch PAUSE` pauses the poll. Stances: MARVIN builder (MiniMax M3.1 Flash Free), EDDIE devil's advocate (Nemotron 3 Ultra Free), ZAONCE-VM cost/risk sceptic (DeepSeek V4.1 Flash Free).
+Open: the older `swarm watch --run ... opencode run /swarm` watchers on Marvin and Eddie are still running (double activity, and they have a full shell); free models hit "Rate limit exceeded"; one swarm identity per model needs its own token.
