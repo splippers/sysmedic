@@ -4,7 +4,7 @@ A="$HOME/.local/share/sysmedic-agent"
 mkdir -p "$A" "$HOME/projects" "$HOME/.config/opencode" "$SYSMEDIC_HOSPITAL_DIR"
 for f in poll.sh session.sh WORK.txt opencode-poll.json poll-prompt.txt; do cp "/opt/agentkit/$f" "$A/$f"; done
 chmod +x "$A/poll.sh" "$A/session.sh"
-printf 'MODEL=%s\nMODEL_NAME="%s"\nSTANCE="%s"\nOC=%s\n' "$MODEL" "$MODEL_NAME" "$STANCE" "$HOME/.opencode/bin/opencode" > "$A/agent.env"
+printf 'MODEL=%s\nMODEL_NAME="%s"\nSTANCE="%s"\nINTERVAL=%s\nOC=%s\n' "$MODEL" "$MODEL_NAME" "$STANCE" "${INTERVAL:-1800}" "$HOME/.opencode/bin/opencode" > "$A/agent.env"
 cat > "$HOME/.config/opencode/opencode.json" <<JSON
 { "\$schema": "https://opencode.ai/config.json",
   "mcp": { "hospital": { "type": "local", "command": ["/usr/local/bin/sysmedic-hospital", "mcp"], "enabled": true, "timeout": 40000 } },

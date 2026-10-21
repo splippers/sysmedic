@@ -479,7 +479,7 @@ def agent_script(name, host):
     h = hosts.get(name) or hosts["_default"]
     files = "\n".join(f"cat > \"$A/{f}\" <<'SYSMEDIC_EOF'\n{(AGENTKIT / f).read_text().rstrip()}\nSYSMEDIC_EOF"
                       for f in ("poll.sh", "session.sh", "WORK.txt", "opencode-poll.json", "poll-prompt.txt", "sysmedic-agent-tmux.service", "bashrc-block"))
-    env = f"MODEL={h['model']}\nMODEL_NAME=\"{h['name']}\"\nSTANCE=\"{h['stance']}\""
+    env = f"MODEL={h['model']}\nMODEL_NAME=\"{h['name']}\"\nSTANCE=\"{h['stance']}\"\nINTERVAL=1800"
     return ((AGENTKIT / "install.sh.tpl").read_text().replace("@FILES@", files).replace("@ENV@", env)
             .replace("@NAME@", name).replace("@MODELNAME@", h["name"]).replace("@URL@", "https://" + host))
 
