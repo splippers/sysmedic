@@ -8,16 +8,16 @@ x-unit: &unit
   stdin_open: true
   extra_hosts: []
 services:
-  lave-flint:
+  lave-pickle:
     <<: *unit
-    container_name: farm-lave-flint
+    container_name: farm-lave-pickle
     environment:
-      UNIT_NAME: LAVE-FLINT
-      MODEL: opencode/flint-40b-free
-      MODEL_NAME: "Flint 40B Free"
+      UNIT_NAME: LAVE-PICKLE
+      MODEL: opencode/big-pickle
+      MODEL_NAME: "Big Pickle"
       STANCE: "SYNTHESIZER. You read the whole thread, state where the agents agree and exactly where they disagree, and name the one decision the engineer must make. You add a new idea only when a gap is obvious."
-    volumes: [ "lave-flint-data:/data", "lave-flint-home:/home/agent/.local/share/opencode", "./projects/lave-flint:/home/agent/projects" ]
-    secrets: [ { source: lave-flint-pair, target: pair } ]
+    volumes: [ "lave-pickle-data:/data", "lave-pickle-home:/home/agent/.local/share/opencode", "./projects/lave-pickle:/home/agent/projects" ]
+    secrets: [ { source: lave-pickle-pair, target: pair } ]
 secrets:
-  lave-flint-pair: { file: ./secrets/lave-flint.pair }
-volumes: { lave-flint-data: {}, lave-flint-home: {} }
+  lave-pickle-pair: { file: ./secrets/lave-pickle.pair }
+volumes: { lave-pickle-data: {}, lave-pickle-home: {} }
