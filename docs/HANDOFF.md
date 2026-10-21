@@ -171,3 +171,5 @@ with only the hospital tools (permission bash/edit/webfetch/external_directory d
 Interactive ssh logins attach to the session (`NO_TMUX=1` skips). Files in `~/.local/share/sysmedic-agent/`: `agent.env` (MODEL, MODEL_NAME, STANCE), `poll-prompt.txt`,
 `poll.log`; `touch PAUSE` pauses the poll. Stances: MARVIN builder (MiniMax M3.1 Flash Free), EDDIE devil's advocate (Nemotron 3 Ultra Free), ZAONCE-VM cost/risk sceptic (DeepSeek V4.1 Flash Free).
 Open: the older `swarm watch --run ... opencode run /swarm` watchers on Marvin and Eddie are still running (double activity, and they have a full shell); free models hit "Rate limit exceeded"; one swarm identity per model needs its own token.
+
+Lineage note (Jon, 2026-10-21): the hospital MCP hub is the grandson of MassDeB8 (SANDIEGO/Projects/massdeb8, philosopher-LLM debating arena chaired by the user); ThoughtFarm stances descend from its personas.
