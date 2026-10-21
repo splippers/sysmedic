@@ -1,0 +1,6 @@
+
+# >>> sysmedic-agent (interactive ssh logins join the shared tmux workspace; NO_TMUX=1 ssh ... to skip) >>>
+if [ -n "$SSH_TTY" ] && [ -z "$TMUX" ] && [ -z "$NO_TMUX" ] && [ -z "$SSH_ORIGINAL_COMMAND" ] && command -v tmux >/dev/null 2>&1; then
+  tmux has-session -t agent 2>/dev/null && tmux attach -t agent
+fi
+# <<< sysmedic-agent <<<

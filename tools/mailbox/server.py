@@ -470,6 +470,20 @@ def mcp(name, req):
 
 
 
+AGENTKIT = Path(__file__).resolve().parent.parent / "agentkit"
+
+
+def agent_script(name, host):
+    """The one-line installer for the ThoughtFarm agent workspace (tmux + 10-minute OpenCode poll), filled in for one swarm name."""
+    hosts = json.loads((AGENTKIT / "hosts.json").read_text())
+    h = hosts.get(name) or hosts["_default"]
+    files = "\n".join(f"cat > \"$A/{f}\" <<'SYSMEDIC_EOF'\n{(AGENTKIT / f).read_text().rstrip()}\nSYSMEDIC_EOF"
+                      for f in ("poll.sh", "session.sh", "WORK.txt", "opencode-poll.json", "poll-prompt.txt", "sysmedic-agent-tmux.service", "bashrc-block"))
+    env = f"MODEL={h['model']}\nMODEL_NAME=\"{h['name']}\"\nSTANCE=\"{h['stance']}\""
+    return ((AGENTKIT / "install.sh.tpl").read_text().replace("@FILES@", files).replace("@ENV@", env)
+            .replace("@NAME@", name).replace("@MODELNAME@", h["name"]).replace("@URL@", "https://" + host))
+
+
 INSTALL_SH = r"""#!/bin/sh
 # SysMedic hospital client: update it, or install it if missing. Safe to run again. Changes only the client program:
 # never your pairing, token, or opencode.json.
@@ -537,6 +551,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"ok": True})
         if u.path == "/install":                      # `curl -fsSk https://HOST:PORT/install | sh`: update (or first-install) the client
             return self.send(200, INSTALL_SH.replace("@URL@", "https://" + (self.headers.get("Host") or "")).replace("@REV@", client_rev()).encode(), "text/x-shellscript")
+        if u.path == "/agent":                        # `curl -fsSk https://HOST:PORT/agent?name=NAME | sh`
+            nm = (parse_qs(u.query).get("name") or [""])[0]
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,24}", nm):
+                return self.send(400, {"error": "use /agent?name=YOUR-SWARM-NAME"})
+            return self.send(200, agent_script(nm, self.headers.get("Host") or "").encode(), "text/x-shellscript")
         if u.path == "/client":                       # the rescue-side program, for machines not yet deployed with it (no secrets in it)
             return self.send(200, CLIENT.read_bytes(), "text/x-python")
         name = self.auth()

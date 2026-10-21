@@ -1,0 +1,4 @@
+This is the engineer's window. Ctrl-b then 1 shows the poller (window "poll"); Ctrl-b 0 returns here; Ctrl-b d leaves it running.
+Point the agent at a project:   cd ~/projects/NAME && opencode run "what you want done"      (or just: opencode  for the interactive screen)
+Pause / resume the 10-minute swarm poll:   touch ~/.local/share/sysmedic-agent/PAUSE   /   rm ~/.local/share/sysmedic-agent/PAUSE
+The poller round itself has no shell or file access: it can only read, vote and post on the hospital board.

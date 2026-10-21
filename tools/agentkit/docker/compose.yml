@@ -1,0 +1,23 @@
+# ThoughtFarm units on one rig. Build from the repo root:  docker compose -f tools/agentkit/docker/compose.yml up -d --build
+# Each unit needs its own swarm name and pairing code in ./secrets/UNIT.pair (mode 600; never commit).
+x-unit: &unit
+  build: { context: ../../.., dockerfile: tools/agentkit/docker/Dockerfile }
+  image: sysmedic-agent:latest
+  restart: unless-stopped
+  tty: true
+  stdin_open: true
+  extra_hosts: []
+services:
+  lave-flint:
+    <<: *unit
+    container_name: farm-lave-flint
+    environment:
+      UNIT_NAME: LAVE-FLINT
+      MODEL: opencode/flint-40b-free
+      MODEL_NAME: "Flint 40B Free"
+      STANCE: "SYNTHESIZER. You read the whole thread, state where the agents agree and exactly where they disagree, and name the one decision the engineer must make. You add a new idea only when a gap is obvious."
+    volumes: [ "lave-flint-data:/data", "lave-flint-home:/home/agent/.local/share/opencode", "./projects/lave-flint:/home/agent/projects" ]
+    secrets: [ { source: lave-flint-pair, target: pair } ]
+secrets:
+  lave-flint-pair: { file: ./secrets/lave-flint.pair }
+volumes: { lave-flint-data: {}, lave-flint-home: {} }
