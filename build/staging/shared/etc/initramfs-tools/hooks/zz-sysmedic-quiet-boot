@@ -1,0 +1,55 @@
+#!/bin/sh
+# SysMedic: quieten the live-boot (casper) stage of the stick.
+#
+# Ubuntu's casper scripts print a burst of messages that mean nothing on a SysMedic stick and that flash past
+# before the SysMedic screen: "can't open /dev/sr0: No medium found" for every empty optical drive,
+# "passwd: password changed", chown's "'.' should be ':'" warnings, and a failed apt-cdrom ("Unable to locate any
+# package files": SysMedic's ISO is not a Debian disc, and nothing installs from it). The fix is to quieten or skip
+# each of those; real failures (mount errors, a missing squashfs) still print. Each edit only applies if its target
+# text is found, so a different casper release is left alone rather than broken.
+#
+# (The "GPT PMBR size mismatch" lines came from casper looking for room to add a "writable" partition to the stick;
+# the grub entries now pass "nopersistent", so casper never touches the stick's partition table.)
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+
+S="${DESTDIR}/scripts"
+[ -d "$S" ] || exit 0
+
+# An empty optical drive: get_fstype reads the device with a shell redirect ("/init: line 38: can't open /dev/sr0:
+# No medium found"), and cdrom_id may complain too. The scripts only use the results/exit status, not the messages.
+[ -f "$S/casper-helpers" ] && sed -i 's#^\( *\)eval \$(fstype < \$1)$#\1{ eval $(fstype < $1); } 2>/dev/null#' "$S/casper-helpers"
+for f in "$S/casper" "$S/casper-premount/10driver_updates"; do
+    [ -f "$f" ] && sed -i 's#/lib/udev/cdrom_id \${devname} > /dev/null;#/lib/udev/cdrom_id ${devname} > /dev/null 2>\&1;#' "$f"
+done
+
+# "passwd: password changed." when the live user's password is cleared
+[ -f "$S/casper-bottom/25adduser" ] && sed -i 's#^\( *chroot /root passwd -d "\$USERNAME"\)$#\1 >/dev/null 2>\&1#' "$S/casper-bottom/25adduser"
+
+# chown's old user.group form is deprecated and warns on every boot: use user:group
+for f in "$S/casper-bottom/52gnome_initial_setup" "$S/casper-bottom/59disable_mozc_autosetup"; do
+    [ -f "$f" ] && sed -i 's#chown -R \$USERNAME\.\$USERNAME#chown -R $USERNAME:$USERNAME#' "$f"
+done
+
+# apt-cdrom: nothing is ever installed from the stick's ISO, so don't try to register it as an apt source
+if [ -f "$S/casper-bottom/41apt_cdrom" ]; then
+    cat > "$S/casper-bottom/41apt_cdrom" <<'STUB'
+#! /bin/sh
+# SysMedic: the stick's ISO is not an apt source, so there is nothing to add (see zz-sysmedic-quiet-boot).
+PREREQ=""
+prereqs()
+{
+       echo "$PREREQ"
+}
+case $1 in
+prereqs)
+       prereqs
+       exit 0
+       ;;
+esac
+exit 0
+STUB
+    chmod 755 "$S/casper-bottom/41apt_cdrom"
+fi
+exit 0

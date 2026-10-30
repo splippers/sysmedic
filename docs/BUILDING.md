@@ -69,7 +69,7 @@ qemu-system-x86_64 -enable-kvm -cpu host -m 8G -smp 4 -machine q35,smm=on \
   -device qemu-xhci -drive if=none,id=usb,format=raw,file=stick-test.img,snapshot=on \
   -device usb-storage,drive=usb,bootindex=0
 ```
-You should see the network screen, then the banner with the version and "Secure Boot on", the scan, and the assistant prompt. `-cpu host` matters: OpenCode needs AVX.
+Between GRUB and the SysMedic screen there should be no error text (earlier builds printed `can't open /dev/sr0`, `GPT PMBR size mismatch`, `apt-cdrom` errors: see the changelog). You should see the network screen, then the banner with the version and "Secure Boot on", the scan, and the assistant prompt. `-cpu host` matters: OpenCode needs AVX.
 
 **Write it:**
 ```bash
