@@ -30,6 +30,7 @@ Both editions share the same core: scan, safety layer, assistants, Windows toolk
 - **Windows toolkit** (`sysmedic-win`): version and state, blue-screen stop codes decoded, event-log analysis, autoruns with suspicious entries flagged, a ClamAV malware scan, **deep troubleshooting** (every event log, registry evidence, CBS/DISM/Windows Update logs, one-command check-up report), and **BitLocker unlock with the recovery key**, on the console or typed on a phone/laptop over a secure link. It can also roll back a stuck update, clear Fast Startup hibernation, and reset a local password.
 - **Hardware testing** (`sysmedic-hwtest`): health report, CPU/cooling stress, RAM (memtester, and MemTest86+ from the boot menu), disk self-tests and read-only speed/surface scans, GPU, keyboard/touchpad, audio, battery wear and inventory.
 - **Network toolkit:** ~60 tools, from ping/dig/mtr to tcpdump/tshark, iperf3, SMB/NFS, SNMP and Wi-Fi survey. Wi-Fi is offered on the first screen at boot (`nmtui`); passwords stay in RAM.
+- **Windows exchange partition + evidence collector:** a small exFAT partition (`SM_EXCHANGE`) is the only part of a SysMedic drive a running Windows machine can see; the rest is hidden, so Windows never offers to format it. A read-only collector on it gathers diagnostic evidence from the running Windows *when an engineer starts it and confirms the list*, encrypts it (age) to the drive's key, and SysMedic imports it later as raw evidence. Offline, no call-home. See **[docs/EXCHANGE.md](docs/EXCHANGE.md)**.
 - **Job reports:** a plain-English report per visit (found → fixed → still to do, work performed, backups, notes, sign-off), printable to PDF.
 - **Phone dashboard:** live findings, write-protection state, job notes and the report, on your phone via QR code. View and notes only; no repairs from the phone.
 - **Session transcripts:** every console and AI conversation is recorded and bundled into `claude-review.md` for improving SysMedic later.
@@ -62,6 +63,7 @@ Step by step: **[docs/FIELD-GUIDE.md](docs/FIELD-GUIDE.md)**. On the drive itsel
 | [NETWORK](docs/NETWORK.md) | Network toolkit, Wi-Fi, DNS fallback |
 | [AI-ASSISTANTS](docs/AI-ASSISTANTS.md) | Cloud and offline AI, approvals, models, limits |
 | [STICK-LITE](docs/STICK-LITE.md) | **Stick Lite**: a cloud-AI-only edition for 4 GB sticks (about 1 GB image) |
+| [EXCHANGE](docs/EXCHANGE.md) | The Windows-readable exchange partition, the evidence collector, encrypted portable snapshots |
 | [BUILDING](docs/BUILDING.md) | **Build a stick or caddy from scratch** (Ubuntu ISO → SysMedic), test in QEMU |
 | [EDITIONS-AND-DEPLOY](docs/EDITIONS-AND-DEPLOY.md) | Caddy vs stick, the build kit, `sysmedic-deploy`, versions, testing |
 | [IMPROVING-SYSMEDIC](docs/IMPROVING-SYSMEDIC.md) | Transcripts, `claude-review.md`, feedback, collecting sessions |
@@ -80,7 +82,9 @@ build/                      the build kit: the source of truth for both editions
   staging/agent/            AI instructions: core + per-edition toolkit section
   staging/packages/         package lists (shared, caddy, stick) and services kept off
   staging/iso/              the stick's boot menu (GRUB)
-  tests/                    fixture generators for the QEMU tests
+  xchg_layout.py            the exchange partition: hide the others from Windows, check, populate
+  tests/                    fixture generators for the QEMU tests, and test_exchange.py / test_discoverlib.py
+tools/windows-collector/    the read-only Windows evidence collector (copied onto the exchange partition)
 docs/                       documentation (also installed on both drives)
 menu.sh, scripts/, ...      the caddy's advanced toolkit (option 15): stress/burn-in, imaging, macOS, extra Windows repairs
 ```
@@ -90,7 +94,8 @@ menu.sh, scripts/, ...      the caddy's advanced toolkit (option 15): stress/bur
 - Tested extensively in QEMU, including Secure Boot, BIOS, simulated faults and real BitLocker/registry/event-log fixtures. **Early real-hardware testing so far** (Dell Latitude 3410, Dell Pro 13 Plus).
 - The offline 3B model makes factual slips. Tool output is always on screen; trust it over the summary. The cloud model and the 7B model are better.
 - APFS is read-only (the read-write driver doesn't build on kernel 7.0). WPS isn't supported (use `nmtui`). Building a BCD from Linux isn't attempted (use WinRE).
-- The persistence partition and the caddy aren't encrypted. A lost drive exposes customer reports and backups.
+- Customer data (sessions, backups, transcripts) is kept in an encrypted vault (`sysmedic-vault`) once you set it up; until then a visit is held in memory only. Snapshot encryption for the Windows exchange partition is a separate mechanism (age), see [docs/EXCHANGE.md](docs/EXCHANGE.md).
+- The exchange partition and collector have been tested on synthetic images, in QEMU (UEFI Secure Boot and BIOS boot) and by text checks; they have **not yet been run on real Windows or on real hardware** (procedure in docs/HARDWARE-TESTING.md). Existing drives only get the partition when a stick is rewritten or a caddy rebuilt.
 
 ## License
 

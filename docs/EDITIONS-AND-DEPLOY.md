@@ -45,7 +45,7 @@ Each deploy:
 4. Writes `/etc/sysmedic/edition` and `/etc/sysmedic/version`.
 5. Rebuilds the initramfs if a hook changed.
 
-The stick deploy then builds the ISO and the test image, backs up the persistence partition to `stick-sessions-backup/`, writes the stick, checks it against the tested image, and restores the data. Run it and check its exit code; don't filter its output.
+The stick deploy then builds the ISO and the test image, backs up the persistence partition to `stick-sessions-backup/` (and `INBOX/`, `EXPORT/` and `SYSMEDIC.ID` of the exchange partition, if the stick has one), writes the stick, checks Windows would see only the `SM_EXCHANGE` partition (`xchg_layout.py check`), checks it against the tested image, and restores the data. A rewrite always leaves the stick with a fresh exchange partition ([EXCHANGE](EXCHANGE.md)). Run it and check its exit code; don't filter its output.
 
 **Version** = date + the first 8 hex digits of the SHA-256 of `shared/`. Both drives show the same version when their shared core matches: in the boot banner, the scan header, the menu, reports and review bundles.
 

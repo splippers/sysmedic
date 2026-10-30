@@ -19,6 +19,7 @@ trap 'echo -e "\033[1;31mERROR:\033[0m deploy stopped at line $LINENO: $BASH_COM
 cd "$(dirname "$0")"
 export PYTHONDONTWRITEBYTECODE=1    # running staging's Python must not leave __pycache__ in it (it changed the version)
 KIT=$PWD
+XCHG_PY=$(dirname "$(readlink -f "$0")")/xchg_layout.py    # the exchange partition helper (the kit holds symlinks to the repo)
 ST=$KIT/staging
 STICK_ROOT=$KIT/root
 LITE_ROOT=$KIT/root-lite     # a trimmed copy of STICK_ROOT, rebuilt for every Stick Lite image
@@ -515,7 +516,7 @@ build_stick_image() {
         [ "$isosz" -lt 1500000000 ] || die "Stick Lite ISO is $((isosz / 1000000)) MB: too big for a 4 GB stick with room for persistence (trim build/lite/purge-*.txt)"
     fi
     rm -f "$TESTIMG"; truncate -s "$(sudo blockdev --getsize64 "${STICK_DEV:-/dev/null}" 2>/dev/null || { [ "$LITE" = 1 ] && echo 3699999744 || echo 15376318464; })" "$TESTIMG"
-    ISO=$ISO LITE=$LITE ./make-stick.sh "$TESTIMG" | tail -1
+    ISO=$ISO LITE=$LITE SYSMEDIC_VERSION=${DEPLOYED_VERSION:-} ./make-stick.sh "$TESTIMG" | tail -1
     say "Stick image ready: $ISO, $TESTIMG (test with QEMU before writing)"
 }
 
@@ -529,7 +530,7 @@ find_stick() {   # a USB disk with the SysMedic ISO and a persistence partition
 }
 
 deploy_stick() {
-    local dev=${1:-} persist tarball n
+    local dev=${1:-} persist tarball n xchg xsave=
     [ -n "$dev" ] || dev=$(find_stick)
     [ -n "$dev" ] || die "No SysMedic stick found (give the device: --stick /dev/sdX)"
     [ "${dev#/dev/}" != "$(host_disk)" ] || die "$dev is this PC's own disk"
@@ -552,16 +553,28 @@ deploy_stick() {
             say "Backed up the stick's data ($n session(s), not encrypted yet) → $tarball"
         fi
     fi
+    # The exchange partition (Windows-readable, SM_EXCHANGE) is rewritten with the stick, so what it holds
+    # (encrypted snapshots in INBOX, reports in EXPORT, the drive's SYSMEDIC.ID) is copied aside and put back
+    xchg=$(lsblk -lpno NAME,LABEL "$dev" | awk '$2=="SM_EXCHANGE"{print $1; exit}')
+    if [ -n "$xchg" ]; then
+        xsave=$KIT/stick-sessions-backup/stick-exchange-$(date +%Y%m%d-%H%M%S); mkdir -p "$xsave" "$WORK/xchg"
+        mnt -o ro "$xchg" "$WORK/xchg"
+        sudo cp -a "$WORK/xchg/SYSMEDIC.ID" "$WORK/xchg/INBOX" "$WORK/xchg/EXPORT" "$xsave/" 2>/dev/null || true
+        sudo umount "$WORK/xchg"; MOUNTS=("${MOUNTS[@]/$WORK\/xchg}")
+        sudo chown -R "$(id -u):$(id -g)" "$xsave"
+        say "Saved the exchange partition's INBOX and EXPORT → $xsave"
+    fi
     say "Writing the stick (about 15–20 minutes on a USB 2.0 stick)"
-    ISO=$ISO LITE=$LITE ./make-stick.sh "$dev" | tail -1
+    ISO=$ISO LITE=$LITE SYSMEDIC_VERSION=${DEPLOYED_VERSION:-} XCHG_RESTORE=$xsave ./make-stick.sh "$dev" | tail -1
+    sudo python3 "$XCHG_PY" check "$dev" || die "Windows would show a partition other than the exchange partition"
     say "Verifying the written image against the tested one"
     local size pstart; size=$(stat -c %s "$ISO")
     # Stop where the persistence partition starts: it can overlap the ISO's last sectors (xorriso's spare
     # partition table, dead once make-stick moves the GPT to the end of the disk), and it's freshly made each time.
     pstart=$(( $(cat "/sys/class/block/$(lsblk -lno NAME,PARTN "$dev" | awk '$2==4{print $1}')/start" 2>/dev/null || echo 0) * 512 ))
     [ "$pstart" -gt 1536 ] && [ "$pstart" -lt "$size" ] && size=$pstart
-    # sectors 0-2 hold the partition tables, which get a fresh GUID for the persistence partition
-    if ! sudo cmp -s -n $((size - 1536)) -i 1536 "$dev" "$TESTIMG"; then die "Verification failed: the stick doesn't match the tested image"; fi
+    # sectors 0-3 hold the partition tables (MBR, GPT header, entries 1-8), which get fresh GUIDs for the new partitions
+    if ! sudo cmp -s -n $((size - 2048)) -i 2048 "$dev" "$TESTIMG"; then die "Verification failed: the stick doesn't match the tested image"; fi
     say "Verified."
     if [ -n "$persist" ] && [ -s "$tarball" ]; then
         persist=$(lsblk -lpno NAME,LABEL "$dev" | awk '$2=="FOG_AMB_PERSIST"{print $1; exit}')

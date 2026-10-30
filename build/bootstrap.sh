@@ -187,13 +187,18 @@ cmd_caddy() {
         truncate -s "$CADDY_IMAGE_SIZE" "$target"
         loop=$(sudo losetup -fP --show "$target"); dev=$loop
     fi
-    say "Partitioning $dev: EFI system partition + SysMedic root"
+    say "Partitioning $dev: EFI system partition + SysMedic root + the Windows-readable exchange partition"
     sudo wipefs -aq "$dev"
-    sudo sgdisk -Z -n1:0:+512M -t1:ef00 -c1:ESP -n2:0:0 -t2:8300 -c2:primary "$dev" >/dev/null
+    sudo sgdisk -Z -n1:0:+512M -t1:ef00 -c1:ESP -n2:0:-1G -t2:8300 -c2:primary -n3:0:0 -t3:0700 -c3:SM_EXCHANGE "$dev" >/dev/null
     sudo partprobe "$dev" 2>/dev/null || true; sudo udevadm settle
-    local p1 p2; p1=$(lsblk -lnpo NAME "$dev" | sed -n 2p); p2=$(lsblk -lnpo NAME "$dev" | sed -n 3p)
+    local p1 p2 p3; p1=$(lsblk -lnpo NAME "$dev" | sed -n 2p); p2=$(lsblk -lnpo NAME "$dev" | sed -n 3p); p3=$(lsblk -lnpo NAME "$dev" | sed -n 4p)
     sudo mkfs.vfat -F 32 -n SYSMEDIC "$p1" >/dev/null
     sudo mkfs.ext4 -q -F -L sysmedic-root "$p2"
+    sudo mkfs.exfat -L SM_EXCHANGE "$p3" >/dev/null          # exFAT: Windows reads and writes it natively (docs/EXCHANGE.md)
+    mkdir -p xchg-mnt; sudo mount -o rw,uid="$(id -u)",gid="$(id -g)" "$p3" xchg-mnt
+    python3 "$(dirname "$(readlink -f "$0")")/xchg_layout.py" populate xchg-mnt --edition caddy --version "$(./sysmedic-deploy --version)" \
+        --collector "$(dirname "$(readlink -f "$0")")/../tools/windows-collector"
+    sync; sudo umount xchg-mnt
     mkdir -p "$m"; sudo mount "$p2" "$m"
     trap 'chroot_leave "$m"; sudo umount "$m/boot/efi" "$m" 2>/dev/null; [ -n "$loop" ] && sudo losetup -d "$loop"' EXIT
     unpack_base "$m"
@@ -227,6 +232,7 @@ EOF
     sync; sudo umount "$m/boot/efi" "$m"; trap - EXIT
     say "Installing SysMedic onto it (sysmedic-deploy --caddy)"
     ./sysmedic-deploy --caddy "$dev"
+    sudo python3 "$(dirname "$(readlink -f "$0")")/xchg_layout.py" check "$dev" --expect-exchange
     [ -n "$loop" ] && sudo losetup -d "$loop"
     say "Caddy built on $target. Test it in QEMU before use (docs/BUILDING.md)."
 }

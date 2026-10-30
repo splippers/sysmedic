@@ -82,6 +82,14 @@ Each visit's `audit.log` records, with timestamps:
 | Other Wi-Fi passwords, BitLocker keys | **Never stored** | — |
 | Cloud AI history | Wiped at each boot; a copy of the visit's conversation is kept in the session | Yes |
 
+## The Windows exchange partition and snapshots (`docs/EXCHANGE.md`)
+
+- Windows sees **one** partition of a SysMedic drive, `SM_EXCHANGE` (exFAT); the ISO and gap partitions are hidden with GPT attributes and the Linux partitions are not types Windows mounts. SysMedic's own data never appears as a drive and Windows has nothing to offer to format. Layout is checked after every stick write.
+- Plugging the drive in collects **nothing**. The Windows collector runs only when a person starts it, lists what it will read, and needs the word YES. It is read-only toward Windows, has no network code, never collects documents, browser data, passwords, Wi-Fi keys or BitLocker recovery keys, and never writes unencrypted evidence to the customer's disk.
+- Evidence is encrypted with **age** to a public key whose private half stays on the SysMedic drive, protected by a passphrase. A lost exchange partition reveals nothing but the (non-secret) public key, a random volume id and snapshot ids/sizes/times. This is **not** the vault: portable snapshot encryption (age) and SysMedic's storage encryption (LUKS vault) are separate, with separate keys.
+- Import is a deliberate console action (`sysmedic-snapshot import`), audited, written read-only into the visit folder (so inside the vault), as raw evidence kept apart from findings and from the engineer's conclusions. The AI cannot decrypt (the key is passphrase-protected) and sees snapshot content only if the engineer shows it.
+- The exchange partition is mounted `noexec,nosuid,nodev` and only if it sits on the disk SysMedic booted from. A snapshot proves integrity, not authorship (anyone with the public key can make one).
+
 ## The encrypted vault (`sysmedic-vault`)
 
 Everything above marked "in the vault" lives in an encrypted LUKS2 container on SysMedic's own drive (`/mnt/persist/vault.luks`; Argon2id; on the caddy it's in `/srv/sysmedic`). A lost drive gives away nothing without the passphrase.
@@ -100,6 +108,7 @@ Everything above marked "in the vault" lives in an encrypted LUKS2 container on 
 
 - No SSH server at boot.
 - Services that would announce on a customer network (lldpd, hostapd, avahi, rpcbind) are masked.
+- Nothing is collected from a running Windows machine when a SysMedic drive is plugged into it: the collector needs a person to start it and confirm.
 - No telemetry and no "call home". Hardware-probe uploaders are deliberately not installed.
 - The BitLocker web unlock (`sysmedic-win bitlocker-web`) runs only when the engineer starts it on a console: HTTPS, a secret link, read-only, and it stops by itself (unlock, 5 wrong keys, 15 minutes). The key is never stored or logged.
 - Wi-Fi networks joined during a visit (and their passwords) live in RAM and are forgotten at shutdown, unless the engineer answers **y** to "Remember Wi-Fi … on this drive?": then they're saved in the encrypted vault only (never outside it, never with the vault locked). The AI is refused NetworkManager's files and the vault, and Wi-Fi passwords in command output are cleaned to `WIFI_PASSWORD`.

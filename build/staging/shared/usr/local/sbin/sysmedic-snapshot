@@ -1,0 +1,384 @@
+#!/usr/bin/env python3
+"""sysmedic-snapshot — receive evidence snapshots from the SysMedic exchange drive (Windows-readable partition).
+
+  sysmedic-snapshot init                 once per drive: make this drive's snapshot key. The private key is kept encrypted
+                                         with a passphrase you choose; the public key goes into SYSMEDIC.ID on the exchange
+                                         partition, which is what the Windows collector encrypts to.
+  sysmedic-snapshot list                 snapshots waiting in the exchange INBOX, and ones already imported this visit
+  sysmedic-snapshot import [ID]          verify, decrypt and import a snapshot (or all waiting) into this visit's folder; asks the passphrase
+  sysmedic-snapshot verify FILE          decrypt and check one snapshot without importing it
+
+Options: --inbox DIR (use a folder instead of the exchange partition), --identity FILE, --dest DIR.
+
+Snapshots are RAW EVIDENCE collected by a person on a running Windows machine (docs/EXCHANGE.md). Import keeps them
+exactly as collected (read-only files under <visit>/snapshots/<id>/raw/) with import.json recording how they were
+checked. Analysis writes its findings elsewhere (<id>/findings/); nothing here is a conclusion.
+Portable snapshot encryption (age) is separate from the vault (LUKS) that protects this drive's own storage.
+"""
+import argparse
+import datetime
+import hashlib
+import io
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+try:
+    import session
+except ImportError:
+    session = None
+
+LABEL = "SM_EXCHANGE"
+IDENTITY = Path("/mnt/persist/private/snapshot-identity.age")
+MNT = Path("/run/sysmedic/exchange")
+MAX_CIPHERTEXT = 1 << 30            # 1 GiB
+MAX_UNPACKED = 4 << 30
+MAX_ENTRIES = 20000
+SNAP_ID = re.compile(r"^SM-\d{8}T\d{6}Z-[0-9a-f]{8}$")
+FORMAT = "sysmedic-snapshot/1"
+ENVELOPE_FORMAT = "sysmedic-snapshot-envelope/1"
+
+
+class Problem(Exception):
+    pass
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sysmedic_version():
+    try:
+        return Path("/etc/sysmedic/version").read_text().strip()
+    except OSError:
+        return "unknown"
+
+
+def audit(msg):
+    if session:
+        try:
+            session.audit("snapshot", msg)
+        except OSError:
+            pass
+
+
+# ---- finding and mounting the exchange partition ---------------------------------------------------------------
+
+def sh(*cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def boot_disk():
+    """The disk SysMedic is running from: the ISO's (/cdrom) or the installed root's."""
+    for mp in ("/cdrom", "/"):
+        src = sh("findmnt", "-no", "SOURCE", mp).stdout.strip()
+        if src.startswith("/dev/"):
+            disk = sh("lsblk", "-no", "PKNAME", src).stdout.split()
+            if disk:
+                return disk[0]
+    return ""
+
+
+def find_exchange():
+    disk = boot_disk()
+    if not disk:
+        raise Problem("Can't tell which disk SysMedic booted from, so no exchange partition is trusted.")
+    for line in sh("lsblk", "-lnpo", "NAME,LABEL,PKNAME").stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[1] == LABEL and parts[2] == disk:
+            return parts[0]
+    raise Problem(f"No {LABEL} partition on the SysMedic drive (older drives don't have one: see docs/EXCHANGE.md).")
+
+
+def mount_exchange(rw=False):
+    dev = find_exchange()
+    MNT.mkdir(parents=True, exist_ok=True)
+    if sh("mountpoint", "-q", str(MNT)).returncode == 0:
+        sh("umount", str(MNT))
+    opts = ("rw" if rw else "ro") + ",noexec,nosuid,nodev,uid=0,gid=0,umask=022"
+    r = sh("mount", "-t", "exfat", "-o", opts, dev, str(MNT))
+    if r.returncode:
+        raise Problem(f"Couldn't mount {dev}: {r.stderr.strip()}")
+    return MNT
+
+
+def unmount_exchange():
+    sh("sync")
+    sh("umount", str(MNT))
+
+
+# ---- reading SYSMEDIC.ID ---------------------------------------------------------------------------------------
+
+def read_id(root):
+    d = {}
+    try:
+        for line in (Path(root) / "SYSMEDIC.ID").read_text().splitlines():
+            m = re.match(r"^([a-z_]+)=(.*)$", line.strip())
+            if m:
+                d[m.group(1)] = m.group(2)
+    except OSError:
+        pass
+    return d
+
+
+def write_id_field(root, key, value):
+    p = Path(root) / "SYSMEDIC.ID"
+    lines = [l for l in p.read_text().splitlines() if l.strip() and not l.startswith(key + "=")]
+    lines.append(f"{key}={value}")
+    p.write_bytes(("\r\n".join(lines) + "\r\n").encode())
+
+
+# ---- init ------------------------------------------------------------------------------------------------------
+
+def cmd_init(a):
+    ident = Path(a.identity or IDENTITY)
+    if ident.exists():
+        raise Problem(f"{ident} already exists: this drive already has a snapshot key. (Making a new one would make earlier snapshots unreadable.)")
+    if not sys.stdin.isatty():
+        raise Problem("Run this on a console: it asks you to choose a passphrase.")
+    ident.parent.mkdir(parents=True, exist_ok=True)
+    ram = next((d for d in ("/run", "/dev/shm") if os.access(d, os.W_OK)), None)
+    with tempfile.TemporaryDirectory(dir=ram) as td:                                           # RAM: the bare key never reaches the drive
+        plain = Path(td) / "key.txt"
+        if sh("age-keygen", "-o", str(plain)).returncode:
+            raise Problem("age-keygen failed.")
+        recipient = sh("age-keygen", "-y", str(plain)).stdout.strip()
+        print("Choose a passphrase for this drive's snapshot key. You'll need it to open snapshots; it can't be recovered.\n(Leave it empty and age makes one up and shows it to you: write it down.)")
+        if subprocess.run(["age", "-p", "-o", str(ident) + ".new", str(plain)]).returncode:
+            Path(str(ident) + ".new").unlink(missing_ok=True)
+            raise Problem("Cancelled; no key was made.")
+        os.chmod(str(ident) + ".new", 0o600)
+        os.replace(str(ident) + ".new", ident)
+    root = a.inbox_root or mount_exchange(rw=True)
+    try:
+        write_id_field(root, "recipient", recipient)
+    finally:
+        if not a.inbox_root:
+            unmount_exchange()
+    audit(f"snapshot key made (public key {recipient[:12]}…)")
+    print(f"Done. Public key {recipient}\nThe Windows collector on this drive will now encrypt to it.")
+    return 0
+
+
+# ---- verify / import -------------------------------------------------------------------------------------------
+
+def sha256(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def decrypt(cipher_path, identity):
+    """age -d, plaintext in memory only. age asks for the identity's passphrase itself, on the terminal."""
+    if not identity.exists():
+        raise Problem(f"No snapshot key at {identity}. Run: sysmedic-snapshot init")
+    r = subprocess.run(["age", "-d", "-i", str(identity), str(cipher_path)], stdout=subprocess.PIPE)
+    if r.returncode:
+        raise Problem("Couldn't decrypt: wrong passphrase, or this snapshot was made for a different drive, or it is damaged.")
+    return r.stdout
+
+
+def safe_name(n):
+    p = Path(n)
+    return not (n.startswith("/") or "\\" in n or ".." in p.parts or n == "" or re.match(r"^[A-Za-z]:", n))
+
+
+def open_snapshot(plain):
+    """Check the container (zip) and return (manifest, {name: bytes}); raises Problem on anything off."""
+    try:
+        z = zipfile.ZipFile(io.BytesIO(plain))
+    except zipfile.BadZipFile:
+        raise Problem("The decrypted data isn't a valid snapshot container.")
+    infos = z.infolist()
+    if len(infos) > MAX_ENTRIES or sum(i.file_size for i in infos) > MAX_UNPACKED:
+        raise Problem("The snapshot is far larger than expected: refusing to unpack it.")
+    files = {}
+    for i in infos:
+        if i.is_dir():
+            continue
+        if not safe_name(i.filename):
+            raise Problem(f"Unsafe path in snapshot: {i.filename!r}")
+        if stat.S_ISLNK(i.external_attr >> 16):
+            raise Problem(f"Link in snapshot: {i.filename!r}")
+        files[i.filename] = z.read(i)
+    if "manifest.json" not in files:
+        raise Problem("No manifest.json: not a SysMedic snapshot.")
+    try:
+        manifest = json.loads(files.pop("manifest.json").decode("utf-8-sig"))
+    except ValueError:
+        raise Problem("manifest.json is not valid JSON.")
+    if manifest.get("format") != FORMAT:
+        raise Problem(f"Unknown snapshot format {manifest.get('format')!r}.")
+    if not SNAP_ID.match(str(manifest.get("snapshot_id", ""))):
+        raise Problem("Bad snapshot id in manifest.")
+    return manifest, files
+
+
+def check_integrity(manifest, files):
+    """Compare every evidence file with its recorded hash. Returns a report; raises nothing for omissions."""
+    listed = {e["path"]: e for e in manifest.get("evidence", [])}
+    bad, missing = [], []
+    for path, e in listed.items():
+        if path not in files:
+            missing.append(path)
+        elif sha256(files[path]) != e.get("sha256"):
+            bad.append(path)
+    extra = sorted(p for p in files if p not in listed)
+    return {"ok": not bad and not missing, "checked": len(listed) - len(missing), "mismatched": bad, "missing": missing, "unlisted": extra}
+
+
+def check_envelope(env_path, cipher_path):
+    """The plaintext envelope's claims about the encrypted file (cheap check before the passphrase prompt)."""
+    cipher = Path(cipher_path).read_bytes()
+    if len(cipher) > MAX_CIPHERTEXT:
+        raise Problem("Snapshot file is larger than the 1 GiB limit.")
+    if not Path(env_path).exists():
+        return {"present": False}
+    env = json.loads(Path(env_path).read_text(encoding="utf-8-sig"))
+    if env.get("format") != ENVELOPE_FORMAT:
+        raise Problem("Unknown envelope format.")
+    if env.get("container", {}).get("sha256") != sha256(cipher):
+        raise Problem("The encrypted file doesn't match its envelope (damaged or altered in transit).")
+    return {"present": True, "snapshot_id": env.get("snapshot_id"), "recipient_fingerprint": env.get("recipient_fingerprint"),
+            "exchange_volume_id": env.get("exchange_volume_id")}
+
+
+def import_one(cipher_path, identity, dest_root, exchange_id=""):
+    cipher_path = Path(cipher_path)
+    env_path = cipher_path.with_name(cipher_path.name.replace(".smsnap.age", ".envelope.json"))
+    env = check_envelope(env_path, cipher_path)
+    manifest, files = open_snapshot(decrypt(cipher_path, identity))
+    sid = manifest["snapshot_id"]
+    if env.get("present") and env["snapshot_id"] != sid:
+        raise Problem("The envelope and the snapshot disagree about the snapshot id.")
+    rep = check_integrity(manifest, files)
+    dest = Path(dest_root) / sid
+    if dest.exists():
+        raise Problem(f"{sid} is already imported ({dest}).")
+    raw = dest / "raw"
+    for name, data in {**files, "manifest.json": json.dumps(manifest, indent=2).encode()}.items():
+        out = raw / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+        out.chmod(0o444)
+    record = {
+        "format": "sysmedic-import/1",
+        "snapshot_id": sid,
+        "imported_utc": now(),
+        "imported_by": f"sysmedic-snapshot, SysMedic {sysmedic_version()}",
+        "container_sha256": sha256(cipher_path.read_bytes()),
+        "envelope": env,
+        "exchange_volume_id": exchange_id,
+        "integrity": rep,
+        "collector": manifest.get("collector"),
+        "evidence_items": len(manifest.get("evidence", [])),
+        "collection_failures": len(manifest.get("failures", [])),
+        "collection_omissions": len(manifest.get("omissions", [])),
+        "note": "raw/ is the evidence exactly as collected. Findings, when made, go in findings/; conclusions are the engineer's.",
+    }
+    (dest / "import.json").write_text(json.dumps(record, indent=2))
+    for p in [raw, *raw.rglob("*")]:
+        if p.is_dir():
+            p.chmod(0o555)
+    audit(f"imported snapshot {sid} ({record['evidence_items']} items, integrity {'ok' if rep['ok'] else 'PROBLEMS'})")
+    return sid, rep, dest
+
+
+def snapshots_dir(a):
+    if a.dest:
+        return Path(a.dest)
+    if not session:
+        raise Problem("No visit folder available; give --dest DIR.")
+    return session.session_dir() / "snapshots"
+
+
+def waiting(inbox):
+    return sorted(Path(inbox).glob("SM-*.smsnap.age"))
+
+
+def with_inbox(a, fn):
+    if a.inbox:
+        return fn(Path(a.inbox), "")
+    root = mount_exchange(rw=False)
+    try:
+        return fn(root / "INBOX", read_id(root).get("volume_id", ""))
+    finally:
+        unmount_exchange()
+
+
+def cmd_list(a):
+    def go(inbox, vid):
+        done = set(p.name for p in snapshots_dir(a).glob("SM-*")) if (a.dest or session) else set()
+        files = waiting(inbox)
+        if not files:
+            print("No snapshots in the exchange INBOX.")
+        for f in files:
+            sid = f.name.split(".")[0]
+            print(f"  {sid}  {f.stat().st_size / 1e6:6.1f} MB  {'imported this visit' if sid in done else 'waiting'}")
+        return 0
+    return with_inbox(a, go)
+
+
+def cmd_import(a):
+    identity = Path(a.identity or IDENTITY)
+    dest = snapshots_dir(a)
+
+    def go(inbox, vid):
+        files = waiting(inbox)
+        if a.id:
+            files = [f for f in files if f.name.startswith(a.id)]
+        if not files:
+            print("Nothing to import.")
+            return 0
+        rc = 0
+        for f in files:
+            try:
+                sid, rep, where = import_one(f, identity, dest, vid)
+                print(f"  imported {sid} → {where}  integrity: {'OK' if rep['ok'] else 'PROBLEMS ' + json.dumps(rep)}")
+                rc = rc or (0 if rep["ok"] else 1)
+            except Problem as e:
+                print(f"  {f.name}: {e}")
+                rc = 1
+        return rc
+    return with_inbox(a, go)
+
+
+def cmd_verify(a):
+    f = Path(a.file)
+    env = check_envelope(f.with_name(f.name.replace(".smsnap.age", ".envelope.json")), f)
+    manifest, files = open_snapshot(decrypt(f, Path(a.identity or IDENTITY)))
+    rep = check_integrity(manifest, files)
+    print(json.dumps({"snapshot_id": manifest["snapshot_id"], "envelope": env, "integrity": rep,
+                      "failures": manifest.get("failures", []), "omissions": manifest.get("omissions", [])}, indent=2))
+    return 0 if rep["ok"] else 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--inbox")
+    ap.add_argument("--inbox-root", help=argparse.SUPPRESS)
+    ap.add_argument("--identity")
+    ap.add_argument("--dest")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("init").set_defaults(f=cmd_init)
+    sub.add_parser("list").set_defaults(f=cmd_list)
+    i = sub.add_parser("import"); i.add_argument("id", nargs="?"); i.set_defaults(f=cmd_import)
+    v = sub.add_parser("verify"); v.add_argument("file"); v.set_defaults(f=cmd_verify)
+    a = ap.parse_args()
+    if os.geteuid() != 0 and not (a.inbox or a.inbox_root):
+        print("Run as root (sudo).")
+        return 1
+    try:
+        return a.f(a)
+    except Problem as e:
+        print(f"sysmedic-snapshot: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -96,6 +96,14 @@ Details: [NETWORK](NETWORK.md)
 - Autorun persistence analysis (Run keys, services, scheduled tasks, startup folders).
 - **(caddy):** yara, chkrootkit, rkhunter (point them at a mounted Linux root).
 
+## 9b. Windows exchange and evidence snapshots
+
+See [EXCHANGE](EXCHANGE.md).
+
+- **Exchange partition:** `SM_EXCHANGE` (exFAT), the only partition Windows can see; `SYSMEDIC.ID`, `README.txt`, `collector/`, `INBOX/`, `EXPORT/`.
+- **Windows collector** (`collector\Run-SysMedic-Collector.cmd`): read-only evidence from a running Windows, only when a person starts it and types YES; offline; writes an encrypted snapshot to `INBOX`.
+- **`sysmedic-snapshot init | list | import | verify`:** make the drive's snapshot key (passphrase-protected), then verify, decrypt and import snapshots as raw evidence into the visit folder.
+
 ## 10. Job workflow
 
 - **Job report** (`sysmedic-report`, menu 3): a self-contained HTML report (print to PDF) plus text: summary, job and machine, fixed / still needs attention, work performed (from the audit trail), AI use and consent, hardware test results, backups, notes, signatures, and the full audit trail.

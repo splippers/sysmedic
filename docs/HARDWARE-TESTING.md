@@ -89,3 +89,18 @@ None of the disk tests write. They're safe on a customer's disk even while it's 
 **(caddy)** also has the long burn-in suite in the advanced toolkit (menu 15).
 
 Through a USB-NVMe adapter (e.g. Realtek RTL9210), NVMe error-log entries are truncated by the bridge. Trust *media errors*, *spare* and *critical warning* instead.
+
+## Exchange partition on real Windows (not automated)
+
+QEMU and the unit tests prove the partition layout and the snapshot round trip; only real Windows shows how Windows treats the drive. Do this on a **new or rewritten** stick or a rebuilt caddy (older ones have no exchange partition), with a spare stick if you can, and record results in the Dev Channel.
+
+1. **What Windows sees.** Plug the drive into a Windows 10 and a Windows 11 machine (a USB 2 and a USB 3 port each). Pass: exactly one new drive appears, labelled `SM_EXCHANGE`, with `SYSMEDIC.ID`, `README.txt`, `collector`, `INBOX`, `EXPORT`. No "You need to format the disk" prompt, no second drive letter, no extra drive. In *Disk Management* the other partitions may show as unknown/healthy, without letters; do not touch them. Repeat with the drive in a caddy enclosure and a hub (Tosh-style) as well as direct.
+2. **Nothing happens on insert.** No window opens on its own, nothing runs, nothing is written to the Windows machine's disk (check Autoplay does not launch the collector).
+3. **The listing.** Run `collector\Run-SysMedic-Collector.cmd` (as administrator and as a normal user). Pass: the list of what will be gathered appears first; anything but `YES` stops with "Nothing was collected"; `-ListOnly` (run `SysMedic-Collect.ps1 -ListOnly` from PowerShell) shows the list and stops.
+4. **Refusals.** On a drive without `recipient=` in `SYSMEDIC.ID`, or with `age.exe` removed: the collector stops before collecting anything and says why.
+5. **Collection.** After `sysmedic-snapshot init` on SysMedic, run the collector for real. Pass: `INBOX` gets one `.smsnap.age` and one `.envelope.json`; the file is not readable as text or a zip; no new files appear in the Windows machine's temp folder or user folders; Windows shows nothing in Event Viewer beyond the PowerShell/process events. On Windows 10 and 11, with antivirus active, note any SmartScreen/Defender prompts for `age.exe` or the script.
+6. **Round trip.** Boot SysMedic from the same drive on another machine; `sysmedic-snapshot list`, then `import` with the passphrase: `integrity: OK`, `raw/evidence/*.json` readable and complete, the manifest's `failures`/`omissions` match what you expect (e.g. BitLocker status empty without administrator).
+7. **Boot regression after the layout change** (this is the boot behaviour that must not change): boot the same drive on a UEFI machine with Secure Boot on, a UEFI machine with it off, and a legacy-BIOS machine; and after a Windows insert/eject, boot it again.
+8. **Cleanup behaviour.** Eject normally, then re-plug: no "scan and fix" prompt for `SM_EXCHANGE`; exFAT has no journal, so also check an unclean removal during an idle moment.
+
+A pass on 1-3 and 7 is the minimum before relying on the exchange partition; 5-6 before trusting the collector on a customer's machine.

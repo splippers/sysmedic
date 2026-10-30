@@ -57,6 +57,8 @@ What `stick-base` does:
 
 Then `sysmedic-deploy --stick-image` adds everything SysMedic (scripts, AI instructions, docs, ~120 packages, the Wi-Fi initramfs fix, OpenCode branding) and builds the ISO from the stock Ubuntu ISO's boot files, without its installer layers.
 
+A stick image has five partitions: the ISO, an EFI partition and a small gap (all hidden from Windows), `FOG_AMB_PERSIST` (ext4) and the last 512 MiB (256 MiB on Lite) as the exFAT `SM_EXCHANGE` partition ([EXCHANGE](EXCHANGE.md)). Before the first build, fetch the collector's encryption helper: `tools/windows-collector/fetch-age.sh` (pinned and checksummed; without it the exchange partition is still made but the collector warns it cannot encrypt). `mkfs.exfat` (package `exfatprogs`) is needed on the build PC.
+
 **Test before writing** (UEFI with Secure Boot):
 ```bash
 cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd vars.fd
@@ -84,7 +86,7 @@ Put the SSD in a USB enclosure and plug it in. **It will be erased.** Check whic
 ```
 
 What it does:
-1. Partitions the drive: a 512 MB EFI system partition (`SYSMEDIC`) and an ext4 root (`sysmedic-root`).
+1. Partitions the drive: a 512 MB EFI system partition (`SYSMEDIC`), an ext4 root (`sysmedic-root`) and, last, a 1 GiB exFAT exchange partition (`SM_EXCHANGE`: the only part Windows can see, with the Windows evidence collector on it; see [EXCHANGE](EXCHANGE.md)). `xchg_layout.py check` verifies the result.
 2. Unpacks Ubuntu's server system onto it, then sets up `fstab` (with the `/srv/sysmedic` → `/mnt/persist` bind), the hostname `sysmedic`, an empty machine ID (filled at first boot) and new SSH host keys.
 3. Installs the HWE kernel, firmware and the **Secure Boot** boot loader (shim + signed GRUB) in the *removable* location, so it boots on any UEFI PC without a boot entry.
 4. Copies the offline AI (Ollama + Qwen) and ClamAV signatures to `/srv/sysmedic`, installs OpenCode.

@@ -28,6 +28,10 @@ The full stick root (`root/`) is updated first as usual; the Lite root (`root-li
 
 A Lite stick is marked by `/etc/sysmedic/lite` (the edition stays `stick`, so updates and the version string match the normal stick). The boot banner and menu say "stick lite edition".
 
+## Windows exchange partition
+
+A Lite stick also gets the exFAT `SM_EXCHANGE` partition (256 MiB, half the normal size, taken from the end of the data partition) with the Windows evidence collector: [EXCHANGE](EXCHANGE.md). `XCHG_MIB=0` builds a Lite stick without it.
+
 ## Limits
 
 - Sticks sold as "4 GB" vary: 3.7 GiB is typical, and very slow USB 2 sticks make the first boot slow.
