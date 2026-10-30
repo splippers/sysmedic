@@ -218,7 +218,7 @@ git_status = "offline"
 try:
     rc = subprocess.call("ping -c1 -W2 github.com >/dev/null 2>&1", shell=True, timeout=5)
     if rc == 0:
-        rc2 = subprocess.call("cd /opt/sysmedic && git pull origin master 2>/dev/null", shell=True, timeout=15)
+        rc2 = subprocess.call("cd /opt/sysmedic && git pull origin main 2>/dev/null", shell=True, timeout=15)
         git_status = "synced" if rc2 == 0 else "failed"
 except:
     git_status = "unreachable"
