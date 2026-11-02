@@ -57,7 +57,7 @@ What `stick-base` does:
 
 Then `sysmedic-deploy --stick-image` adds everything SysMedic (scripts, AI instructions, docs, ~120 packages, the Wi-Fi initramfs fix, OpenCode branding) and builds the ISO from the stock Ubuntu ISO's boot files, without its installer layers.
 
-A stick image has five partitions: the ISO, an EFI partition and a small gap (all hidden from Windows), `FOG_AMB_PERSIST` (ext4) and the last 512 MiB (256 MiB on Lite) as the exFAT `SM_EXCHANGE` partition ([EXCHANGE](EXCHANGE.md)). Before the first build, fetch the collector's encryption helper: `tools/windows-collector/fetch-age.sh` (pinned and checksummed; without it the exchange partition is still made but the collector warns it cannot encrypt). `mkfs.exfat` (package `exfatprogs`) is needed on the build PC.
+A stick image has five partitions: the ISO, an EFI partition and a small gap (all hidden from Windows), `FOG_AMB_PERSIST` (ext4) and the last 512 MiB (256 MiB on Lite) as the exFAT `SM_EXCHANGE` partition ([EXCHANGE](EXCHANGE.md)). The collector's encryption helper `age.exe` is fetched for you on a fresh clone (`build/ensure-age.sh`, pinned and checksummed; needs network the first time, and the build stops if it cannot be had, unless `ALLOW_NO_AGE=1`). `mkfs.exfat` (package `exfatprogs`) is needed on the build PC.
 
 **Test before writing** (UEFI with Secure Boot):
 ```bash

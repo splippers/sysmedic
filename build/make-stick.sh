@@ -11,6 +11,7 @@ LITE=${LITE:-0}                    # Stick Lite: cloud AI only, so no Ollama run
 HERE=$(dirname "$(readlink -f "$0")")                      # the repo's build/ (the kit's copy is a symlink to it)
 XCHG_MIB=${XCHG_MIB:-$( [ "$LITE" = 1 ] && echo 256 || echo 512 )}    # exchange partition size (the Windows-readable one); 0 = none
 XCHG_COLLECTOR=${XCHG_COLLECTOR:-$HERE/../tools/windows-collector}
+[ "$XCHG_MIB" -gt 0 ] && "$HERE/ensure-age.sh" "$XCHG_COLLECTOR"      # a fresh clone has no age.exe (git-ignored): fetch it before touching the drive
 # Ollama runtime and models: from the kit if bootstrap.sh fetched them, else this PC's own Ollama install
 OLLAMA_SRC_MODELS=$( [ -d ollama-models/manifests ] && echo "$PWD/ollama-models" || echo /usr/share/ollama/.ollama/models )
 OLLAMA_BIN=$( [ -x downloads/ollama/bin/ollama ] && echo downloads/ollama/bin/ollama || echo /usr/local/bin/ollama )

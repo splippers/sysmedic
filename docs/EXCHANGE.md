@@ -108,7 +108,7 @@ Why it fits: it can be created on Windows with one `age.exe` and no driver, inst
 - Tampering is detected (age authenticates the container; evidence hashes are checked; the envelope's hash catches a swapped file). It does **not** prove who made a snapshot: anyone with the public key (which is on the exchange partition) can create one, so treat a snapshot as evidence from whoever held the drive, not as signed testimony. Signing collectors is possible later.
 - The public key, the volume id, snapshot ids, sizes and times, and the collector version are visible in plaintext. Hostnames and all evidence are not.
 - If the passphrase is forgotten the snapshots are unrecoverable by design.
-- `age.exe` is not stored in git. `tools/windows-collector/fetch-age.sh` downloads a pinned release (v1.2.1) and checks the SHA-256 pinned in the script. That pin was taken from the release at the time it was added; it stops a changed or corrupted download but does not itself prove authenticity (build age from source at the tag to cross-check). Change version and hash together, in one reviewed commit.
+- `age.exe` is not stored in git. `build/ensure-age.sh` (run by `make-stick.sh` and `bootstrap.sh caddy` before they write anything; it stops the build if the file cannot be had, unless `ALLOW_NO_AGE=1`) calls `tools/windows-collector/fetch-age.sh`, which downloads a pinned release (v1.2.1) and checks the SHA-256 pinned in the script. That pin was taken from the release at the time it was added; it stops a changed or corrupted download but does not itself prove authenticity (build age from source at the tag to cross-check). Change version and hash together, in one reviewed commit.
 
 ## 6. Privacy and consent (unchanged principles)
 

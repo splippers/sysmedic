@@ -216,6 +216,50 @@ class Populate(unittest.TestCase):
             self.assertIn(phrase, t)
 
 
+class EnsureAge(unittest.TestCase):
+    """A fresh clone has no age.exe (git-ignored): the build fetches it first, and refuses to go on without it."""
+    ENSURE = REPO / "build/ensure-age.sh"
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def ensure(self, **env):
+        return run(self.ENSURE, self.d, env={**os.environ, **env})
+
+    def fetcher(self, body):
+        f = self.d / "fetch-age.sh"
+        f.write_text("#!/bin/bash\n" + body)
+        f.chmod(0o755)
+
+    def test_present_is_left_alone(self):
+        (self.d / "age.exe").write_bytes(b"MZ")
+        self.fetcher("exit 1")                       # would fail if it were called
+        self.assertEqual(self.ensure().returncode, 0)
+
+    def test_missing_is_fetched(self):
+        self.fetcher('echo MZ > "$(dirname "$0")/age.exe"')
+        self.assertEqual(self.ensure().returncode, 0)
+        self.assertTrue((self.d / "age.exe").exists())
+
+    def test_failed_fetch_stops_the_build(self):
+        self.fetcher("exit 1")
+        r = self.ensure()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("age.exe", r.stderr)
+
+    def test_allow_no_age_builds_with_a_warning(self):
+        r = self.ensure(ALLOW_NO_AGE="1")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("warning", r.stderr)
+
+    def test_build_scripts_call_it_before_writing(self):
+        ms = MAKE_STICK.read_text()
+        self.assertLess(ms.index("ensure-age.sh"), ms.index("sgdisk"))
+        bs = (REPO / "build/bootstrap.sh").read_text()
+        self.assertLess(bs.index("ensure-age.sh"), bs.index("sgdisk -Z"))
+
+
 class CollectorScript(unittest.TestCase):
     """The collector is evidence-only and read-only: guard its text, since Windows can't be run here."""
 

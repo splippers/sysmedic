@@ -173,6 +173,7 @@ cmd_stick_base() {
 cmd_caddy() {
     local target=${1:?usage: bootstrap.sh caddy /dev/sdX | FILE.img} dev loop= m=caddy-root
     need sgdisk mkfs.vfat mkfs.ext4 unsquashfs rsync
+    "$REPO/build/ensure-age.sh" "$REPO/tools/windows-collector"     # fetch age.exe (git-ignored) before the disk is wiped
     [ -f "$(iso_path)" ] && [ -d ollama-models ] || die "run ./bootstrap.sh fetch first"
     if [ -b "$target" ]; then
         dev=$target
