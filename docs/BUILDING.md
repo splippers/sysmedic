@@ -1,21 +1,21 @@
 # Building SysMedic from scratch
 
-How to make a SysMedic **stick** or **caddy** starting from nothing but a build PC, the internet and this repo: the stock Ubuntu 24.04 ISO is downloaded, turned into SysMedic's system, and written to a drive. Once a drive exists, keep it current with `sysmedic-deploy` ([EDITIONS-AND-DEPLOY](EDITIONS-AND-DEPLOY.md)).
+How to make any of the three SysMedic builds (**stick**, **Stick Lite** and **caddy**) starting from nothing but a build PC, the internet and this repo. Nothing the build needs lives outside the repo or the downloads below: the stock Ubuntu 24.04 ISO is downloaded, turned into SysMedic's system, and written to a drive. Once a drive exists, keep it current with `sysmedic-deploy` ([EDITIONS-AND-DEPLOY](EDITIONS-AND-DEPLOY.md)).
 
-| | Stick | Caddy |
-|---|---|---|
-| Result | Live USB (read-only system + persistence partition) | Ubuntu installed on an external SSD (writable) |
-| Drive | 16 GB+ USB stick (USB 3 recommended: [why](CAPABILITIES.md)) | 128 GB+ SSD in a USB 3 enclosure |
-| Build time | ~45 min (+ ~20 min to write a USB 2.0 stick) | ~30 min |
-| Downloads | ~4 GB ISO, ~7 GB AI models, ~2 GB packages (shared by both) | same kit |
+| | Stick | Stick Lite | Caddy |
+|---|---|---|---|
+| Result | Live USB (read-only system + persistence partition) | The same, trimmed, cloud AI only ([STICK-LITE](STICK-LITE.md)) | Ubuntu installed on an external SSD (writable) |
+| Drive | 8 GB+ USB stick (USB 3 recommended: [why](CAPABILITIES.md)) | 4 GB+ USB stick | 128 GB+ SSD in a USB 3 enclosure |
+| Build time | ~45 min (+ ~20 min to write a USB 2.0 stick) | a few minutes on top of the stick build | ~30 min |
+| Downloads | ~4 GB ISO, ~7 GB AI models, ~2 GB packages (one kit serves all three) | same kit | same kit |
 
 ## 1. Build PC prerequisites
 
-An Ubuntu 24.04 (or newer) PC with **80 GB free**, internet and `sudo`:
+An Ubuntu 24.04 (or newer) PC with **80 GB free** (the kit grows to about 40 GB), internet and `sudo`. Nothing else is needed: the base image is the stock Ubuntu ISO, which `fetch` downloads and verifies.
 
 ```bash
 sudo apt install git curl zstd python3 squashfs-tools xorriso grub-pc-bin gdisk parted \
-                 dosfstools e2fsprogs rsync util-linux qemu-system-x86 ovmf
+                 dosfstools e2fsprogs exfatprogs rsync util-linux qemu-system-x86 ovmf
 ```
 
 `grub-pc-bin` provides the hybrid MBR the stick boots from on BIOS PCs; `qemu-system-x86` and `ovmf` are for testing before you write a drive. Nothing else is installed on the PC: Ollama, OpenCode and the models are downloaded into the kit.
@@ -23,12 +23,12 @@ sudo apt install git curl zstd python3 squashfs-tools xorriso grub-pc-bin gdisk 
 ## 2. Get the repo and make a kit
 
 ```bash
-git clone git@github.com:splippers/sysmedic.git ~/sysmedic-repo
+git clone https://github.com/splippers/sysmedic.git ~/sysmedic-repo
 ~/sysmedic-repo/build/bootstrap.sh kit ~/sysmedic-kit
 cd ~/sysmedic-kit
 ```
 
-A **kit** is a working folder whose scripts link back to the repo (`staging`, `sysmedic-deploy`, `build-iso.sh`, `make-stick.sh`, `vm.py`, `bootstrap.sh`). Edit the repo, build from the kit.
+A **kit** is a working folder whose scripts link back to the repo (`staging`, `lite`, `sysmedic-deploy`, `build-iso.sh`, `make-stick.sh`, `vm.py`, `bootstrap.sh`). Edit the repo, build from the kit.
 
 ## 3. Fetch (both editions)
 
@@ -40,6 +40,8 @@ Downloads, with the versions pinned at the top of `build/bootstrap.sh`:
 - **Ubuntu 24.04.5 live-server ISO**, verified against Ubuntu's `SHA256SUMS`
 - **OpenCode 1.18.34** (the latest public release; SysMedic brands it at deploy time)
 - **Ollama 0.23.4** (CPU runtime) and the offline models **qwen2.5:3b** and **qwen2.5:7b**, pulled into `./ollama-models` by a temporary Ollama run from the kit
+- **OpenCode's plugin library** (about 60 MB of npm packages, `downloads/opencode-plugin`), rebuilt by `build/fetch-opencode-plugin.py` from `build/opencode-plugin/package-lock.json`: every package is checked against the lock's sha512, and no npm or Node is needed. Without it OpenCode tries to download the library at start, which fails offline
+- **`age.exe`** for the Windows collector is fetched later, automatically, by the build that writes a drive (`build/ensure-age.sh`)
 
 Run it again any time; finished downloads are kept.
 
@@ -97,6 +99,17 @@ To try it without a drive first, build into an image file and boot it in QEMU:
 ./bootstrap.sh caddy caddy-test.img  # a 40 GB sparse file
 # then the QEMU command above with file=caddy-test.img
 ```
+
+## 4c. Build a Stick Lite
+
+Same kit, same `fetch`, same `stick-base` as the stick; the Lite image is a trimmed copy of the stick's system:
+
+```bash
+./sysmedic-deploy --stick-lite-image     # sysmedic-lite.iso + stick-lite-test.img (boot-test in QEMU first)
+./sysmedic-deploy --stick-lite /dev/sdX  # write it to a 4 GB+ stick
+```
+
+What is trimmed is listed in `build/lite/purge-packages.txt` and `build/lite/purge-firmware.txt` (the kit's `lite` link points there). See [STICK-LITE](STICK-LITE.md).
 
 ## 5. After building
 

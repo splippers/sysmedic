@@ -64,7 +64,7 @@ Step by step: **[docs/FIELD-GUIDE.md](docs/FIELD-GUIDE.md)**. On the drive itsel
 | [AI-ASSISTANTS](docs/AI-ASSISTANTS.md) | Cloud and offline AI, approvals, models, limits |
 | [STICK-LITE](docs/STICK-LITE.md) | **Stick Lite**: a cloud-AI-only edition for 4 GB sticks (about 1 GB image) |
 | [EXCHANGE](docs/EXCHANGE.md) | The Windows-readable exchange partition, the evidence collector, encrypted portable snapshots |
-| [BUILDING](docs/BUILDING.md) | **Build a stick or caddy from scratch** (Ubuntu ISO → SysMedic), test in QEMU |
+| [BUILDING](docs/BUILDING.md) | **Build a stick, Stick Lite or caddy from scratch** (Ubuntu ISO → SysMedic), test in QEMU |
 | [EDITIONS-AND-DEPLOY](docs/EDITIONS-AND-DEPLOY.md) | Caddy vs stick, the build kit, `sysmedic-deploy`, versions, testing |
 | [IMPROVING-SYSMEDIC](docs/IMPROVING-SYSMEDIC.md) | Transcripts, `claude-review.md`, feedback, collecting sessions |
 | [CHANGELOG](docs/CHANGELOG.md) · [ROADMAP](ROADMAP.md) | History and what's next |

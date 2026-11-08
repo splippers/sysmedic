@@ -103,7 +103,7 @@ copy_ollama() {        # DEST/ollama: CPU + Vulkan runtime + Qwen models (the la
 cmd_kit() {
     local k=${1:?usage: bootstrap.sh kit DIR}
     mkdir -p "$k"; k=$(cd "$k" && pwd)
-    for f in staging sysmedic-deploy build-iso.sh make-stick.sh vm.py bootstrap.sh; do ln -sfn "$REPO/build/$f" "$k/$f"; done
+    for f in staging lite sysmedic-deploy build-iso.sh make-stick.sh vm.py bootstrap.sh; do ln -sfn "$REPO/build/$f" "$k/$f"; done
     say "Kit ready: $k  (scripts link to $REPO/build)"
     echo "    cd $k && ./bootstrap.sh fetch"
 }
@@ -139,6 +139,8 @@ cmd_fetch() {
     for _ in $(seq 1 30); do curl -sf http://127.0.0.1:11499/api/version >/dev/null && break; sleep 1; done
     for m in $MODELS; do OLLAMA_HOST=127.0.0.1:11499 downloads/ollama/bin/ollama pull "$m"; done
     kill $pid; trap - EXIT
+    say "OpenCode plugin library (npm packages checked against build/opencode-plugin/package-lock.json)"
+    python3 "$REPO/build/fetch-opencode-plugin.py" "$PWD/downloads/opencode-plugin"
     say "Fetched. Next: ./bootstrap.sh stick-base   (and/or ./bootstrap.sh caddy TARGET)"
 }
 

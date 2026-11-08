@@ -68,19 +68,18 @@ A caddy can update itself without the build PC: **menu U**, or `sysmedic-update 
 
 ## The build directory
 
-`~/sysmedic-build` holds the large artifacts and links its sources to this repo:
-- `root/` (the stick's live root filesystem)
-- `iso/` (the original v1 ISO tree, mounted read-only)
-- `kernel/` (the stick's vmlinuz + initrd)
-- `clamav/` (signatures)
-- `sysmedic-v2.iso`, `stick-test.img`
-- `tests/` (patient disk images)
-
-Rebuilding from scratch needs the Ubuntu Server 24.04.3 live ISO and a pass through the original remaster steps; `root/` is the maintained state.
+A build folder (a "kit"; `~/sysmedic-build` on the main build PC) holds the large artifacts and links its sources to this repo. Everything in it can be rebuilt from a clean clone: [BUILDING](BUILDING.md) (`bootstrap.sh kit`, `fetch`, `stick-base`).
+- `downloads/` (the Ubuntu ISO, OpenCode, Ollama, OpenCode's plugin library; made by `bootstrap.sh fetch`) and `ollama-models/`
+- `root/` (the stick's live root filesystem; `stick-base`, then kept current by deploys), `root-lite/` (its trimmed copy for Lite)
+- `iso/` (the base image, mounted read-only by `build-iso.sh`: the stock Ubuntu ISO, or an older `sysmedic-v1-hybrid.iso` if one sits in the kit)
+- `kernel/` (the stick's vmlinuz + initrd), `efi.img`, `clamav/` (signatures)
+- `sysmedic-v2.iso`, `sysmedic-lite.iso`, `stick-test.img`, `stick-lite-test.img` (made by `--stick-image` / `--stick-lite-image`)
+- `stick-sessions-backup/` (made by a stick deploy: the stick's sessions and exchange data, kept so a rewrite can restore them)
+- `tests/` (patient disk images; optional, for the tests that need them)
 
 **Stick size:** a 16 GB or larger stick gets both qwen2.5 models; an **8 GB stick works too** and gets the 3B alone (the stick only ever runs the 3B), about 3.8 GB used with roughly 3 GB left for the vault and sessions. `make-stick.sh` chooses by drive size (under 14 GB = 3B only; override with `SYSMEDIC_MODELS="…"`). On such a stick `sysmedic-ask --model qwen2.5:7b` isn't available.
 
-Offline AI models (Ollama runtime + qwen2.5 3b/7b) are copied from the build PC's Ollama store by `make-stick.sh` (stick) or once onto the caddy's `/srv/sysmedic/ollama`.
+Offline AI models (Ollama runtime + qwen2.5 3b/7b) are copied by `make-stick.sh` (stick) from the kit's `ollama-models/` (or, if the kit has none, this PC's own Ollama store), or once onto the caddy's `/srv/sysmedic/ollama`.
 
 ## Testing (QEMU)
 
