@@ -78,8 +78,10 @@ elif [ -t 0 ] && [ "$console" = /dev/tty1 ] && [ -z "$AMBULANCE_LAUNCHED" ]; the
     /usr/local/sbin/start-ollama && ui_ok "Offline AI ready" "$(/usr/local/sbin/sysmedic-ai-device status 2>/dev/null | sed 's/^ *//')"
     echo ''
 
-    # Read-only triage first: the engineer (and the AI) start from facts
-    /usr/local/bin/sysmedic-scan
+    # Read-only triage first: the engineer (and the AI) start from facts. The green text rain plays while it runs
+    # (a key press skips the rain, never the scan; touch /etc/sysmedic/no-rain to turn it off); then the findings show.
+    /usr/local/bin/sysmedic-with-rain --status "Scanning this PC…" --status "Customer disks are write-protected." \
+        -- /usr/local/bin/sysmedic-scan
 
     # Phone dashboard (view + job notes); the QR code is on console 2
     setsid -f /usr/local/bin/sysmedic-dash --serve >/dev/null 2>&1 </dev/null

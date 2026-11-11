@@ -1,0 +1,33 @@
+#!/bin/bash
+# sysmedic-with-rain [--status LINE]... -- COMMAND [ARGS]
+# Play the green text rain while COMMAND runs, then clear it and show what the command printed. A key press skips
+# the rain, never the command. Without a terminal, a rain program, or with /etc/sysmedic/no-rain, it just runs COMMAND.
+RAIN=${SYSMEDIC_RAIN:-/usr/local/lib/sysmedic/rain.py}
+STATE=${SYSMEDIC_RAIN_STATE:-/run/sysmedic}
+status=()
+while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    [ "$1" = --status ] && { status+=(--status "$2"); shift; }
+    shift
+done
+[ "${1:-}" = -- ] && shift
+[ $# -gt 0 ] || { echo "usage: sysmedic-with-rain [--status LINE]... -- COMMAND [ARGS]" >&2; exit 2; }
+if [ ! -t 1 ] || [ -e "${SYSMEDIC_NO_RAIN:-/etc/sysmedic/no-rain}" ] || [ ! -f "$RAIN" ] || ! command -v script >/dev/null; then
+    exec "$@"
+fi
+mkdir -p "$STATE"
+done_flag="$STATE/rain.done"; screen="$STATE/rain-output.txt"
+rm -f "$done_flag" "$screen"
+exec 3<&0                                   # a background job would otherwise get /dev/null, and could not see keys
+python3 "$RAIN" --until-file "$done_flag" --min "${SYSMEDIC_RAIN_MIN:-3}" "${status[@]}" <&3 2>/dev/null &
+rain_pid=$!
+cmd=$(printf '%q ' "$@")
+script -qec "$cmd" "$screen" </dev/null >/dev/null 2>&1
+rc=$?
+touch "$done_flag"
+wait "$rain_pid" 2>/dev/null
+exec 3<&-
+clear
+# script's first and last lines are its own "started"/"done" notes
+if [ -s "$screen" ]; then sed '1d;$d' "$screen"; else "$@"; fi
+rm -f "$done_flag" "$screen"
+exit $rc

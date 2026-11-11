@@ -2,7 +2,9 @@
 """preview.py OUT.png [--calm] [--seed N] — one rain frame as a PNG (for review without a screen)."""
 import sys
 from PIL import Image, ImageDraw, ImageFont
-import rain
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../build/staging/shared/usr/local/lib/sysmedic"))
+import rain  # noqa: E402
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 COLS, ROWS, CW, CH = 100, 34, 12, 22

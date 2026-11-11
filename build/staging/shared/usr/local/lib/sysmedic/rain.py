@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """rain — SysMedic's green text rain (prototype), for idle and boot screens.
 
-  rain.py [--status LINE]... [--seconds N] [--calm] [--palette]
+  rain.py [--status LINE]... [--seconds N] [--until-file FILE [--min N]] [--calm] [--palette]
 
-Draws falling green glyphs with the SYSMEDIC logo and your status lines in a clear box on top: the rain never runs
+With --until-file it plays until that file exists (at least --min seconds), for covering a job that takes a
+while; a key press stops it early. Draws falling green glyphs with the SYSMEDIC logo and your status lines in a clear box on top: the rain never runs
 behind text you need to read. Any key stops it. --calm slows it right down and thins it. Needs only Python; on the
 Linux console (16 colours) it remaps a few palette slots for the greens and puts them back on exit (--palette forces
 that on a terminal emulator too, which otherwise gets 24-bit colour).
@@ -15,6 +16,7 @@ import os
 import random
 import select
 import shutil
+import subprocess
 import sys
 import termios
 import time
@@ -100,8 +102,7 @@ class Rain:
 
 def logo_lines():
     """The three-row SYSMEDIC from logo.py (half blocks)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    sys.path.insert(0, os.path.join(here, "../../build/staging/shared/usr/local/lib/sysmedic"))
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import logo
     cells, width = logo.cells()
     rows = [[" "] * width for _ in range(3)]
@@ -117,23 +118,35 @@ def make_box(cols, rows, status):
     return (max(1, (rows - len(lines)) // 2), max(0, (cols - w) // 2), lines)
 
 
-def paint(fr, truecolor):
-    s = ["\033[H"]
-    for row in fr:
-        cur = None
-        for ch, lv in row:
-            if lv != cur:
-                cur = lv
-                if lv == 0:
-                    s.append("\033[0m")
-                elif lv == 6:
-                    s.append("\033[1;97m" if truecolor else "\033[1;37m")
-                else:
-                    lv = {7: 4, 8: 5}.get(lv, lv)
-                    s.append(("\033[1;38;2;%d;%d;%dm" % RGB[lv]) if truecolor else "\033[1;38;5;%dm" % SLOTS[lv])
-            s.append(ch)
-        s.append("\033[0m\n")
-    return "".join(s[:-1])
+def sgr(lv, truecolor):
+    if lv == 0:
+        return "\033[0m"
+    if lv == 6:
+        return "\033[1;97m" if truecolor else "\033[1;37m"
+    lv = {7: 4, 8: 5}.get(lv, lv)
+    return ("\033[1;38;2;%d;%d;%dm" % RGB[lv]) if truecolor else "\033[1;38;5;%dm" % SLOTS[lv]
+
+
+def paint(fr, truecolor, prev=None):
+    """The frame as terminal output. With the previous frame only the cells that changed are sent: the console
+    records its output (the visit transcript), so a full redraw every tenth of a second would fill it with rain."""
+    s = []
+    for r, row in enumerate(fr):
+        cur, c = None, 0
+        while c < len(row):
+            if prev is not None and prev[r][c] == row[c]:
+                c += 1
+                continue
+            s.append("\033[%d;%dH" % (r + 1, c + 1))
+            while c < len(row) and (prev is None or prev[r][c] != row[c]):
+                ch, lv = row[c]
+                if lv != cur:
+                    cur = lv
+                    s.append(sgr(lv, truecolor))
+                s.append(ch)
+                c += 1
+    s.append("\033[0m")
+    return "".join(s)
 
 
 def set_palette(on):
@@ -141,7 +154,11 @@ def set_palette(on):
         for lv, slot in SLOTS.items():
             sys.stdout.write("\033]P%X%02X%02X%02X" % ((slot,) + RGB[lv]))
     else:
-        sys.stdout.write("\033]R")     # reset to the system palette (SysMedic's own set again at next setvtrgb)
+        sys.stdout.write("\033]R")     # back to the default palette, then SysMedic Night if this drive has it
+        sys.stdout.flush()
+        vt = os.environ.get("SYSMEDIC_VTRGB", "/etc/sysmedic/vtrgb")
+        if os.path.exists(vt) and shutil.which("setvtrgb"):
+            subprocess.run(["setvtrgb", vt], stderr=subprocess.DEVNULL)
     sys.stdout.flush()
 
 
@@ -149,6 +166,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--status", action="append", default=[])
     ap.add_argument("--seconds", type=float, default=0)
+    ap.add_argument("--until-file")
+    ap.add_argument("--min", type=float, default=3)
+    ap.add_argument("--max", type=float, default=25)      # with --until-file: give up waiting (the job hung) after this long
     ap.add_argument("--calm", action="store_true")
     ap.add_argument("--palette", action="store_true")
     a = ap.parse_args()
@@ -166,10 +186,15 @@ def main():
         sys.stdout.write("\033[?25l\033[2J")
         if not truecolor:
             set_palette(True)
-        end = time.time() + a.seconds if a.seconds else None
-        while end is None or time.time() < end:
+        start = time.time()
+        end = start + (a.seconds or (a.max if a.until_file else 0)) or None
+        prev = None
+        while (end is None or time.time() < end) and not (
+                a.until_file and os.path.exists(a.until_file) and time.time() - start >= a.min):
             rain.step()
-            sys.stdout.write(paint(rain.frame(box), truecolor))
+            frame = rain.frame(box)
+            sys.stdout.write(paint(frame, truecolor, prev))
+            prev = frame
             sys.stdout.flush()
             if select.select([sys.stdin], [], [], 0.09 if not a.calm else 0.16)[0]:
                 break
