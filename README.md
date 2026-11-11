@@ -1,5 +1,7 @@
 # SysMedic
 
+*A CraicKen Studio project, part of CraicKen / Hyperiteration.*
+
 **An AI-assisted rescue system for field engineers.** Boot a broken PC from SysMedic. In about a minute it tells you, in plain English, what's wrong with the machine. An AI assistant then helps you fix it, while the customer's disks stay protected against any write you haven't explicitly allowed.
 
 SysMedic runs on Ubuntu 24.04 with the 7.0 HWE kernel. It boots on UEFI (with Secure Boot on) and legacy BIOS machines.
