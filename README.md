@@ -49,7 +49,7 @@ Full list: **[docs/CAPABILITIES.md](docs/CAPABILITIES.md)**
 4. `menu` opens the rescue menu: Wi-Fi (2), triage (4), Windows tools (6), unlock/lock (11/12), job report (13), phone dashboard (14), hardware tests (16).
 5. Finish with `sysmedic-lock`, the **job report** (menu 3), and a clean shutdown.
 
-Step by step: **[docs/FIELD-GUIDE.md](docs/FIELD-GUIDE.md)**. On the drive itself: `sysmedic-help`.
+Step by step: **[docs/FIELD-GUIDE.md](docs/FIELD-GUIDE.md)**. On the drive itself: `sysmedic-help`. New to SysMedic? Run `sysmedic-learn` (menu **T**) for short guided lessons.
 
 ---
 

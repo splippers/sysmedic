@@ -18,10 +18,11 @@ def main():
     img = Image.new("RGB", (COLS * CW, ROWS * CH), (3, 8, 5))
     d = ImageDraw.Draw(img)
     f = ImageFont.truetype(FONT, 18)
+    r.t = 6                                              # where the logo highlight is, for the picture
     for y, row in enumerate(r.frame(box)):
         for x, (ch, lv) in enumerate(row):
             if ch != " ":
-                d.text((x * CW, y * CH), ch, font=f, fill=(235, 255, 240) if lv == 6 else rain.RGB[lv])
+                d.text((x * CW, y * CH), ch, font=f, fill={6: (235, 255, 240), 7: rain.RGB[4], 8: rain.RGB[5]}.get(lv) or rain.RGB[lv])
     img.save(out)
 
 

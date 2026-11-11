@@ -21,7 +21,7 @@ class RainTests(unittest.TestCase):
         for dr in range(len(lines)):
             for dc in range(w):
                 ch, lv = fr[r0 + dr][c0 + dc]
-                self.assertIn(lv, (0, 6))
+                self.assertIn(lv, (0, 6, 7, 8))
 
     def test_runs_on_a_terminal_and_restores_it(self):
         m, s = pty.openpty()

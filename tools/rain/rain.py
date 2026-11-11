@@ -20,8 +20,10 @@ import termios
 import time
 import tty
 
+LOGO_ROWS = 3
 GLYPHS = "0123456789ABCDEFXZ:<>=+*#$%&"
-# Levels, dim to bright: 1 faint tail, 2 dark green, 3 green, 4 bright green, 5 head (near white)
+# Levels, dim to bright: 1 faint tail, 2 dark green, 3 green, 4 bright green, 5 head (near white);
+# in a frame 6 is status text, 7 the logo (bright green), 8 the logo highlight
 RGB = {1: (0, 64, 28), 2: (0, 120, 48), 3: (0, 190, 70), 4: (60, 255, 110), 5: (215, 255, 225)}
 # Console slots remapped for the rain (slot, level); the SysMedic Night palette's own greens are mint, not rain green
 SLOTS = {1: 8, 2: 2, 3: 10, 4: 12, 5: 15}   # 16-colour fallback: only 5 usable levels, bright ones use bold-less slots
@@ -32,20 +34,22 @@ class Rain:
         self.cols, self.rows, self.calm = cols, rows, calm
         self.rng = random.Random(seed)
         self.drops = [None] * cols
+        self.t = 0
         self.glyph = [[self.rng.choice(GLYPHS) for _ in range(cols)] for _ in range(rows)]
         for _ in range(rows * 2):            # run it in so the first frame is already raining
             self.step()
 
     def _spawn(self, c):
         r = self.rng
-        n = r.randint(6, max(7, self.rows - 2))
+        n = r.randint(8, max(9, self.rows))
         return {"y": float(-r.randint(0, self.rows)), "v": r.uniform(0.25, 0.6) if self.calm else r.uniform(0.5, 1.4), "n": n}
 
     def step(self):
+        self.t += 1
         for c in range(self.cols):
             d = self.drops[c]
             if d is None:
-                if self.rng.random() < (0.01 if self.calm else 0.03):
+                if self.rng.random() < (0.012 if self.calm else 0.045):
                     self.drops[c] = self._spawn(c)
                 continue
             d["y"] += d["v"]
@@ -73,14 +77,24 @@ class Rain:
         if box:
             r0, c0, lines = box
             w = max(len(l) for l in lines)
-            for dr in range(-1, len(lines) + 1):
-                for dc in range(-3, w + 3):
-                    if 0 <= r0 + dr < self.rows and 0 <= c0 + dc < self.cols:
-                        out[r0 + dr][c0 + dc] = (" ", 0)
+            top, bot, left, right = r0 - 1, r0 + len(lines), c0 - 3, c0 + w + 2
+            for r in range(top, bot + 1):                    # clear the box, then draw its frame
+                for c in range(left, right + 1):
+                    if 0 <= r < self.rows and 0 <= c < self.cols:
+                        edge_r, edge_c = r in (top, bot), c in (left, right)
+                        ch = " "
+                        if edge_r or edge_c:
+                            ch = {(True, True): "┌┐└┘"[(r == bot) * 2 + (c == right)]}.get((edge_r, edge_c), "─" if edge_r else "│")
+                        out[r][c] = (ch, 3 if ch != " " else 0)
+            sweep = (self.t * 2) % (w + 24) - 12             # a highlight crossing the logo every few seconds
             for i, l in enumerate(lines):
                 for j, ch in enumerate(l):
                     if ch != " " and 0 <= r0 + i < self.rows and 0 <= c0 + j < self.cols:
-                        out[r0 + i][c0 + j] = (ch, 6)
+                        if i < LOGO_ROWS:
+                            lv = 8 if abs(j - sweep) < 3 else 7
+                        else:
+                            lv = 6
+                        out[r0 + i][c0 + j] = (ch, lv)
         return out
 
 
@@ -114,10 +128,9 @@ def paint(fr, truecolor):
                     s.append("\033[0m")
                 elif lv == 6:
                     s.append("\033[1;97m" if truecolor else "\033[1;37m")
-                elif truecolor:
-                    s.append("\033[38;2;%d;%d;%dm" % RGB[lv])
                 else:
-                    s.append("\033[38;5;%dm" % SLOTS[lv])
+                    lv = {7: 4, 8: 5}.get(lv, lv)
+                    s.append(("\033[1;38;2;%d;%d;%dm" % RGB[lv]) if truecolor else "\033[1;38;5;%dm" % SLOTS[lv])
             s.append(ch)
         s.append("\033[0m\n")
     return "".join(s[:-1])

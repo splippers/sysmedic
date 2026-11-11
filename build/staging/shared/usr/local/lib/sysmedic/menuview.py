@@ -18,6 +18,7 @@ EDITION = open("/etc/sysmedic/edition").read().strip() if os.path.exists("/etc/s
 VERSION = open("/etc/sysmedic/version").read().strip() if os.path.exists("/etc/sysmedic/version") else "dev"
 
 CARDS = [
+    ("Learn", [("T", "Tutorials: step-by-step lessons")]),
     ("Diagnose & test", [("1", "Triage scan (read-only)"), ("2", "Tests: hardware & software"),
                          ("3", "Job report for the customer"), ("4", "Phone dashboard (QR code)")]),
     ("AI", [("5", "AI rescue assistant (OpenCode, cloud)"), ("O", "Offline AI assistant: not on SysMedic Lite" if os.path.exists("/etc/sysmedic/lite") else "Offline AI assistant (no internet)"),

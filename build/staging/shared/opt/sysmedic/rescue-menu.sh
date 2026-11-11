@@ -288,6 +288,10 @@ while true; do
             fi
             pause
             ;;
+        t|T)
+            clear
+            /usr/local/bin/sysmedic-learn
+            ;;
         v|V)
             clear
             ui_banner "Encrypted vault" "sessions, backups and transcripts on this drive, encrypted (LUKS2)"

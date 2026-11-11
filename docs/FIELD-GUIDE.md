@@ -46,6 +46,7 @@ Low RAM: the cloud AI needs 4 GB and an AVX-capable CPU, and the offline AI need
 
 | Key | |
 |---|---|
+| T | **Tutorials**: short step-by-step lessons (`sysmedic-learn`), none of which change the customer's machine |
 | 1 | Triage scan (re-run, read-only) |
 | 2 | **Tests** (hardware & software; also on the phone and as OpenCode slash commands) |
 | 3 | **Job report** for the customer |

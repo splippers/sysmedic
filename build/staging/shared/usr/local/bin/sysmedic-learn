@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""sysmedic-learn — step-by-step tutorials for SysMedic, in the console.
+
+  sysmedic-learn               list the lessons and pick one
+  sysmedic-learn NAME          start a lesson by (part of) its name, e.g. bitlocker
+  sysmedic-learn --print NAME  print a whole lesson as plain text (to read or paste)
+
+In a lesson: Enter = next step, b = back, r = run the example (only for read-only commands), l = lessons, q = quit.
+Commands that change things are shown, never run: you type them yourself, usually on console 2 (Alt+F2).
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+import termios
+import textwrap
+import tty
+
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/sysmedic"))
+import lessons  # noqa: E402
+from ui import UI  # noqa: E402
+
+PLACE = re.compile(r"^\0(\d+)$")
+
+
+def inline(ui, text):
+    """**bold** and `code` marks: styled on a terminal, plain in --print."""
+    text = re.sub(r"\*\*(.+?)\*\*", lambda m: ui.c("bold", m.group(1)), text)
+    return re.sub(r"`([^`]+)`", lambda m: ui.c("accent", m.group(1)), text)
+
+
+def wrap(ui, text, width, first="  ", rest="  "):
+    # wrap on the plain text, then style, so the marks do not count towards the width
+    plain = re.sub(r"\*\*(.+?)\*\*", r"\1", re.sub(r"`([^`]+)`", r"\1", text))
+    lines = textwrap.wrap(plain, width, initial_indent=first, subsequent_indent=rest)
+    if not ui.color:
+        return lines
+    # restyle: walk the marked-up text by words, keeping the wrap points found on the plain text
+    marked = inline(ui, text).split(" ")
+    out, i = [], 0
+    for line in lines:
+        n = len(line.split())
+        out.append(" ".join(marked[i:i + n]).join([first if not out else rest, ""]))
+        i += n
+    return out
+
+
+LIST = re.compile(r"^(- |\d+\. )")
+
+
+def render(ui, lesson, n):
+    """One step as text; command blocks are drawn as boxes. Returns (text, [runnable commands])."""
+    step = lesson["steps"][n]
+    width = min(ui.width, 100) - 4
+    out = [ui.banner(lesson["title"], f"Step {n + 1} of {len(lesson['steps'])}  ·  {lesson.get('time', '')}"), "",
+           "  " + ui.c("accent", step["title"]), ""]
+    runnable, para = [], []
+
+    def gap():
+        if out[-1] != "":
+            out.append("")
+
+    def flush():
+        if para:
+            out.extend(wrap(ui, " ".join(para), width))
+            para.clear()
+            out.append("")
+
+    for line in step["body"]:
+        m = PLACE.match(line)
+        if m:
+            flush()
+            kind, text = step["blocks"][int(m.group(1))]
+            can_run = kind == "run" and lessons.run_allowed(text.strip())
+            gap()
+            out.append(ui.c("ok", "  safe to run: press r") if can_run else ui.c("dim", "  type it yourself"))
+            out.extend("  " + ui.c("accent", "│ ") + t for t in text.splitlines())
+            out.append("")
+            if can_run:
+                runnable.append(text.strip())
+        elif line.startswith("|"):
+            flush()
+            out.append("  " + line)
+        elif LIST.match(line):
+            flush()
+            out.extend(wrap(ui, line, width, "  ", "    "))
+        elif line.strip() == "":
+            flush()
+            gap()
+        else:
+            para.append(line.strip())
+    flush()
+    gap()
+    for w in step["why"]:
+        out.extend(ui.c("dim", l) for l in wrap(ui, "Why: " + w, width, "  ", "       "))
+        out.append("")
+    return "\n".join(out), runnable
+
+
+def getkey():
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return "\x03" if ch == "\x03" else ch
+
+
+def play(ui, lesson):
+    n = 0
+    total = len(lesson["steps"])
+    while True:
+        text, runnable = render(ui, lesson, n)
+        print("\033[2J\033[H" + text)
+        hints = ["Enter next" if n < total - 1 else "Enter finish", "b back"] + (["r run it"] if runnable else []) + ["l lessons", "q quit"]
+        print("  " + ui.c("dim", "  ·  ".join(hints)))
+        key = getkey()
+        if key in ("q", "Q", "\x03", "\x04"):
+            return "quit"
+        if key in ("l", "L"):
+            return "list"
+        if key in ("b", "B") and n > 0:
+            n -= 1
+        elif key in ("r", "R") and runnable:
+            print()
+            for cmd in runnable:
+                subprocess.run(cmd, shell=True)
+            print("\n  " + ui.c("dim", "Press Enter to go on…"))
+            sys.stdin.readline()
+        elif key in ("\r", "\n", " "):
+            if n == total - 1:
+                return "done"
+            n += 1
+
+
+def menu(ui, cat):
+    print("\033[2J\033[H" + ui.banner("Tutorials", "short, step-by-step lessons. Nothing here changes the customer's machine."))
+    print()
+    for i, l in enumerate(cat, 1):
+        print(f"  {ui.c('accent', f'{i:>2}')}  {l['title']:<28} {ui.c('dim', l.get('time', '').ljust(7) + l.get('summary', ''))}")
+    print()
+    return input("  Which lesson (number, Enter to quit)? ").strip()
+
+
+def find(cat, name):
+    name = name.lower()
+    return next((l for l in cat if name in l["id"].lower() or name in l["title"].lower()), None)
+
+
+def main():
+    args = sys.argv[1:]
+    cat = lessons.catalogue()
+    if not cat:
+        sys.exit("No tutorials installed.")
+    if args[:1] == ["--print"]:
+        ui = UI(color=False, width=100)
+        picked = [find(cat, args[1])] if len(args) > 1 else cat
+        if None in picked:
+            sys.exit(f"No lesson matching '{args[1]}'.")
+        for l in picked:
+            for i in range(len(l["steps"])):
+                print(render(ui, l, i)[0])
+        return
+    ui = UI()
+    if args:
+        lesson = find(cat, args[0])
+        if not lesson:
+            sys.exit(f"No lesson matching '{args[0]}'. Run sysmedic-learn to list them.")
+        todo = lesson
+    else:
+        todo = None
+    if not sys.stdin.isatty():
+        sys.exit("sysmedic-learn needs a terminal (use --print to read a lesson as text).")
+    while True:
+        if todo is None:
+            pick = menu(ui, cat)
+            if not pick.isdigit() or not 1 <= int(pick) <= len(cat):
+                return
+            todo = cat[int(pick) - 1]
+        res = play(ui, todo)
+        todo = None
+        if res == "quit":
+            print()
+            return
+        if res == "done":
+            print("\033[2J\033[H" + ui.banner("Lesson finished", todo.get("title", "") if todo else ""))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (KeyboardInterrupt, EOFError):
+        print()
