@@ -27,6 +27,10 @@
 7. **A passive network diagnosis** command (link → IP → gateway → DNS → internet, with a verdict).
 8. **APFS read-write**, once a driver builds on current kernels.
 
+Usability (after the priorities above; Phases 0 and 1 are software-only and can run alongside real-hardware validation):
+
+- **An easier SysMedic: a full GUI and tutorials throughout**, proposed in [docs/GUI-AND-TUTORIALS-ROADMAP.md](docs/GUI-AND-TUTORIALS-ROADMAP.md): a task catalogue and Guided Visit on every surface, the Control Centre as the main GUI, tutorials in layers (inline explanations, walkthroughs, practice patients, searchable help, field cards). Awaiting the decisions listed there (D1 to D6).
+
 Windows exchange follow-ups (after the priorities above; none of this blocks them):
 
 9. **Real Windows validation** of the exchange partition and collector (Windows 10 and 11, several USB ports; procedure in [docs/HARDWARE-TESTING.md](docs/HARDWARE-TESTING.md)).

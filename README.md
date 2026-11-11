@@ -66,6 +66,7 @@ Step by step: **[docs/FIELD-GUIDE.md](docs/FIELD-GUIDE.md)**. On the drive itsel
 | [EXCHANGE](docs/EXCHANGE.md) | The Windows-readable exchange partition, the evidence collector, encrypted portable snapshots |
 | [BUILDING](docs/BUILDING.md) | **Build a stick, Stick Lite or caddy from scratch** (Ubuntu ISO → SysMedic), test in QEMU |
 | [EDITIONS-AND-DEPLOY](docs/EDITIONS-AND-DEPLOY.md) | Caddy vs stick, the build kit, `sysmedic-deploy`, versions, testing |
+| [GUI-AND-TUTORIALS-ROADMAP](docs/GUI-AND-TUTORIALS-ROADMAP.md) | **Proposal:** an easier SysMedic with a full GUI and tutorials throughout (phases, decisions, risks) |
 | [IMPROVING-SYSMEDIC](docs/IMPROVING-SYSMEDIC.md) | Transcripts, `claude-review.md`, feedback, collecting sessions |
 | [CHANGELOG](docs/CHANGELOG.md) · [ROADMAP](ROADMAP.md) | History and what's next |
 

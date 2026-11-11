@@ -2,7 +2,7 @@
 
 Many people who use SysMedic are only comfortable in a **WIMP** environment (windows, icons, menus, pointer). The goal is that every console utility on the drive has a window to click, collected in **desktop folders**, so nobody has to type a command. Everything here is open source.
 
-Status: **research and plan** (2026-10-18). Nothing below is installed yet except what the caddy desktop already has (labwc, waybar, fuzzel, Thunar, GNOME Disks, Mousepad, the Control Centre window). Package availability was checked against the Ubuntu 24.04 (noble) `main` + `universe` indexes; sizes are the packages' own installed size, before dependencies.
+Status: **research and plan** (2026-10-18). The order and shape of this work are now set by [GUI-AND-TUTORIALS-ROADMAP](GUI-AND-TUTORIALS-ROADMAP.md) (task-first, one catalogue, the Control Centre as the main GUI); this document remains the tool-by-tool reference. Nothing below is installed yet except what the caddy desktop already has (labwc, waybar, fuzzel, Thunar, GNOME Disks, Mousepad, the Control Centre window). Package availability was checked against the Ubuntu 24.04 (noble) `main` + `universe` indexes; sizes are the packages' own installed size, before dependencies.
 
 ## Three tiers
 
