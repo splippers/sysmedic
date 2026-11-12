@@ -20,7 +20,9 @@ rm -f "$done_flag" "$screen"
 exec 3<&0                                   # a background job would otherwise get /dev/null, and could not see keys
 python3 "$RAIN" --until-file "$done_flag" --min "${SYSMEDIC_RAIN_MIN:-3}" "${status[@]}" <&3 2>/dev/null &
 rain_pid=$!
+size=$(stty size <&3 2>/dev/null)         # the job draws for this screen, not the 80x24 a bare pty would claim
 cmd=$(printf '%q ' "$@")
+[ -n "$size" ] && cmd="stty rows ${size% *} cols ${size#* } 2>/dev/null; exec $cmd"
 script -qec "$cmd" "$screen" </dev/null >/dev/null 2>&1
 rc=$?
 touch "$done_flag"

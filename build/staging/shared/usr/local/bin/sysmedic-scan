@@ -971,8 +971,12 @@ def main():
     def stage(name, fn, *fa):
         """Run one part of the scan, showing progress on a single live line."""
         if live:
-            print("\r\033[K  " + ui.c("run", "►") + "  Scanning (read-only)   " + "  ".join(ui.c("ok", "✔") + " " + d for d in done)
-                  + ("   " if done else "") + ui.c("accent", name + "…"), end="", flush=True)
+            full = ("  " + ui.c("run", "►") + "  Scanning (read-only)   " + "  ".join(ui.c("ok", "✔") + " " + d for d in done)
+                    + ("   " if done else "") + ui.c("accent", name + "…"))
+            if len(re.sub(r"\033\[[0-9;]*m", "", full)) >= ui.width:      # a wrapped line cannot be redrawn with \r
+                full = ("  " + ui.c("run", "►") + "  Scanning (read-only)   " + ui.c("ok", "✔") + f" {len(done)} done   "
+                        + ui.c("accent", name + "…"))
+            print("\r\033[K" + full, end="", flush=True)
         r = fn(*fa)
         done.append(name)
         return r
@@ -993,7 +997,9 @@ def main():
     stage("Secure Boot", check_secure_boot, system, fsresults)
     network = stage("network", collect_network)
     if live:
-        print("\r\033[K  " + ui.c("ok", "✔") + f"  Scanned in {time.time() - t0:.0f} s   " + ui.c("dim", " · ".join(done)) + "\n", flush=True)
+        took = f"  Scanned in {time.time() - t0:.0f} s   "
+        names = " · ".join(done) if len("  ✔" + took + " · ".join(done)) < ui.width else f"{len(done)} checks"
+        print("\r\033[K  " + ui.c("ok", "✔") + took + ui.c("dim", names) + "\n", flush=True)
 
     sd = session_dir(system)
     report = {"sysmedic_scan": 1, "time": datetime.datetime.now().isoformat(timespec="seconds"),
