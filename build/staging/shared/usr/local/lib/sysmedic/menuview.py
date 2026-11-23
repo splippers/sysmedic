@@ -18,7 +18,7 @@ EDITION = open("/etc/sysmedic/edition").read().strip() if os.path.exists("/etc/s
 VERSION = open("/etc/sysmedic/version").read().strip() if os.path.exists("/etc/sysmedic/version") else "dev"
 
 CARDS = [
-    ("Learn", [("T", "Tutorials: step-by-step lessons")]),
+    ("Start here", [("S", "What do you need to do? Guided jobs"), ("T", "Tutorials: step-by-step lessons")]),
     ("Diagnose & test", [("1", "Triage scan (read-only)"), ("2", "Tests: hardware & software"),
                          ("3", "Job report for the customer"), ("4", "Phone dashboard (QR code)")]),
     ("AI", [("5", "AI rescue assistant (OpenCode, cloud)"), ("O", "Offline AI assistant: not on SysMedic Lite" if os.path.exists("/etc/sysmedic/lite") else "Offline AI assistant (no internet)"),
@@ -84,7 +84,10 @@ def summary(ui):
             extra.append(f"BitLocker {os.path.basename(d)}: " + (ui.c("ok", "unlocked (read-only)") if unlocked else ui.c("warning", "locked")))
         lines.append(ui.chips(counts) + ("   " + ui.c("dim", "·") + "   " + "   ".join(extra) if extra else ""))
     else:
-        lines.append("  " + ui.c("dim", f"{EDITION} v{VERSION}" + (f" · network: {net}" if net else "") + " · no scan yet: press 4"))
+        lines.append("  " + ui.c("dim", f"{EDITION} v{VERSION}" + (f" · network: {net}" if net else "") + " · no scan yet: press 1 (or S to be guided)"))
+    prot = protection(ui)
+    if prot:
+        lines.append(prot)
     try:
         up = json.load(open("/run/sysmedic/update.json"))
         if up.get("state") == "available" and EDITION == "caddy":
@@ -92,6 +95,22 @@ def summary(ui):
     except (OSError, ValueError):
         pass
     return lines
+
+
+def protection(ui):
+    """One line: are the customer's disks still read-only? (from sysmedic-guard)"""
+    try:
+        out = subprocess.run(["/usr/local/sbin/sysmedic-guard", "status"], capture_output=True, text=True, timeout=4).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    rows = [l.split() for l in out.splitlines()[1:] if l.strip().startswith("/dev/") or l.strip().startswith("bitlocker-")]
+    if not rows:
+        return None
+    open_ = [r[0] for r in rows if len(r) > 1 and r[1] == "WRITABLE"]
+    if open_:
+        return ui.item("warning", "Customer disks UNLOCKED for repair: " + ", ".join(open_[:3]) + (" …" if len(open_) > 3 else ""),
+                       "", "press 9 to write-protect them again when you are done")
+    return ui.item("ok", "Customer disks are write-protected", "", "press 8 to unlock one for repair")
 
 
 def hud():

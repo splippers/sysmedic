@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""sysmedic-task — start from what is wrong, not from which tool to use.
+
+  sysmedic-task             list the jobs ("A PC that will not start") and pick one
+  sysmedic-task NAME        start one by (part of) its name, e.g. internet
+  sysmedic-task --print     print every job as plain text
+
+A job is a short walk-through (docs/tasks/NN-name.md, the same format as the tutorials) with a risk label:
+read-only, changes things, or destroys data. The player is sysmedic-learn's: Enter = next, b = back,
+r = run a safe command, q = quit. Commands that change things are shown, never run.
+"""
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, "/usr/local/lib/sysmedic")
+sys.path.insert(0, os.path.join(HERE, "../lib/sysmedic"))
+import lessons  # noqa: E402
+from ui import UI  # noqa: E402
+
+DIRS = ["/usr/local/share/doc/sysmedic/docs/tasks"]
+RISK = {"read-only": ("ok", "read-only"), "changes": ("warning", "changes things"), "destroys": ("critical", "can destroy data")}
+
+
+def learn():
+    """The tutorial player, loaded from its file (it has no .py name)."""
+    path = os.path.join(HERE, "sysmedic-learn")
+    loader = importlib.machinery.SourceFileLoader("sysmedic_learn", path)
+    spec = importlib.util.spec_from_loader("sysmedic_learn", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def task_dir():
+    d = os.environ.get("SYSMEDIC_TASKS")
+    return d if d else next((x for x in DIRS if os.path.isdir(x)), DIRS[0])
+
+
+def catalogue(directory=None):
+    tasks = lessons.catalogue(directory or task_dir())
+    for t in tasks:
+        t["when"] = t.get("when", "").strip('"')
+        t["risk"] = t.get("risk", "read-only")
+        label = RISK.get(t["risk"], RISK["changes"])[1]
+        t["time"] = f"{label}  ·  {t.get('time', '')}".strip(" ·")      # shown in the step header
+    return tasks
+
+
+def find(cat, name):
+    name = name.lower()
+    return next((t for t in cat if name in t["id"].lower() or name in t["title"].lower()), None)
+
+
+def menu(ui, cat):
+    print("\033[2J\033[H" + ui.banner("What do you need to do?", "Pick the job. Each one walks you through it, one step at a time."))
+    print()
+    for i, t in enumerate(cat, 1):
+        sev, label = RISK.get(t["risk"], RISK["changes"])
+        print(f"  {ui.c('accent', f'{i:>2}')}  {ui.c('bold', t['title'])}  {ui.c(sev, label)}")
+        if t["when"]:
+            print(f"      {ui.c('dim', t['when'])}")
+    print()
+    return input("  Which job (number, Enter to go back)? ").strip()
+
+
+def main():
+    args = sys.argv[1:]
+    cat = catalogue()
+    if not cat:
+        sys.exit("No jobs installed.")
+    mod = learn()
+    if args[:1] == ["--print"]:
+        ui = UI(color=False, width=100)
+        for t in cat:
+            for i in range(len(t["steps"])):
+                print(mod.render(ui, t, i)[0])
+        return
+    ui = UI()
+    todo = None
+    if args:
+        todo = find(cat, args[0])
+        if not todo:
+            sys.exit(f"No job matching '{args[0]}'. Run sysmedic-task to list them.")
+    if not sys.stdin.isatty():
+        sys.exit("sysmedic-task needs a terminal (use --print to read the jobs as text).")
+    while True:
+        if todo is None:
+            pick = menu(ui, cat)
+            if not pick.isdigit() or not 1 <= int(pick) <= len(cat):
+                return
+            todo = cat[int(pick) - 1]
+        res = mod.play(ui, todo)
+        todo = None
+        if res == "quit":
+            print()
+            return
+        if res == "done":
+            print("\033[2J\033[H" + ui.banner("Job finished", "Record what you told the customer: sysmedic-note \"…\""))
+            print()
+            input("  Enter to go back… ")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (KeyboardInterrupt, EOFError):
+        print()
