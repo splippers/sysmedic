@@ -65,7 +65,7 @@ class RainTests(unittest.TestCase):
             self.assertGreaterEqual(took, 0.55)  # honours --min even though the file is already there
             self.assertLess(took, 8)
 
-    def _with_rain(self, extra_env=None, keys=None):
+    def _with_rain(self, extra_env=None, key_after=None):
         import tempfile
         wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../staging/shared/usr/local/bin/sysmedic-with-rain")
         with tempfile.TemporaryDirectory() as d:
@@ -74,12 +74,20 @@ class RainTests(unittest.TestCase):
                 f.write("#!/bin/bash\nsleep 1\nprintf 'FINDING one\\nFINDING two\\n'\nexit 3\n")
             os.chmod(job, 0o755)
             env = dict(os.environ, SYSMEDIC_RAIN=rain.__file__, SYSMEDIC_RAIN_STATE=d, SYSMEDIC_RAIN_MIN="1",
-                       SYSMEDIC_VTRGB="/nonexistent", SYSMEDIC_NO_RAIN=os.path.join(d, "off"), TERM="linux")
+                       SYSMEDIC_VTRGB="/nonexistent", SYSMEDIC_NO_RAIN=os.path.join(d, "off"), TERM="linux", SYSMEDIC_RAIN_HOLD="0")
             env.update(extra_env or {})
             m, s = pty.openpty()
             p = subprocess.Popen([wrapper, "--status", "Scanning", "--", job], stdin=s, stdout=s, stderr=s, env=env)
             os.close(s)
             buf = b""
+            import time, threading
+            self.still_running_before_key = None
+            if key_after:
+                def press():
+                    time.sleep(key_after)
+                    self.still_running_before_key = p.poll() is None
+                    os.write(m, b"x")
+                threading.Thread(target=press, daemon=True).start()
             while True:
                 try:
                     chunk = os.read(m, 65536)
@@ -96,6 +104,15 @@ class RainTests(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn("\033]P", out)                    # the rain drew
         self.assertTrue(out.rstrip().endswith("FINDING two"), out[-80:])   # and the findings are what is left on screen
+
+    def test_with_rain_holds_for_a_key_press_after_the_job_is_done(self):
+        # job takes ~1 s, so by 4 s it is long finished: the rain must still be up, asking for a key
+        rc, out, _ = self._with_rain({"SYSMEDIC_RAIN_HOLD": "1"}, key_after=4)
+        self.assertTrue(self.still_running_before_key, "rain ended before any key was pressed")
+        self.assertEqual(rc, 3)
+        import re
+        self.assertIn("Press any key to continue", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][A-Za-z0-9]*", "", out))
+        self.assertTrue(out.rstrip().endswith("FINDING two"), out[-80:])
 
     def test_with_rain_can_be_turned_off(self):
         import tempfile

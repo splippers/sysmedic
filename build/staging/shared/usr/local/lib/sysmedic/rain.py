@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rain — SysMedic's green text rain (prototype), for idle and boot screens.
 
-  rain.py [--status LINE]... [--seconds N] [--until-file FILE [--min N]] [--calm] [--palette]
+  rain.py [--status LINE]... [--seconds N] [--until-file FILE [--min N] [--hold]] [--calm] [--palette]
 
 With --until-file it plays until that file exists (at least --min seconds), for covering a job that takes a
 while; a key press stops it early. Draws falling green glyphs with the SYSMEDIC logo and your status lines in a clear box on top: the rain never runs
@@ -169,6 +169,7 @@ def main():
     ap.add_argument("--until-file")
     ap.add_argument("--min", type=float, default=3)
     ap.add_argument("--max", type=float, default=25)      # with --until-file: give up waiting (the job hung) after this long
+    ap.add_argument("--hold", action="store_true")        # with --until-file: once the job is done, wait for a key press
     ap.add_argument("--calm", action="store_true")
     ap.add_argument("--palette", action="store_true")
     a = ap.parse_args()
@@ -189,15 +190,29 @@ def main():
         start = time.time()
         end = start + (a.seconds or (a.max if a.until_file else 0)) or None
         prev = None
-        while (end is None or time.time() < end) and not (
-                a.until_file and os.path.exists(a.until_file) and time.time() - start >= a.min):
+        holding = False
+        while True:
+            now = time.time()
+            ready = bool(a.until_file and os.path.exists(a.until_file) and now - start >= a.min)
+            if ready and a.hold and not holding:
+                holding = True                     # job finished: keep the rain and ask for a key
+                box = make_box(cols, rows, list(a.status or []) + ["", "Press any key to continue"])
+            if ready and not a.hold:
+                break
+            if end is not None and now >= end and not holding:
+                break
             rain.step()
             frame = rain.frame(box)
             sys.stdout.write(paint(frame, truecolor, prev))
             prev = frame
             sys.stdout.flush()
             if select.select([sys.stdin], [], [], 0.09 if not a.calm else 0.16)[0]:
-                break
+                try:
+                    os.read(fd, 1024)              # eat the key so it does not reach the next prompt
+                except OSError:
+                    pass
+                if holding or not a.hold:          # in hold mode a key before the job ends is ignored
+                    break
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         if not truecolor:
