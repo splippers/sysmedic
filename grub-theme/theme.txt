@@ -2,12 +2,12 @@
 # Clean, high-contrast theme for recovery environments
 # Works in both framebuffer (gfxterm) and text mode
 
-title-text: "🩺  SysMedic Boot Manager"
-title-font: "Unifont Regular 24"
+title-text: "SysMedic Boot Manager"
+title-font: "Unifont Regular 16"
 title-color: "#00bfff"
 title-align: "center"
 
-desktop-image: ""
+desktop-image: "background.png"
 desktop-color: "#000000"
 
 terminal-font: "Unifont Regular 16"

@@ -25,7 +25,11 @@ center_y = window_height / 2;
 # ─── Background ───
 bg_sprite = Sprite();
 bg_sprite.SetPosition(0, 0, -100);
-bg_sprite.SetImage(Image("background.png"));
+bg_image = Image("background.png");
+bg_scale = Math.Max(window_width / bg_image.GetWidth(), window_height / bg_image.GetHeight());
+bg_image = bg_image.Scale(bg_image.GetWidth() * bg_scale, bg_image.GetHeight() * bg_scale);
+bg_sprite.SetImage(bg_image);
+bg_sprite.SetPosition((window_width - bg_image.GetWidth()) / 2, (window_height - bg_image.GetHeight()) / 2, -100);
 
 # ─── Animated Logo (block letters) ───
 # The logo frames - same as logo.py animation
